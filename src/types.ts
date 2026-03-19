@@ -105,6 +105,8 @@ export interface OrchestratorState {
   retryCount: number;
   maxRetries: number;
   maxReviewPasses: number;
+  /** Tracks how many passing reviews each step has completed. Key: stepIndex, Value: pass count */
+  reviewPassCounts: Record<number, number>;
   worktreePoolState?: {
     repoRoot: string;
     baseBranch: string;
@@ -124,5 +126,6 @@ export function createInitialState(): OrchestratorState {
     retryCount: 0,
     maxRetries: 3,
     maxReviewPasses: 2,
+    reviewPassCounts: {},
   };
 }

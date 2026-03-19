@@ -139,7 +139,9 @@ export default function (pi: ExtensionAPI) {
       state.sophiaCRId = sophiaCRResult.cr.id;
       state.sophiaTaskIds = Object.fromEntries(sophiaCRResult.taskIds) as Record<number, number>;
     }
-    pi.appendEntry("orchestrator-state", { ...state });
+    // Deep copy via JSON to create a true snapshot — prevents shared array
+    // references between appended entries and the live in-memory state
+    pi.appendEntry("orchestrator-state", JSON.parse(JSON.stringify(state)));
   }
 
   // ─── Command: /orchestrate ───────────────────────────────────
@@ -715,13 +717,14 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
-        // Track review passes per step
-        const passCount = state.reviewVerdicts.filter(
-          (r) => r.stepIndex === params.stepIndex && r.passed
-        ).length;
+        // Track review passes per step using dedicated counter
+        // (not derived from verdicts array — survives regardless of how state is serialized)
+        const prevPassCount = state.reviewPassCounts[params.stepIndex] ?? 0;
+        state.reviewPassCounts[params.stepIndex] = prevPassCount + 1;
+        persistState();
 
         // First pass done — trigger adversarial review if configured
-        if (passCount === 1 && state.maxReviewPasses > 1) {
+        if (prevPassCount === 0 && state.maxReviewPasses > 1) {
           const adversarial = adversarialReviewInstructions(
             step,
             params.summary
