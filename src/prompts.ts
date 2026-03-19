@@ -44,7 +44,28 @@ export function formatRepoProfile(profile: RepoProfile): string {
 }
 
 // ─── System Prompt for Orchestrator Mode ────────────────────
-export function orchestratorSystemPrompt(): string {
+export function orchestratorSystemPrompt(hasSophia: boolean): string {
+  const sophiaSection = hasSophia
+    ? `
+## Sophia Integration
+The orchestrator uses Sophia for change request and task management. When \`orch_plan\` is approved:
+- A Sophia CR is created automatically with tasks matching plan steps
+- Use \`sophia cr task done <crId> <taskId> --commit-type feat --from-contract\` to checkpoint completed tasks
+- After all steps, \`sophia cr validate\` and \`sophia cr review\` run automatically
+
+## Parallel Execution with Worktree Isolation
+When the plan has independent steps (no shared artifacts), use \`parallel_subagents\` with git worktree isolation:
+
+1. The orchestrator creates a **WorktreePool** — each parallel step gets its own git worktree checkout
+2. For each parallel group, spawn sub-agents via \`parallel_subagents\`, passing the worktree path as the working directory
+3. Each sub-agent works in isolation — no file conflicts between parallel steps
+4. After all agents in a group complete, worktree changes are merged back to the main branch sequentially
+5. Worktrees are cleaned up after merge
+
+The plan result shows which step groups can run in parallel and provides worktree paths.
+If worktree creation fails, the orchestrator falls back to sequential execution in the shared directory.`
+    : "";
+
   return `You are operating as a repo-aware multi-agent orchestrator. You have access to specialized orchestrator tools that drive a structured workflow.
 
 ## Your Workflow
@@ -52,14 +73,28 @@ export function orchestratorSystemPrompt(): string {
 2. Call \`orch_discover\` to generate project ideas from the profile
 3. Call \`orch_select\` to present ideas to the user and get their choice
 4. Call \`orch_plan\` to create a step-by-step plan for the selected goal
-5. For each plan step, call \`orch_implement\` then \`orch_review\`
-6. After all steps, call \`orch_complete\` for the final summary
+5. For each plan step, implement using code tools (read, write, edit, bash), then call \`orch_review\`
+6. After all steps pass review, the orchestrator runs post-completion checks and offers follow-up actions
+${sophiaSection}
+
+## Multi-Pass Review
+Each step goes through multiple review passes:
+1. **Self-review**: You assess your own work against acceptance criteria via \`orch_review\`
+2. **Adversarial review**: A second pass with fresh eyes checks for bugs, oversights, ergonomics issues
+3. **Cross-agent review**: After ALL steps complete, an independent reviewer sub-agent audits the full diff
+
+This mirrors the "check over everything again with fresh eyes" pattern — don't skip it.
+
+## Post-Completion
+After all steps and reviews pass, the orchestrator offers:
+- **Polish pass**: De-slopify — improve clarity, remove generic AI patterns, maximize ergonomics
+- **Commit strategy**: Group changes into logical commits with detailed messages
+- **Skill extraction**: Check if the work product should become a reusable skill
 
 ## Rules
 - Follow the workflow in order. Do not skip steps.
 - After each tool call, read the result carefully before proceeding.
 - When implementing steps, use the standard code tools (read, write, edit, bash) to make actual changes.
-- The orch_implement tool gives you the step context. You then use code tools to do the work, and call orch_review when done.
 - If a review fails, re-implement based on the revision instructions, then review again (max 3 retries per step).
 - Keep the user informed with brief status updates between tool calls.
 - If orch_select returns no selection, stop gracefully.
@@ -177,6 +212,180 @@ ${implementationSummary}
 
 Determine: **PASS** or **FAIL**
 If FAIL, provide specific revision instructions.`;
+}
+
+// ─── Parallel Execution Instructions ─────────────────────────
+export function parallelExecutionInstructions(
+  group: number[],
+  steps: PlanStep[],
+  worktreePaths: Map<number, string>
+): string {
+  const agentConfigs = group.map((idx) => {
+    const step = steps.find((s) => s.index === idx)!;
+    const wtPath = worktreePaths.get(idx);
+    return `### Step ${idx}: ${step.description}
+- **Working directory:** \`${wtPath ?? "(shared — worktree unavailable)"}\`
+- **Acceptance criteria:**
+${step.acceptanceCriteria.map((c) => `  - ${c}`).join("\n")}
+- **Files:** ${step.artifacts.join(", ")}`;
+  });
+
+  return `## Parallel Execution — Group [Steps ${group.join(", ")}]
+
+Spawn ${group.length} sub-agents to implement these steps concurrently.
+Each agent works in its own git worktree — no conflicts.
+
+${agentConfigs.join("\n\n")}
+
+### Instructions for sub-agents
+Each sub-agent should:
+1. \`cd\` to its assigned worktree path
+2. Implement the step using standard code tools
+3. Commit changes in the worktree
+4. Report completion
+
+After ALL agents complete, changes will be merged back sequentially.`;
+}
+
+// ─── Adversarial Review Instructions ─────────────────────────
+export function adversarialReviewInstructions(
+  step: PlanStep,
+  implementationSummary: string
+): string {
+  return `## Adversarial "Fresh Eyes" Review — Step ${step.index}
+
+You are reviewing this step as if you've never seen it before. The first review already passed — your job is to catch what it missed.
+
+### What was implemented
+${implementationSummary}
+
+### Acceptance Criteria
+${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}
+
+### Check specifically for:
+1. **Blunders & bugs** — off-by-one errors, null derefs, race conditions, missing error handling
+2. **Ergonomics** — is this maximally intuitive for coding agents to use? Would YOU want to use this if you came in fresh?
+3. **Oversights** — edge cases not covered, missing validation, assumptions that don't hold
+4. **Security** — injection, path traversal, secrets in output, unsafe defaults
+5. **Style** — generic AI slop, unnecessary verbosity, unclear naming
+
+Be harsh. If you find issues, provide specific file:line references and fixes.
+If everything is genuinely clean, say so briefly — don't invent problems.`;
+}
+
+// ─── Cross-Agent Review Instructions ─────────────────────────
+export function crossAgentReviewInstructions(
+  goal: string,
+  steps: PlanStep[],
+  results: StepResult[]
+): string {
+  return `## Independent Cross-Agent Code Review
+
+You are an independent reviewer auditing the FULL diff of this orchestration.
+You did NOT write this code. Review it with zero assumptions.
+
+### Goal
+${goal}
+
+### Steps Completed
+${steps
+  .map((s) => {
+    const r = results.find((r) => r.stepIndex === s.index);
+    return `- Step ${s.index}: ${s.description} (${r?.status ?? "unknown"})`;
+  })
+  .join("\n")}
+
+### Your Review Checklist
+1. **Correctness** — Does the implementation actually achieve the stated goal?
+2. **Consistency** — Do all the pieces fit together? Any contradictions between steps?
+3. **Completeness** — Anything missing that the plan promised?
+4. **Code quality** — Clean, well-structured, follows project conventions?
+5. **Agent ergonomics** — Would another coding agent find this easy to understand and modify?
+6. **Regressions** — Could any change break existing functionality?
+
+### Output
+Provide:
+- A severity-ranked list of findings (critical → minor)
+- Specific fix suggestions for anything critical
+- An overall verdict: APPROVE or REQUEST_CHANGES`;
+}
+
+// ─── Post-Completion Phase Instructions ──────────────────────
+export function polishInstructions(goal: string, artifacts: string[]): string {
+  return `## Polish Pass (De-Slopify)
+
+Review all files changed during this orchestration and improve them:
+
+### Goal context
+${goal}
+
+### Files to review
+${artifacts.map((a) => `- ${a}`).join("\n")}
+
+### What to fix:
+1. **Remove AI slop** — generic phrases like "leverage", "robust", "comprehensive", unnecessary caveats
+2. **Improve clarity** — rename vague variables, simplify convoluted logic, add comments only where non-obvious
+3. **Maximize ergonomics** — make this the code YOU would want to read if coming in fresh
+4. **Consistent style** — match the project's existing conventions
+5. **Trim fat** — remove dead code, unused imports, unnecessary abstractions
+
+Make targeted edits. Don't rewrite things that are already good.`;
+}
+
+export function commitStrategyInstructions(
+  steps: PlanStep[],
+  results: StepResult[]
+): string {
+  return `## Commit Strategy
+
+Group the changes from this orchestration into logical commits with detailed messages.
+
+### Steps completed
+${steps
+  .map((s) => {
+    const r = results.find((r) => r.stepIndex === s.index);
+    return `- Step ${s.index}: ${s.description}\n  Files: ${s.artifacts.join(", ")}\n  Summary: ${r?.summary ?? "N/A"}`;
+  })
+  .join("\n\n")}
+
+### Rules
+- Group by logical change, NOT by step number (steps may touch the same files)
+- Each commit should be independently understandable
+- Use conventional commit format: type(scope): description
+- First line ≤ 72 chars, then blank line, then detailed body
+- Body explains WHY, not just WHAT
+- Reference step numbers in the body for traceability
+
+Create the commits now using bash (git add -p / git add <files> then git commit).`;
+}
+
+export function skillExtractionInstructions(
+  goal: string,
+  artifacts: string[]
+): string {
+  return `## Skill Extraction Check
+
+Evaluate whether the work from this orchestration should become a reusable agent skill.
+
+### What was built
+Goal: ${goal}
+Artifacts: ${artifacts.join(", ")}
+
+### Criteria for extraction
+A skill is worth creating if:
+1. The workflow/pattern will be reused across projects
+2. It encapsulates non-obvious domain knowledge
+3. It would save significant time on future similar tasks
+4. It's self-contained enough to work without heavy context
+
+### If yes:
+- Create a SKILL.md following the standard format
+- Include: name, description (trigger phrases), concrete instructions, examples
+- Place it in a skills/ subdirectory
+
+### If no:
+- Briefly explain why not (too project-specific, too simple, etc.)
+- Suggest if any PART of it could be a skill`;
 }
 
 // ─── Summary Instructions ────────────────────────────────────
