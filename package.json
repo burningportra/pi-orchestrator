@@ -1,0 +1,17 @@
+{
+  "name": "pi-orchestrator",
+  "version": "0.1.0",
+  "description": "Repo-aware multi-agent meta-orchestrator plugin for pi",
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "^0.34.0",
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-tui": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
