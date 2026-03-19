@@ -112,7 +112,10 @@ export interface OrchestratorState {
     baseBranch: string;
     worktrees: { path: string; branch: string; stepIndex: number }[];
   };
+  hasSophia: boolean;
   sophiaCRId?: number;
+  sophiaCRBranch?: string;
+  sophiaCRTitle?: string;
   sophiaTaskIds?: Record<number, number>;
 }
 
@@ -127,5 +130,6 @@ export function createInitialState(): OrchestratorState {
     maxRetries: 3,
     maxReviewPasses: 2,
     reviewPassCounts: {},
+    hasSophia: false,
   };
 }
