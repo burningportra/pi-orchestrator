@@ -171,6 +171,7 @@ export default function (pi: ExtensionAPI) {
       setPhase("profiling", ctx);
       onUpdate?.({
         content: [{ type: "text", text: "Scanning repository..." }],
+        details: {},
       });
 
       const profile = await profileRepo(pi, ctx.cwd, signal);
@@ -328,7 +329,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       let goal: string;
-      if (choice === options.length - 1) {
+      if (choice === "✏️  Enter a custom goal") {
         const custom = await ctx.ui.input(
           "Enter your goal:",
           "e.g., Add API rate limiting with Redis"
@@ -346,7 +347,8 @@ export default function (pi: ExtensionAPI) {
         }
         goal = custom;
       } else {
-        const idea = state.candidateIdeas[choice];
+        const choiceIndex = options.indexOf(choice);
+        const idea = state.candidateIdeas[choiceIndex];
         goal = `${idea.title}: ${idea.description}`;
       }
 
