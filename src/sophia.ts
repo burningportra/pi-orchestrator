@@ -437,6 +437,7 @@ export function analyzeParallelGroups(steps: PlanStep[]): ParallelAnalysis {
     }
   }
 
-  const mergeOrder = groups.flat().sort((a, b) => a - b);
+  // Preserve group ordering: within each group sort by index, groups in sequence
+  const mergeOrder = groups.flatMap((g) => [...g].sort((a, b) => a - b));
   return { groups, mergeOrder };
 }
