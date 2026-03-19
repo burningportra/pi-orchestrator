@@ -20,6 +20,20 @@ export interface SophiaTask {
   title: string;
 }
 
+export interface SophiaTaskStatus {
+  id: number;
+  title: string;
+  status: string;
+}
+
+export interface SophiaCRStatus {
+  id: number;
+  branch: string;
+  title: string;
+  status: string;
+  tasks: SophiaTaskStatus[];
+}
+
 // ─── Detection ─────────────────────────────────────────────────
 
 let _sophiaAvailable: boolean | null = null;
@@ -92,6 +106,43 @@ export async function initSophia(
   cwd: string
 ): Promise<SophiaResult> {
   return runSophia(pi, cwd, ["init"]);
+}
+
+// ─── CR Status ─────────────────────────────────────────────────
+
+export async function getCRStatus(
+  pi: ExtensionAPI,
+  cwd: string,
+  crId: number
+): Promise<SophiaResult<SophiaCRStatus>> {
+  const result = await runSophia<any>(pi, cwd, [
+    "cr",
+    "status",
+    String(crId),
+    "--json",
+  ]);
+  if (!result.ok || !result.data) {
+    return { ok: false, error: result.error ?? "CR not found" };
+  }
+  const d = result.data;
+  const cr = d.cr ?? d;
+  const tasks: SophiaTaskStatus[] = (cr.tasks ?? d.tasks ?? []).map(
+    (t: any) => ({
+      id: t.id,
+      title: t.title,
+      status: t.status ?? "unknown",
+    })
+  );
+  return {
+    ok: true,
+    data: {
+      id: cr.id ?? crId,
+      branch: cr.branch ?? "",
+      title: cr.title ?? "",
+      status: cr.status ?? "unknown",
+      tasks,
+    },
+  };
 }
 
 // ─── CR Operations ─────────────────────────────────────────────

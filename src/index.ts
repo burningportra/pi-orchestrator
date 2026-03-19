@@ -100,9 +100,16 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Restore state from session ──────────────────────────────
   pi.on("session_start", async (_event, ctx) => {
+    // Find the LAST orchestrator-state entry (most recent)
+    let lastStateEntry: OrchestratorState | undefined;
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === "orchestrator-state") {
-        state = entry.data as OrchestratorState;
+        lastStateEntry = entry.data as OrchestratorState;
+      }
+    }
+    if (lastStateEntry) {
+      {
+        state = lastStateEntry;
         orchestratorActive = state.phase !== "idle" && state.phase !== "complete";
 
         // Restore worktree pool
@@ -110,14 +117,50 @@ export default function (pi: ExtensionAPI) {
           worktreePool = WorktreePool.fromState(pi, state.worktreePoolState);
         }
 
-        // Restore sophia CR result
+        // Restore sophia state — re-validate availability
+        hasSophia = state.hasSophia ?? false;
+        if (hasSophia) {
+          // Re-check sophia is still available (might have been uninstalled)
+          const stillAvailable = await isSophiaAvailable(pi, ctx.cwd);
+          if (!stillAvailable) {
+            hasSophia = false;
+            state.hasSophia = false;
+          }
+        }
         if (state.sophiaCRId && state.sophiaTaskIds) {
-          sophiaCRResult = {
-            cr: { id: state.sophiaCRId, branch: "", title: "" },
-            taskIds: new Map(
-              Object.entries(state.sophiaTaskIds).map(([k, v]) => [Number(k), v])
-            ),
-          };
+          // Try to rebuild full CR state from sophia if available
+          if (hasSophia) {
+            const { getCRStatus } = await import("./sophia.js");
+            const crStatus = await getCRStatus(pi, ctx.cwd, state.sophiaCRId);
+            if (crStatus.ok && crStatus.data) {
+              sophiaCRResult = {
+                cr: {
+                  id: crStatus.data.id,
+                  branch: crStatus.data.branch,
+                  title: crStatus.data.title,
+                },
+                taskIds: new Map(
+                  Object.entries(state.sophiaTaskIds).map(([k, v]) => [Number(k), v])
+                ),
+              };
+            } else {
+              // Fallback to persisted state
+              sophiaCRResult = {
+                cr: { id: state.sophiaCRId, branch: state.sophiaCRBranch ?? "", title: state.sophiaCRTitle ?? "" },
+                taskIds: new Map(
+                  Object.entries(state.sophiaTaskIds).map(([k, v]) => [Number(k), v])
+                ),
+              };
+            }
+          } else {
+            // No sophia — use persisted values
+            sophiaCRResult = {
+              cr: { id: state.sophiaCRId, branch: state.sophiaCRBranch ?? "", title: state.sophiaCRTitle ?? "" },
+              taskIds: new Map(
+                Object.entries(state.sophiaTaskIds).map(([k, v]) => [Number(k), v])
+              ),
+            };
+          }
         }
       }
     }
@@ -135,8 +178,11 @@ export default function (pi: ExtensionAPI) {
   function persistState() {
     // Sync ephemeral state into persisted state
     state.worktreePoolState = worktreePool?.getState();
+    state.hasSophia = hasSophia;
     if (sophiaCRResult) {
       state.sophiaCRId = sophiaCRResult.cr.id;
+      state.sophiaCRBranch = sophiaCRResult.cr.branch;
+      state.sophiaCRTitle = sophiaCRResult.cr.title;
       state.sophiaTaskIds = Object.fromEntries(sophiaCRResult.taskIds) as Record<number, number>;
     }
     // Deep copy via JSON to create a true snapshot — prevents shared array
@@ -585,17 +631,16 @@ export default function (pi: ExtensionAPI) {
           };
         });
 
-        // Send follow-up to force parallel execution
-        pi.sendUserMessage(
-          `The plan has parallel steps. Call \`parallel_subagents\` NOW with these agents:\n\n\`\`\`json\n${JSON.stringify({ agents: agentConfigs }, null, 2)}\n\`\`\`\n\nAfter they complete, call \`orch_review\` for each step with the sub-agent's summary.`,
-          { deliverAs: "followUp" }
-        );
+        // Include parallel launch instruction directly in tool result —
+        // NOT via sendUserMessage followUp, which arrives late and causes
+        // duplicate instructions if the LLM already acted on the tool result.
+        const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
 
         return {
           content: [
             {
               type: "text",
-              text: `Plan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n---\n**Launching parallel agents for Group 1 (Steps ${firstGroup.join(", ")})...**`,
+              text: `Plan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n---\n**IMPORTANT: Call \`parallel_subagents\` NOW to launch Group 1 (Steps ${firstGroup.join(", ")}).**\n\nUse exactly these parameters:\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each step with the sub-agent's summary.`,
             },
           ],
           details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr, launchingParallel: true },
