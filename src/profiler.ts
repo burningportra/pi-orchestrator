@@ -1,92 +1,130 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { RepoProfile, TodoItem, CommitSummary, DirectoryNode } from "./types.js";
+import type { RepoProfile, TodoItem, CommitSummary } from "./types.js";
 
 /**
  * Collect raw repo signals using pi.exec for shell commands.
+ * Returns a RepoProfile with everything except LLM-generated fields.
  */
-export async function collectRepoSignals(
+export async function profileRepo(
   pi: ExtensionAPI,
   cwd: string,
   signal?: AbortSignal
-) {
-  // File tree (depth-limited)
-  const treeResult = await pi.exec(
+): Promise<RepoProfile> {
+  const [fileTree, commits, todos, keyFiles] = await Promise.all([
+    collectFileTree(pi, cwd, signal),
+    collectCommits(pi, cwd, signal),
+    collectTodos(pi, cwd, signal),
+    collectKeyFiles(pi, cwd, signal),
+  ]);
+
+  // Detect languages from extensions
+  const extCounts = new Map<string, number>();
+  for (const line of fileTree.split("\n")) {
+    const ext = line.match(/\.([a-zA-Z0-9]+)$/)?.[1];
+    if (ext) extCounts.set(ext, (extCounts.get(ext) ?? 0) + 1);
+  }
+  const languages = detectLanguages(extCounts);
+  const frameworks = detectFrameworks(keyFiles);
+
+  return {
+    name: cwd.split("/").pop() ?? "unknown",
+    languages,
+    frameworks,
+    structure: fileTree,
+    entrypoints: detectEntrypoints(fileTree, keyFiles),
+    recentCommits: commits,
+    hasTests: fileTree.includes("test") || fileTree.includes("spec") || fileTree.includes("__tests__"),
+    testFramework: detectTestFramework(keyFiles),
+    hasDocs: fileTree.includes("docs/") || fileTree.includes("doc/") || !!keyFiles["README.md"],
+    hasCI:
+      fileTree.includes(".github/workflows") ||
+      fileTree.includes(".gitlab-ci") ||
+      fileTree.includes("Jenkinsfile"),
+    ciPlatform: detectCI(fileTree),
+    todos,
+    keyFiles,
+    readme: keyFiles["README.md"] ?? keyFiles["README"] ?? undefined,
+    packageManager: detectPackageManager(keyFiles, fileTree),
+  };
+}
+
+// ─── Collectors ────────────────────────────────────────────────
+
+async function collectFileTree(
+  pi: ExtensionAPI,
+  cwd: string,
+  signal?: AbortSignal
+): Promise<string> {
+  const result = await pi.exec(
     "find",
-    [".", "-maxdepth", "4", "-not", "-path", "*/node_modules/*", "-not", "-path", "*/.git/*", "-not", "-path", "*/dist/*", "-not", "-path", "*/__pycache__/*"],
+    [
+      ".",
+      "-maxdepth", "4",
+      "-not", "-path", "*/node_modules/*",
+      "-not", "-path", "*/.git/*",
+      "-not", "-path", "*/dist/*",
+      "-not", "-path", "*/__pycache__/*",
+      "-not", "-path", "*/.venv/*",
+      "-not", "-path", "*/vendor/*",
+      "-not", "-path", "*/target/*",
+    ],
     { signal, timeout: 10000, cwd }
   );
-  const fileTree = treeResult.stdout.trim();
+  return result.stdout.trim();
+}
 
-  // Recent commits
-  const commitsResult = await pi.exec(
+async function collectCommits(
+  pi: ExtensionAPI,
+  cwd: string,
+  signal?: AbortSignal
+): Promise<CommitSummary[]> {
+  const result = await pi.exec(
     "git",
     ["log", "--oneline", "--no-decorate", "-n", "20", "--format=%H|%s|%ai|%an"],
     { signal, timeout: 5000, cwd }
   );
-  const recentCommits = parseCommits(commitsResult.stdout);
-
-  // Key files - attempt to read common important files
-  const keyFilePaths = [
-    "README.md",
-    "README",
-    "package.json",
-    "Cargo.toml",
-    "pyproject.toml",
-    "go.mod",
-    "Gemfile",
-    "Makefile",
-    "Dockerfile",
-    ".github/workflows/ci.yml",
-    ".github/workflows/ci.yaml",
-    ".gitlab-ci.yml",
-    "tsconfig.json",
-  ];
-
-  const keyFiles: Record<string, string> = {};
-  for (const filePath of keyFilePaths) {
-    try {
-      const result = await pi.exec("head", ["-c", "4096", filePath], {
-        signal,
-        timeout: 2000,
-        cwd,
-      });
-      if (result.code === 0 && result.stdout.trim()) {
-        keyFiles[filePath] = result.stdout.trim();
-      }
-    } catch {
-      // File doesn't exist, skip
-    }
-  }
-
-  // TODOs/FIXMEs
-  const todoResult = await pi.exec(
-    "grep",
-    ["-rn", "--include=*.ts", "--include=*.js", "--include=*.py", "--include=*.rs", "--include=*.go", "--include=*.rb",
-     "-E", "(TODO|FIXME|HACK|XXX):", "."],
-    { signal, timeout: 10000, cwd }
-  );
-  const todos = parseTodos(todoResult.stdout);
-
-  return { fileTree, recentCommits, keyFiles, todos };
-}
-
-function parseCommits(raw: string): CommitSummary[] {
-  return raw
+  if (result.code !== 0) return [];
+  return result.stdout
+    .trim()
     .split("\n")
     .filter(Boolean)
     .map((line) => {
       const [hash, message, date, author] = line.split("|");
-      return { hash: hash?.slice(0, 7) ?? "", message: message ?? "", date: date ?? "", author: author ?? "" };
+      return {
+        hash: hash?.slice(0, 7) ?? "",
+        message: message ?? "",
+        date: date ?? "",
+        author: author ?? "",
+      };
     });
 }
 
-function parseTodos(raw: string): TodoItem[] {
-  return raw
+async function collectTodos(
+  pi: ExtensionAPI,
+  cwd: string,
+  signal?: AbortSignal
+): Promise<TodoItem[]> {
+  const result = await pi.exec(
+    "grep",
+    [
+      "-rn",
+      "--include=*.ts", "--include=*.js", "--include=*.tsx", "--include=*.jsx",
+      "--include=*.py", "--include=*.rs", "--include=*.go", "--include=*.rb",
+      "--include=*.java", "--include=*.kt", "--include=*.swift",
+      "-E", "(TODO|FIXME|HACK|XXX):",
+      ".",
+    ],
+    { signal, timeout: 10000, cwd }
+  );
+  if (result.code !== 0) return [];
+  return result.stdout
     .split("\n")
     .filter(Boolean)
-    .slice(0, 50) // cap at 50
+    .slice(0, 50)
     .map((line) => {
-      const match = line.match(/^\.\/(.+?):(\d+):\s*.*?(TODO|FIXME|HACK|XXX):\s*(.*)$/);
+      const match = line.match(
+        /^\.\/(.+?):(\d+):\s*.*?(TODO|FIXME|HACK|XXX):\s*(.*)$/
+      );
       if (!match) return null;
       return {
         file: match[1],
@@ -98,18 +136,163 @@ function parseTodos(raw: string): TodoItem[] {
     .filter((t): t is TodoItem => t !== null);
 }
 
-/**
- * Build a simplified directory tree from the find output.
- */
-export function buildDirectoryTree(findOutput: string): DirectoryNode[] {
-  const lines = findOutput.split("\n").filter(Boolean).slice(0, 200);
-  const root: DirectoryNode[] = [];
+async function collectKeyFiles(
+  pi: ExtensionAPI,
+  cwd: string,
+  signal?: AbortSignal
+): Promise<Record<string, string>> {
+  const paths = [
+    "README.md", "README",
+    "package.json", "Cargo.toml", "pyproject.toml", "go.mod",
+    "Gemfile", "Makefile", "Dockerfile", "docker-compose.yml",
+    ".github/workflows/ci.yml", ".github/workflows/ci.yaml",
+    ".gitlab-ci.yml",
+    "tsconfig.json", "vite.config.ts", "webpack.config.js",
+    "jest.config.ts", "jest.config.js", "vitest.config.ts",
+    ".eslintrc.json", ".prettierrc",
+  ];
 
-  for (const line of lines) {
-    const clean = line.replace(/^\.\//, "");
-    if (!clean || clean === ".") continue;
-    root.push({ path: clean, type: clean.includes(".") ? "file" : "dir" });
+  const files: Record<string, string> = {};
+  const reads = paths.map(async (p) => {
+    try {
+      const r = await pi.exec("head", ["-c", "4096", p], {
+        signal,
+        timeout: 2000,
+        cwd,
+      });
+      if (r.code === 0 && r.stdout.trim()) {
+        files[p] = r.stdout.trim();
+      }
+    } catch {
+      // skip
+    }
+  });
+  await Promise.all(reads);
+  return files;
+}
+
+// ─── Detectors ─────────────────────────────────────────────────
+
+function detectLanguages(extCounts: Map<string, number>): string[] {
+  const extToLang: Record<string, string> = {
+    ts: "TypeScript", tsx: "TypeScript", js: "JavaScript", jsx: "JavaScript",
+    py: "Python", rs: "Rust", go: "Go", rb: "Ruby",
+    java: "Java", kt: "Kotlin", swift: "Swift", cs: "C#",
+    cpp: "C++", c: "C", hs: "Haskell", ex: "Elixir",
+    php: "PHP", scala: "Scala", zig: "Zig",
+  };
+  const langs = new Map<string, number>();
+  for (const [ext, count] of extCounts) {
+    const lang = extToLang[ext];
+    if (lang) langs.set(lang, (langs.get(lang) ?? 0) + count);
   }
+  return [...langs.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([lang]) => lang);
+}
 
-  return root;
+function detectFrameworks(keyFiles: Record<string, string>): string[] {
+  const frameworks: string[] = [];
+  const pkg = keyFiles["package.json"];
+  if (pkg) {
+    try {
+      const parsed = JSON.parse(pkg);
+      const allDeps = {
+        ...parsed.dependencies,
+        ...parsed.devDependencies,
+      };
+      if (allDeps["next"]) frameworks.push("Next.js");
+      if (allDeps["react"]) frameworks.push("React");
+      if (allDeps["vue"]) frameworks.push("Vue");
+      if (allDeps["svelte"] || allDeps["@sveltejs/kit"]) frameworks.push("Svelte");
+      if (allDeps["express"]) frameworks.push("Express");
+      if (allDeps["fastify"]) frameworks.push("Fastify");
+      if (allDeps["hono"]) frameworks.push("Hono");
+      if (allDeps["nestjs"] || allDeps["@nestjs/core"]) frameworks.push("NestJS");
+      if (allDeps["tailwindcss"]) frameworks.push("Tailwind CSS");
+      if (allDeps["prisma"] || allDeps["@prisma/client"]) frameworks.push("Prisma");
+      if (allDeps["drizzle-orm"]) frameworks.push("Drizzle");
+    } catch {}
+  }
+  if (keyFiles["Cargo.toml"]?.includes("actix")) frameworks.push("Actix");
+  if (keyFiles["Cargo.toml"]?.includes("axum")) frameworks.push("Axum");
+  if (keyFiles["Cargo.toml"]?.includes("tokio")) frameworks.push("Tokio");
+  if (keyFiles["Gemfile"]?.includes("rails")) frameworks.push("Rails");
+  if (keyFiles["go.mod"]?.includes("gin")) frameworks.push("Gin");
+  if (keyFiles["pyproject.toml"]?.includes("django")) frameworks.push("Django");
+  if (keyFiles["pyproject.toml"]?.includes("fastapi")) frameworks.push("FastAPI");
+  if (keyFiles["pyproject.toml"]?.includes("flask")) frameworks.push("Flask");
+  return frameworks;
+}
+
+function detectTestFramework(keyFiles: Record<string, string>): string | undefined {
+  if (keyFiles["vitest.config.ts"]) return "Vitest";
+  if (keyFiles["jest.config.ts"] || keyFiles["jest.config.js"]) return "Jest";
+  const pkg = keyFiles["package.json"];
+  if (pkg) {
+    if (pkg.includes('"vitest"')) return "Vitest";
+    if (pkg.includes('"jest"')) return "Jest";
+    if (pkg.includes('"mocha"')) return "Mocha";
+  }
+  if (keyFiles["Cargo.toml"]) return "cargo test";
+  if (keyFiles["pyproject.toml"]?.includes("pytest")) return "pytest";
+  if (keyFiles["go.mod"]) return "go test";
+  return undefined;
+}
+
+function detectCI(fileTree: string): string | undefined {
+  if (fileTree.includes(".github/workflows")) return "GitHub Actions";
+  if (fileTree.includes(".gitlab-ci")) return "GitLab CI";
+  if (fileTree.includes("Jenkinsfile")) return "Jenkins";
+  if (fileTree.includes(".circleci")) return "CircleCI";
+  return undefined;
+}
+
+function detectEntrypoints(
+  fileTree: string,
+  keyFiles: Record<string, string>
+): string[] {
+  const entries: string[] = [];
+  const pkg = keyFiles["package.json"];
+  if (pkg) {
+    try {
+      const parsed = JSON.parse(pkg);
+      if (parsed.main) entries.push(parsed.main);
+      if (parsed.module) entries.push(parsed.module);
+      if (parsed.bin) {
+        if (typeof parsed.bin === "string") entries.push(parsed.bin);
+        else Object.values(parsed.bin).forEach((v) => entries.push(v as string));
+      }
+    } catch {}
+  }
+  // Common entrypoints
+  const common = [
+    "src/index.ts", "src/main.ts", "src/app.ts",
+    "src/index.js", "src/main.js", "src/app.js",
+    "main.go", "cmd/main.go",
+    "src/main.rs", "src/lib.rs",
+    "app.py", "main.py", "manage.py",
+  ];
+  for (const c of common) {
+    if (fileTree.includes(c) && !entries.includes(c)) entries.push(c);
+  }
+  return entries.slice(0, 5);
+}
+
+function detectPackageManager(
+  keyFiles: Record<string, string>,
+  fileTree: string
+): string | undefined {
+  if (fileTree.includes("pnpm-lock.yaml")) return "pnpm";
+  if (fileTree.includes("yarn.lock")) return "yarn";
+  if (fileTree.includes("bun.lockb")) return "bun";
+  if (fileTree.includes("package-lock.json")) return "npm";
+  if (keyFiles["Cargo.toml"]) return "cargo";
+  if (keyFiles["go.mod"]) return "go";
+  if (fileTree.includes("uv.lock") || keyFiles["pyproject.toml"]?.includes("[tool.uv]")) return "uv";
+  if (fileTree.includes("Pipfile")) return "pipenv";
+  if (keyFiles["pyproject.toml"]) return "pip";
+  if (keyFiles["Gemfile"]) return "bundler";
+  return undefined;
 }

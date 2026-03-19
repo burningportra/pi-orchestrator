@@ -1,121 +1,123 @@
-import type { RepoProfile, Plan, PlanStep, StepResult } from "./types.js";
+import type { RepoProfile, PlanStep, StepResult } from "./types.js";
 
-// ─── Repo Profiler ───────────────────────────────────────────
-export function repoProfilerPrompt(
-  fileTree: string,
-  recentCommits: string,
-  keyFiles: Record<string, string>
-): string {
-  return `You are a repo profiler. Analyze the following repository and produce a structured JSON profile.
+// ─── Repo Profile Formatting ────────────────────────────────
+export function formatRepoProfile(profile: RepoProfile): string {
+  const sections = [
+    `## Repository: ${profile.name}`,
+    `**Languages:** ${profile.languages.join(", ") || "unknown"}`,
+    `**Frameworks:** ${profile.frameworks.join(", ") || "none detected"}`,
+    `**Package Manager:** ${profile.packageManager ?? "unknown"}`,
+    `**Entrypoints:** ${profile.entrypoints.join(", ") || "none detected"}`,
+    `**Tests:** ${profile.hasTests ? `Yes (${profile.testFramework ?? "unknown framework"})` : "No"}`,
+    `**Docs:** ${profile.hasDocs ? "Yes" : "No"}`,
+    `**CI:** ${profile.hasCI ? `Yes (${profile.ciPlatform ?? "unknown"})` : "No"}`,
+    `**TODOs/FIXMEs:** ${profile.todos.length} found`,
+  ];
 
-## File Tree
-\`\`\`
-${fileTree}
-\`\`\`
+  if (profile.todos.length > 0) {
+    sections.push(
+      "\n### Notable TODOs",
+      ...profile.todos.slice(0, 10).map(
+        (t) => `- \`${t.file}:${t.line}\` [${t.type}] ${t.text}`
+      )
+    );
+  }
 
-## Recent Commits
-\`\`\`
-${recentCommits}
-\`\`\`
+  if (profile.recentCommits.length > 0) {
+    sections.push(
+      "\n### Recent Commits",
+      ...profile.recentCommits.slice(0, 10).map(
+        (c) => `- \`${c.hash}\` ${c.message} (${c.author})`
+      )
+    );
+  }
 
-## Key Files
-${Object.entries(keyFiles)
-  .map(([path, content]) => `### ${path}\n\`\`\`\n${content}\n\`\`\``)
-  .join("\n\n")}
+  if (profile.readme) {
+    const truncated =
+      profile.readme.length > 2000
+        ? profile.readme.slice(0, 2000) + "\n...(truncated)"
+        : profile.readme;
+    sections.push("\n### README (excerpt)", truncated);
+  }
 
-Respond with ONLY a JSON object matching this schema:
-{
-  "name": "repo name",
-  "languages": ["lang1", "lang2"],
-  "frameworks": ["framework1"],
-  "entrypoints": ["src/index.ts"],
-  "hasTests": true,
-  "testFramework": "jest",
-  "hasDocs": true,
-  "hasCI": true,
-  "ciPlatform": "github-actions",
-  "packageManager": "npm",
-  "summary": "A natural language description of what this repo does, its architecture, and notable patterns."
-}`;
+  return sections.join("\n");
 }
 
-// ─── Discovery Agent ─────────────────────────────────────────
-export function discoveryPrompt(profile: RepoProfile): string {
-  return `You are a discovery agent for software repositories. Given the repo profile below, suggest 3–7 high-leverage, concrete project ideas.
+// ─── System Prompt for Orchestrator Mode ────────────────────
+export function orchestratorSystemPrompt(): string {
+  return `You are operating as a repo-aware multi-agent orchestrator. You have access to specialized orchestrator tools that drive a structured workflow.
 
-## Repo Profile
-- **Name:** ${profile.name}
-- **Languages:** ${profile.languages.join(", ")}
-- **Frameworks:** ${profile.frameworks.join(", ")}
-- **Has Tests:** ${profile.hasTests}${profile.testFramework ? ` (${profile.testFramework})` : ""}
-- **Has Docs:** ${profile.hasDocs}
-- **Has CI:** ${profile.hasCI}${profile.ciPlatform ? ` (${profile.ciPlatform})` : ""}
-- **TODOs/FIXMEs:** ${profile.todos.length} found
-- **Summary:** ${profile.summary}
+## Your Workflow
+1. Call \`orch_profile\` to scan the repository
+2. Call \`orch_discover\` to generate project ideas from the profile
+3. Call \`orch_select\` to present ideas to the user and get their choice
+4. Call \`orch_plan\` to create a step-by-step plan for the selected goal
+5. For each plan step, call \`orch_implement\` then \`orch_review\`
+6. After all steps, call \`orch_complete\` for the final summary
+
+## Rules
+- Follow the workflow in order. Do not skip steps.
+- After each tool call, read the result carefully before proceeding.
+- When implementing steps, use the standard code tools (read, write, edit, bash) to make actual changes.
+- The orch_implement tool gives you the step context. You then use code tools to do the work, and call orch_review when done.
+- If a review fails, re-implement based on the revision instructions, then review again (max 3 retries per step).
+- Keep the user informed with brief status updates between tool calls.
+- If orch_select returns no selection, stop gracefully.
+- If orch_plan returns and the user rejects, stop gracefully.`;
+}
+
+// ─── Discovery Prompt ────────────────────────────────────────
+export function discoveryInstructions(profile: RepoProfile): string {
+  return `Analyze this repository profile and suggest 3–7 high-leverage, concrete project ideas.
+
+${formatRepoProfile(profile)}
 
 ## Guidelines
-- Each idea should be executable in a few hours to a couple of days.
-- Avoid trivial tasks. Aim for meaningful improvements.
-- Ground ideas in the actual repo state (don't suggest "add tests" if tests are comprehensive).
-- Cover a mix of categories when possible.
+- Each idea should be executable in a few hours to a couple of days
+- Avoid trivial tasks — aim for meaningful improvements
+- Ground ideas in the actual repo state (don't suggest "add tests" if tests are comprehensive)
+- Cover a mix of categories when possible
+- Consider: features, refactors, docs, DX, performance, reliability, security, testing
 
-Respond with ONLY a JSON array of objects:
-[
-  {
-    "id": "unique-id",
-    "title": "Short title",
-    "description": "2-3 sentence description of what to do and why",
-    "category": "feature|refactor|docs|dx|performance|reliability|security|testing",
-    "effort": "low|medium|high",
-    "impact": "low|medium|high"
-  }
-]`;
+For each idea, provide:
+- **id**: unique kebab-case identifier
+- **title**: short descriptive title
+- **description**: 2-3 sentences explaining what to do and why
+- **category**: feature | refactor | docs | dx | performance | reliability | security | testing
+- **effort**: low | medium | high
+- **impact**: low | medium | high`;
 }
 
-// ─── Planner Agent ───────────────────────────────────────────
-export function plannerPrompt(
+// ─── Planner Instructions ────────────────────────────────────
+export function plannerInstructions(
   goal: string,
   profile: RepoProfile,
   constraints: string[]
 ): string {
-  return `You are a planner agent. Create a detailed step-by-step plan for the following goal.
+  return `Create a detailed step-by-step plan for the following goal.
 
 ## Goal
 ${goal}
 
-## Repo Profile
-- **Name:** ${profile.name}
-- **Languages:** ${profile.languages.join(", ")}
-- **Frameworks:** ${profile.frameworks.join(", ")}
-- **Summary:** ${profile.summary}
+${formatRepoProfile(profile)}
 
 ## Constraints
 ${constraints.length > 0 ? constraints.map((c) => `- ${c}`).join("\n") : "None specified."}
 
 ## Guidelines
-- Produce 3–7 steps.
-- Each step must have clear acceptance criteria.
-- List expected artifacts (files to create/modify) for each step.
-- Treat user implementation suggestions as soft constraints; justify if you deviate.
-- Order steps logically (foundations first, integration last).
+- Produce 3–7 steps
+- Each step must have clear acceptance criteria
+- List expected artifacts (files to create/modify) for each step
+- Treat user implementation suggestions as soft constraints; justify if you deviate
+- Order steps logically (foundations first, integration last)
 
-Respond with ONLY a JSON object:
-{
-  "goal": "restated goal",
-  "constraints": ["constraint1"],
-  "steps": [
-    {
-      "index": 1,
-      "description": "What to do",
-      "acceptanceCriteria": ["criterion1", "criterion2"],
-      "artifacts": ["path/to/file.ts"]
-    }
-  ]
-}`;
+Return a structured plan with:
+- **goal**: restated goal
+- **steps**: array of { index, description, acceptanceCriteria[], artifacts[] }`;
 }
 
-// ─── Implementer Agent ───────────────────────────────────────
-export function implementerPrompt(
+// ─── Implementer Instructions ────────────────────────────────
+export function implementerInstructions(
   step: PlanStep,
   profile: RepoProfile,
   previousResults: StepResult[]
@@ -123,94 +125,90 @@ export function implementerPrompt(
   const prevContext =
     previousResults.length > 0
       ? `\n## Previous Steps Completed\n${previousResults
-          .map(
-            (r) =>
-              `- Step ${r.stepIndex}: ${r.status}${r.notes ? ` — ${r.notes}` : ""}`
-          )
+          .map((r) => `- Step ${r.stepIndex}: ${r.status} — ${r.summary}`)
           .join("\n")}`
       : "";
 
-  return `You are an implementer agent. Execute the following plan step by making code changes.
+  return `## Implement Step ${step.index}: ${step.description}
 
-## Step ${step.index}: ${step.description}
+### Acceptance Criteria
+${step.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
 
-## Acceptance Criteria
-${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}
-
-## Expected Artifacts
+### Expected Artifacts
 ${step.artifacts.map((a) => `- ${a}`).join("\n")}
 
-## Repo Context
+### Repo Context
 - **Languages:** ${profile.languages.join(", ")}
 - **Frameworks:** ${profile.frameworks.join(", ")}
 ${prevContext}
 
-## Instructions
-- Use the available tools (read, write, edit, bash) to implement the changes.
-- Stay within the plan scope.
-- If blocked, clearly state what information or decisions are needed.
-- After completing changes, summarize what you did.`;
+### Instructions
+Now use the standard code tools (read, write, edit, bash) to implement this step.
+- Read relevant files first to understand the codebase
+- Make focused, targeted changes
+- Stay within the plan scope
+- After completing changes, call \`orch_review\` with a summary of what you did`;
 }
 
-// ─── Reviewer Agent ──────────────────────────────────────────
-export function reviewerPrompt(
+// ─── Reviewer Instructions ───────────────────────────────────
+export function reviewerInstructions(
   step: PlanStep,
-  result: StepResult,
+  implementationSummary: string,
   profile: RepoProfile
 ): string {
-  return `You are a reviewer agent. Evaluate whether the implementation satisfies the step requirements.
+  return `## Review Step ${step.index}: ${step.description}
 
-## Step ${step.index}: ${step.description}
-
-## Acceptance Criteria
+### Acceptance Criteria
 ${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}
 
-## Implementation Result
-- **Status:** ${result.status}
-- **Changes:** ${result.changes.map((c) => `${c.action} ${c.path}`).join(", ")}
-- **Notes:** ${result.notes}
+### Implementation Summary
+${implementationSummary}
 
-## Repo Conventions
+### Project Conventions
 - **Languages:** ${profile.languages.join(", ")}
 - **Frameworks:** ${profile.frameworks.join(", ")}
 - **Test Framework:** ${profile.testFramework ?? "unknown"}
 
-## Instructions
-- Check each acceptance criterion.
-- Verify changes align with project conventions.
-- If the step fails, provide specific revision instructions.
+### Review Checklist
+1. Does the implementation satisfy each acceptance criterion?
+2. Do changes align with project conventions?
+3. Are there any regressions or issues introduced?
+4. Is the code clean and well-structured?
 
-Respond with ONLY a JSON object:
-{
-  "stepIndex": ${step.index},
-  "passed": true|false,
-  "feedback": "explanation of pass/fail",
-  "revisionInstructions": "specific instructions if failed, omit if passed"
-}`;
+Determine: **PASS** or **FAIL**
+If FAIL, provide specific revision instructions.`;
 }
 
-// ─── Final Summary ───────────────────────────────────────────
-export function summaryPrompt(plan: Plan, results: StepResult[]): string {
-  return `You are a summary agent. Produce a concise, user-facing summary of what was accomplished.
+// ─── Summary Instructions ────────────────────────────────────
+export function summaryInstructions(
+  goal: string,
+  steps: PlanStep[],
+  results: StepResult[]
+): string {
+  return `## Generate Final Summary
 
-## Goal
-${plan.goal}
+### Goal
+${goal}
 
-## Steps and Results
-${plan.steps
+### Steps and Results
+${steps
   .map((s) => {
     const result = results.find((r) => r.stepIndex === s.index);
-    return `### Step ${s.index}: ${s.description}
-- **Status:** ${result?.status ?? "not started"}
-- **Changes:** ${result?.changes.map((c) => `${c.action} ${c.path}`).join(", ") ?? "none"}
-- **Notes:** ${result?.notes ?? ""}`;
+    return `**Step ${s.index}: ${s.description}**
+- Status: ${result?.status ?? "not started"}
+- Summary: ${result?.summary ?? "N/A"}`;
   })
   .join("\n\n")}
 
-## Instructions
-Produce a markdown summary with:
+### Instructions
+Write a clear, user-facing summary including:
 1. What goal was implemented
 2. What files changed or were created
 3. How to use the new functionality (commands, configuration, etc.)
-4. Any follow-up recommendations`;
+4. Any follow-up recommendations
+
+Also ask the user if they'd like you to:
+- Create a GUIDE.md documenting the changes
+- Run tests
+- Create a git commit with a descriptive message`;
 }

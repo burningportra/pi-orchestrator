@@ -3,7 +3,7 @@ export interface RepoProfile {
   name: string;
   languages: string[];
   frameworks: string[];
-  structure: DirectoryNode[];
+  structure: string; // raw file tree
   entrypoints: string[];
   recentCommits: CommitSummary[];
   hasTests: boolean;
@@ -12,15 +12,9 @@ export interface RepoProfile {
   hasCI: boolean;
   ciPlatform?: string;
   todos: TodoItem[];
+  keyFiles: Record<string, string>;
   readme?: string;
   packageManager?: string;
-  summary: string; // LLM-generated natural language summary
-}
-
-export interface DirectoryNode {
-  path: string;
-  type: "file" | "dir";
-  children?: DirectoryNode[];
 }
 
 export interface CommitSummary {
@@ -75,19 +69,11 @@ export interface PlanStep {
 export interface StepResult {
   stepIndex: number;
   status: "success" | "partial" | "blocked";
-  changes: FileChange[];
-  notes: string;
-  infoRequests?: string[];
-}
-
-export interface FileChange {
-  path: string;
-  action: "create" | "modify" | "delete";
-  diff?: string;
+  summary: string;
 }
 
 // ─── Review ──────────────────────────────────────────────────
-export interface ReviewResult {
+export interface ReviewVerdict {
   stepIndex: number;
   passed: boolean;
   feedback: string;
@@ -99,8 +85,9 @@ export type OrchestratorPhase =
   | "idle"
   | "profiling"
   | "discovering"
-  | "selecting"
+  | "awaiting_selection"
   | "planning"
+  | "awaiting_plan_approval"
   | "implementing"
   | "reviewing"
   | "complete";
@@ -110,9 +97,10 @@ export interface OrchestratorState {
   repoProfile?: RepoProfile;
   candidateIdeas?: CandidateIdea[];
   selectedGoal?: string;
+  constraints: string[];
   plan?: Plan;
   stepResults: StepResult[];
-  reviewResults: ReviewResult[];
+  reviewVerdicts: ReviewVerdict[];
   currentStepIndex: number;
   retryCount: number;
   maxRetries: number;
@@ -121,8 +109,9 @@ export interface OrchestratorState {
 export function createInitialState(): OrchestratorState {
   return {
     phase: "idle",
+    constraints: [],
     stepResults: [],
-    reviewResults: [],
+    reviewVerdicts: [],
     currentStepIndex: 0,
     retryCount: 0,
     maxRetries: 3,
