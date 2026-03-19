@@ -1,5 +1,7 @@
 node_modules/
 dist/
+.pi-orchestrator/
+.firecrawl/
 *.js
 *.d.ts
 *.map
