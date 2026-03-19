@@ -104,6 +104,14 @@ export interface OrchestratorState {
   currentStepIndex: number;
   retryCount: number;
   maxRetries: number;
+  maxReviewPasses: number;
+  worktreePoolState?: {
+    repoRoot: string;
+    baseBranch: string;
+    worktrees: { path: string; branch: string; stepIndex: number }[];
+  };
+  sophiaCRId?: number;
+  sophiaTaskIds?: Record<number, number>;
 }
 
 export function createInitialState(): OrchestratorState {
@@ -115,5 +123,6 @@ export function createInitialState(): OrchestratorState {
     currentStepIndex: 0,
     retryCount: 0,
     maxRetries: 3,
+    maxReviewPasses: 2,
   };
 }
