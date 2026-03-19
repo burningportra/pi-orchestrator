@@ -627,7 +627,7 @@ export default function (pi: ExtensionAPI) {
           const wtPath = worktreePool!.getPath(stepIdx);
           return {
             name: `step-${stepIdx}`,
-            task: `You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${step.description}\n\n### Acceptance Criteria\n${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${step.artifacts.join(", ")}\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step, then summarize what you did.`,
+            task: `You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${step.description}\n\n### Acceptance Criteria\n${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${step.artifacts.join(", ")}\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step. When done, COMMIT your changes in the worktree:\n\`\`\`bash\ncd ${wtPath ?? ctx.cwd}\ngit add -A && git commit -m "step ${stepIdx}: ${step.description.slice(0, 60)}"\n\`\`\`\n\nThen summarize what you did.`,
           };
         });
 
@@ -773,7 +773,18 @@ export default function (pi: ExtensionAPI) {
         // Merge worktree changes back if this step used a worktree
         if (worktreePool) {
           const wtBranch = worktreePool.getBranch(params.stepIndex);
+          const wtPath = worktreePool.getPath(params.stepIndex);
           if (wtBranch) {
+            // Auto-commit any uncommitted changes (fallback for sub-agents that forgot)
+            if (wtPath) {
+              const { autoCommitWorktree } = await import("./worktree.js");
+              const acResult = await autoCommitWorktree(
+                pi, wtPath, `auto-commit step ${params.stepIndex}: ${step.description.slice(0, 60)}`
+              );
+              if (acResult.ok && acResult.data) {
+                ctx.ui.notify(`📝 Auto-committed uncommitted changes in step ${params.stepIndex} worktree`, "info");
+              }
+            }
             const branchResult = await pi.exec("git", ["branch", "--show-current"], { timeout: 3000, cwd: ctx.cwd });
             const targetBranch = branchResult.stdout.trim();
             const mergeResult = await mergeWorktreeChanges(

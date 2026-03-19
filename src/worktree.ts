@@ -110,6 +110,55 @@ export async function listWorktrees(
   }
 }
 
+/**
+ * Check if a worktree has uncommitted changes and commit them.
+ * Used as a fallback when sub-agents forget to commit before exiting.
+ * Returns ok:true with data:true if a commit was made, data:false if clean.
+ */
+export async function autoCommitWorktree(
+  pi: ExtensionAPI,
+  worktreePath: string,
+  message: string
+): Promise<WorktreeResult<boolean>> {
+  try {
+    // Check for dirty files
+    const status = await pi.exec("git", ["status", "--porcelain"], {
+      timeout: 5000,
+      cwd: worktreePath,
+    });
+    if (status.code !== 0) {
+      return { ok: false, error: `git status failed: ${status.stderr.trim()}` };
+    }
+    const dirty = status.stdout.trim().length > 0;
+    if (!dirty) {
+      return { ok: true, data: false }; // nothing to commit
+    }
+
+    // Stage and commit
+    const add = await pi.exec("git", ["add", "-A"], {
+      timeout: 5000,
+      cwd: worktreePath,
+    });
+    if (add.code !== 0) {
+      return { ok: false, error: `git add failed: ${add.stderr.trim()}` };
+    }
+    const commit = await pi.exec(
+      "git",
+      ["commit", "-m", message],
+      { timeout: 10000, cwd: worktreePath }
+    );
+    if (commit.code !== 0) {
+      return { ok: false, error: `git commit failed: ${commit.stderr.trim()}` };
+    }
+    return { ok: true, data: true }; // commit made
+  } catch (err) {
+    return {
+      ok: false,
+      error: `autoCommitWorktree failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // ─── WorktreePool ──────────────────────────────────────────────
 
 export class WorktreePool {
