@@ -20,8 +20,23 @@ import {
   plannerInstructions,
   implementerInstructions,
   reviewerInstructions,
+  adversarialReviewInstructions,
+  crossAgentReviewInstructions,
+  polishInstructions,
+  commitStrategyInstructions,
+  skillExtractionInstructions,
   summaryInstructions,
 } from "./prompts.js";
+import {
+  isSophiaAvailable,
+  isSophiaInitialized,
+  createCRFromPlan,
+  analyzeParallelGroups,
+  mergeWorktreeChanges,
+  type PlanToCRResult,
+  type ParallelAnalysis,
+} from "./sophia.js";
+import { WorktreePool } from "./worktree.js";
 
 const PHASE_EMOJI: Record<OrchestratorPhase, string> = {
   idle: "⏸",
@@ -38,6 +53,10 @@ const PHASE_EMOJI: Record<OrchestratorPhase, string> = {
 export default function (pi: ExtensionAPI) {
   let state: OrchestratorState = createInitialState();
   let orchestratorActive = false;
+  let hasSophia = false;
+  let sophiaCRResult: PlanToCRResult | undefined;
+  let worktreePool: WorktreePool | undefined;
+  let parallelAnalysis: ParallelAnalysis | undefined;
 
   function setPhase(phase: OrchestratorPhase, ctx: ExtensionContext) {
     state.phase = phase;
@@ -75,27 +94,100 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     if (!orchestratorActive) return;
     return {
-      systemPrompt: event.systemPrompt + "\n\n" + orchestratorSystemPrompt(),
+      systemPrompt: event.systemPrompt + "\n\n" + orchestratorSystemPrompt(hasSophia),
     };
   });
 
   // ─── Restore state from session ──────────────────────────────
   pi.on("session_start", async (_event, ctx) => {
+    // Find the LAST orchestrator-state entry (most recent)
+    let lastStateEntry: OrchestratorState | undefined;
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === "orchestrator-state") {
-        state = entry.data as OrchestratorState;
+        lastStateEntry = entry.data as OrchestratorState;
+      }
+    }
+    if (lastStateEntry) {
+      {
+        state = lastStateEntry;
         orchestratorActive = state.phase !== "idle" && state.phase !== "complete";
+
+        // Restore worktree pool
+        if (state.worktreePoolState) {
+          worktreePool = WorktreePool.fromState(pi, state.worktreePoolState);
+        }
+
+        // Restore sophia state — re-validate availability
+        hasSophia = state.hasSophia ?? false;
+        if (hasSophia) {
+          // Re-check sophia is still available (might have been uninstalled)
+          const stillAvailable = await isSophiaAvailable(pi, ctx.cwd);
+          if (!stillAvailable) {
+            hasSophia = false;
+            state.hasSophia = false;
+          }
+        }
+        if (state.sophiaCRId && state.sophiaTaskIds) {
+          // Try to rebuild full CR state from sophia if available
+          if (hasSophia) {
+            const { getCRStatus } = await import("./sophia.js");
+            const crStatus = await getCRStatus(pi, ctx.cwd, state.sophiaCRId);
+            if (crStatus.ok && crStatus.data) {
+              sophiaCRResult = {
+                cr: {
+                  id: crStatus.data.id,
+                  branch: crStatus.data.branch,
+                  title: crStatus.data.title,
+                },
+                taskIds: new Map(
+                  Object.entries(state.sophiaTaskIds).map(([k, v]) => [Number(k), v])
+                ),
+              };
+            } else {
+              // Fallback to persisted state
+              sophiaCRResult = {
+                cr: { id: state.sophiaCRId, branch: state.sophiaCRBranch ?? "", title: state.sophiaCRTitle ?? "" },
+                taskIds: new Map(
+                  Object.entries(state.sophiaTaskIds).map(([k, v]) => [Number(k), v])
+                ),
+              };
+            }
+          } else {
+            // No sophia — use persisted values
+            sophiaCRResult = {
+              cr: { id: state.sophiaCRId, branch: state.sophiaCRBranch ?? "", title: state.sophiaCRTitle ?? "" },
+              taskIds: new Map(
+                Object.entries(state.sophiaTaskIds).map(([k, v]) => [Number(k), v])
+              ),
+            };
+          }
+        }
       }
     }
   });
 
   pi.on("session_shutdown", async () => {
+    if (worktreePool) {
+      await worktreePool.cleanup();
+      worktreePool = undefined;
+    }
     orchestratorActive = false;
   });
 
   // ─── Helper: persist state ───────────────────────────────────
   function persistState() {
-    pi.appendEntry("orchestrator-state", { ...state });
+    // Sync ephemeral state into persisted state
+    state.worktreePoolState = worktreePool?.getState();
+    state.hasSophia = hasSophia;
+    if (sophiaCRResult) {
+      state.sophiaCRId = sophiaCRResult.cr.id;
+      state.sophiaCRBranch = sophiaCRResult.cr.branch;
+      state.sophiaCRTitle = sophiaCRResult.cr.title;
+      state.sophiaTaskIds = Object.fromEntries(sophiaCRResult.taskIds) as Record<number, number>;
+    }
+    // Deep copy via JSON to create a true snapshot — prevents shared array
+    // references between appended entries and the live in-memory state
+    pi.appendEntry("orchestrator-state", JSON.parse(JSON.stringify(state)));
   }
 
   // ─── Command: /orchestrate ───────────────────────────────────
@@ -136,6 +228,10 @@ export default function (pi: ExtensionAPI) {
     description: "Stop the current orchestration",
     handler: async (_args, ctx) => {
       if (orchestratorActive) {
+        if (worktreePool) {
+          await worktreePool.cleanup();
+          worktreePool = undefined;
+        }
         orchestratorActive = false;
         setPhase("idle", ctx);
         persistState();
@@ -469,6 +565,89 @@ export default function (pi: ExtensionAPI) {
       setPhase("implementing", ctx);
       persistState();
 
+      // Create Sophia CR if available
+      let sophiaInfo = "";
+      if (hasSophia) {
+        const available = await isSophiaAvailable(pi, ctx.cwd);
+        const initialized = available && await isSophiaInitialized(pi, ctx.cwd);
+        if (initialized) {
+          const crResult = await createCRFromPlan(
+            pi, ctx.cwd, plan.goal, plan.steps, plan.constraints
+          );
+          if (crResult.ok && crResult.data) {
+            sophiaCRResult = crResult.data;
+            sophiaInfo = `\n\n**Sophia CR #${crResult.data.cr.id}** created on branch \`${crResult.data.cr.branch}\` with ${crResult.data.taskIds.size} tasks.`;
+          }
+        }
+      }
+
+      // Analyze parallel groups
+      const analysis = analyzeParallelGroups(plan.steps);
+      parallelAnalysis = analysis;
+      const { groups, mergeOrder } = analysis;
+      const hasParallel = groups.some((g) => g.length > 1);
+
+      // Create worktree pool for parallel steps
+      let worktreeInfo = "";
+      if (hasParallel) {
+        try {
+          const branchResult = await pi.exec("git", ["branch", "--show-current"], { timeout: 3000, cwd: ctx.cwd });
+          const currentBranch = branchResult.stdout.trim() || "main";
+          worktreePool = new WorktreePool(pi, ctx.cwd, currentBranch);
+
+          // Pre-create worktrees for all parallel steps
+          const parallelSteps = groups.filter((g) => g.length > 1).flat();
+          const createdPaths: string[] = [];
+          for (const stepIdx of parallelSteps) {
+            const result = await worktreePool.acquire(stepIdx);
+            if (result.ok && result.data) {
+              createdPaths.push(`  Step ${stepIdx}: \`${result.data}\``);
+            }
+          }
+          if (createdPaths.length > 0) {
+            worktreeInfo = `\n\n**Worktrees created:**\n${createdPaths.join("\n")}`;
+          }
+        } catch {
+          worktreeInfo = "\n\n⚠️ Worktree creation failed — falling back to sequential execution.";
+          worktreePool = undefined;
+        }
+      }
+
+      const parallelInfo = hasParallel
+        ? `\n\n**Parallel execution plan:**\n${groups.map((g, i) => `  Group ${i + 1}: Steps ${g.join(", ")}${g.length > 1 ? " (can run in parallel via parallel_subagents)" : ""}`).join("\n")}\n  Merge order: ${mergeOrder.join(" → ")}${worktreeInfo}`
+        : "";
+
+      const firstGroup = groups[0];
+      const firstGroupIsParallel = firstGroup.length > 1 && worktreePool;
+
+      if (firstGroupIsParallel) {
+        // Build explicit parallel_subagents call for the first group
+        const agentConfigs = firstGroup.map((stepIdx) => {
+          const step = plan.steps.find((s) => s.index === stepIdx)!;
+          const wtPath = worktreePool!.getPath(stepIdx);
+          return {
+            name: `step-${stepIdx}`,
+            task: `You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${step.description}\n\n### Acceptance Criteria\n${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${step.artifacts.join(", ")}\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step. When done, COMMIT your changes in the worktree:\n\`\`\`bash\ncd ${wtPath ?? ctx.cwd}\ngit add -A && git commit -m "step ${stepIdx}: ${step.description.slice(0, 60)}"\n\`\`\`\n\nThen summarize what you did.`,
+          };
+        });
+
+        // Include parallel launch instruction directly in tool result —
+        // NOT via sendUserMessage followUp, which arrives late and causes
+        // duplicate instructions if the LLM already acted on the tool result.
+        const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Plan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n---\n**IMPORTANT: Call \`parallel_subagents\` NOW to launch Group 1 (Steps ${firstGroup.join(", ")}).**\n\nUse exactly these parameters:\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each step with the sub-agent's summary.`,
+            },
+          ],
+          details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr, launchingParallel: true },
+        };
+      }
+
+      // Sequential: start with step 1
       const firstStep = plan.steps[0];
       const implInstr = implementerInstructions(
         firstStep,
@@ -480,10 +659,10 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `Plan approved! ${plan.steps.length} steps to execute.\n\n---\nStarting Step 1:\n\n${implInstr}`,
+            text: `Plan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n---\nStarting Step 1:\n\n${implInstr}`,
           },
         ],
-        details: { approved: true, plan },
+        details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr },
       };
     },
 
@@ -565,19 +744,95 @@ export default function (pi: ExtensionAPI) {
         revisionInstructions: params.revisionInstructions,
       };
 
-      const existingReviewIdx = state.reviewVerdicts.findIndex(
-        (r) => r.stepIndex === params.stepIndex
-      );
-      if (existingReviewIdx >= 0) {
-        state.reviewVerdicts[existingReviewIdx] = review;
-      } else {
-        state.reviewVerdicts.push(review);
-      }
+      // Always push (don't overwrite) so we can count passes per step
+      state.reviewVerdicts.push(review);
 
       persistState();
 
       if (params.verdict === "pass") {
-        // Move to next step or complete
+        // Checkpoint via sophia if available
+        if (hasSophia && sophiaCRResult) {
+          const taskId = sophiaCRResult.taskIds.get(params.stepIndex);
+          if (taskId) {
+            const { checkpointTask } = await import("./sophia.js");
+            const cpResult = await checkpointTask(
+              pi,
+              ctx.cwd,
+              sophiaCRResult.cr.id,
+              taskId
+            );
+            if (!cpResult.ok) {
+              ctx.ui.notify(
+                `⚠️ Sophia checkpoint failed: ${cpResult.error}`,
+                "warning"
+              );
+            }
+          }
+        }
+
+        // Merge worktree changes back if this step used a worktree
+        if (worktreePool) {
+          const wtBranch = worktreePool.getBranch(params.stepIndex);
+          const wtPath = worktreePool.getPath(params.stepIndex);
+          if (wtBranch) {
+            // Auto-commit any uncommitted changes (fallback for sub-agents that forgot)
+            if (wtPath) {
+              const { autoCommitWorktree } = await import("./worktree.js");
+              const acResult = await autoCommitWorktree(
+                pi, wtPath, `auto-commit step ${params.stepIndex}: ${step.description.slice(0, 60)}`
+              );
+              if (acResult.ok && acResult.data) {
+                ctx.ui.notify(`📝 Auto-committed uncommitted changes in step ${params.stepIndex} worktree`, "info");
+              }
+            }
+            const branchResult = await pi.exec("git", ["branch", "--show-current"], { timeout: 3000, cwd: ctx.cwd });
+            const targetBranch = branchResult.stdout.trim();
+            const mergeResult = await mergeWorktreeChanges(
+              pi, ctx.cwd, wtBranch, targetBranch, step.description
+            );
+            if (!mergeResult.ok) {
+              if (mergeResult.conflict) {
+                ctx.ui.notify(
+                  `⚠️ Merge conflict in step ${params.stepIndex}: ${mergeResult.conflictFiles?.join(", ")}`,
+                  "warning"
+                );
+              } else {
+                ctx.ui.notify(`⚠️ Worktree merge failed: ${mergeResult.error}`, "warning");
+              }
+            }
+            // Release the worktree
+            await worktreePool.release(params.stepIndex);
+          }
+        }
+
+        // Track review passes per step using dedicated counter
+        // (not derived from verdicts array — survives regardless of how state is serialized)
+        const prevPassCount = state.reviewPassCounts[params.stepIndex] ?? 0;
+        state.reviewPassCounts[params.stepIndex] = prevPassCount + 1;
+        persistState();
+
+        // First pass done — trigger adversarial review if configured
+        if (prevPassCount === 0 && state.maxReviewPasses > 1) {
+          const adversarial = adversarialReviewInstructions(
+            step,
+            params.summary
+          );
+          ctx.ui.notify(
+            `✅ Step ${params.stepIndex} self-review passed. Running adversarial review...`,
+            "info"
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: `✅ Step ${params.stepIndex} passed self-review (pass 1/${state.maxReviewPasses}).\n\nNow do an adversarial "fresh eyes" review and call \`orch_review\` again:\n\n${adversarial}`,
+              },
+            ],
+            details: { review, reviewPass: 1, adversarial: true },
+          };
+        }
+
+        // All review passes done — move to next step or complete
         const nextStep = state.plan.steps.find(
           (s) => s.index === params.stepIndex + 1
         );
@@ -594,39 +849,74 @@ export default function (pi: ExtensionAPI) {
             state.stepResults
           );
 
-          ctx.ui.notify(`✅ Step ${params.stepIndex} passed!`, "info");
+          ctx.ui.notify(`✅ Step ${params.stepIndex} fully passed!`, "info");
 
           return {
             content: [
               {
                 type: "text",
-                text: `✅ Step ${params.stepIndex} passed review.\n\n---\nMoving to Step ${nextStep.index}:\n\n${implInstr}`,
+                text: `✅ Step ${params.stepIndex} passed all review passes.\n\n---\nMoving to Step ${nextStep.index}:\n\n${implInstr}`,
               },
             ],
             details: { review, nextStep: nextStep.index },
           };
         } else {
-          // All steps done
-          setPhase("complete", ctx);
+          // All steps done — cross-agent review + post-completion
+          setPhase("reviewing", ctx);
           persistState();
 
-          const summaryInstr = summaryInstructions(
+          // Run sophia validate/review if available
+          let sophiaReviewInfo = "";
+          if (hasSophia && sophiaCRResult) {
+            const { validateCR, reviewCR } = await import("./sophia.js");
+            const valResult = await validateCR(pi, ctx.cwd, sophiaCRResult.cr.id);
+            const revResult = await reviewCR(pi, ctx.cwd, sophiaCRResult.cr.id);
+            sophiaReviewInfo = `\n\n**Sophia validation:** ${valResult.ok ? "✅ passed" : `⚠️ ${valResult.error}`}\n**Sophia review:** ${revResult.ok ? "✅ passed" : `⚠️ ${revResult.error}`}`;
+          }
+
+          const crossReview = crossAgentReviewInstructions(
             state.plan.goal,
             state.plan.steps,
             state.stepResults
           );
 
-          ctx.ui.notify("🎉 All steps completed!", "info");
+          const allArtifacts = [
+            ...new Set(state.plan.steps.flatMap((s) => s.artifacts)),
+          ];
+          const summary = summaryInstructions(
+            state.plan.goal,
+            state.plan.steps,
+            state.stepResults
+          );
+          const polish = polishInstructions(state.plan.goal, allArtifacts);
+          const commits = commitStrategyInstructions(
+            state.plan.steps,
+            state.stepResults
+          );
+          const skillCheck = skillExtractionInstructions(
+            state.plan.goal,
+            allArtifacts
+          );
+
+          // Clean up remaining worktrees
+          if (worktreePool) {
+            await worktreePool.cleanup();
+            worktreePool = undefined;
+          }
+
+          ctx.ui.notify("🔍 All steps done — cross-agent review phase", "info");
           orchestratorActive = false;
+          setPhase("complete", ctx);
+          persistState();
 
           return {
             content: [
               {
                 type: "text",
-                text: `🎉 All ${state.plan.steps.length} steps completed and passed review!\n\n---\n${summaryInstr}`,
+                text: `🎉 All ${state.plan.steps.length} steps completed!${sophiaReviewInfo}\n\n---\n${summary}\n\n---\n## Cross-Agent Review\n\nSpawn a reviewer sub-agent to audit the full diff:\n\n${crossReview}\n\n---\n## Post-Completion Actions (offer to user)\n\n### 1. Polish Pass\n${polish}\n\n### 2. Commit Strategy\n${commits}\n\n### 3. Skill Extraction\n${skillCheck}`,
               },
             ],
-            details: { review, complete: true },
+            details: { review, complete: true, crossReview: true },
           };
         }
       } else {

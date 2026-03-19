@@ -104,6 +104,19 @@ export interface OrchestratorState {
   currentStepIndex: number;
   retryCount: number;
   maxRetries: number;
+  maxReviewPasses: number;
+  /** Tracks how many passing reviews each step has completed. Key: stepIndex, Value: pass count */
+  reviewPassCounts: Record<number, number>;
+  worktreePoolState?: {
+    repoRoot: string;
+    baseBranch: string;
+    worktrees: { path: string; branch: string; stepIndex: number }[];
+  };
+  hasSophia: boolean;
+  sophiaCRId?: number;
+  sophiaCRBranch?: string;
+  sophiaCRTitle?: string;
+  sophiaTaskIds?: Record<number, number>;
 }
 
 export function createInitialState(): OrchestratorState {
@@ -115,5 +128,8 @@ export function createInitialState(): OrchestratorState {
     currentStepIndex: 0,
     retryCount: 0,
     maxRetries: 3,
+    maxReviewPasses: 2,
+    reviewPassCounts: {},
+    hasSophia: false,
   };
 }
