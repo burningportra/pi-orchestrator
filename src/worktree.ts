@@ -30,7 +30,8 @@ function worktreePath(repoRoot: string, stepIndex: number): string {
 }
 
 function worktreeBranch(baseBranch: string, stepIndex: number): string {
-  return `${baseBranch}/worktree-step-${stepIndex}`;
+  // Use -- separator to avoid git ref path conflicts with slashes in baseBranch
+  return `${baseBranch}--worktree-step-${stepIndex}`;
 }
 
 // ─── Low-level helpers ─────────────────────────────────────────
@@ -133,7 +134,10 @@ export class WorktreePool {
 
   /** Get serializable state for persistence. */
   getState(): WorktreePoolState {
-    return { ...this.state };
+    return {
+      ...this.state,
+      worktrees: this.state.worktrees.map((w) => ({ ...w })),
+    };
   }
 
   /** Create and acquire a worktree for a step. Returns the worktree cwd. */
