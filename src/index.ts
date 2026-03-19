@@ -571,6 +571,38 @@ export default function (pi: ExtensionAPI) {
         ? `\n\n**Parallel execution plan:**\n${groups.map((g, i) => `  Group ${i + 1}: Steps ${g.join(", ")}${g.length > 1 ? " (can run in parallel via parallel_subagents)" : ""}`).join("\n")}\n  Merge order: ${mergeOrder.join(" → ")}${worktreeInfo}`
         : "";
 
+      const firstGroup = groups[0];
+      const firstGroupIsParallel = firstGroup.length > 1 && worktreePool;
+
+      if (firstGroupIsParallel) {
+        // Build explicit parallel_subagents call for the first group
+        const agentConfigs = firstGroup.map((stepIdx) => {
+          const step = plan.steps.find((s) => s.index === stepIdx)!;
+          const wtPath = worktreePool!.getPath(stepIdx);
+          return {
+            name: `step-${stepIdx}`,
+            task: `You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${step.description}\n\n### Acceptance Criteria\n${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${step.artifacts.join(", ")}\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step, then summarize what you did.`,
+          };
+        });
+
+        // Send follow-up to force parallel execution
+        pi.sendUserMessage(
+          `The plan has parallel steps. Call \`parallel_subagents\` NOW with these agents:\n\n\`\`\`json\n${JSON.stringify({ agents: agentConfigs }, null, 2)}\n\`\`\`\n\nAfter they complete, call \`orch_review\` for each step with the sub-agent's summary.`,
+          { deliverAs: "followUp" }
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Plan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n---\n**Launching parallel agents for Group 1 (Steps ${firstGroup.join(", ")})...**`,
+            },
+          ],
+          details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr, launchingParallel: true },
+        };
+      }
+
+      // Sequential: start with step 1
       const firstStep = plan.steps[0];
       const implInstr = implementerInstructions(
         firstStep,
