@@ -116,6 +116,8 @@ export interface OrchestratorState {
   /** Tracks how many passing reviews each step has completed. Key: stepIndex, Value: pass count */
   reviewPassCounts: Record<number, number>;
   iterationRound: number;
+  /** Index into the guided gates array — tracks which gate to show next */
+  currentGateIndex: number;
   worktreePoolState?: {
     repoRoot: string;
     baseBranch: string;
@@ -140,6 +142,7 @@ export function createInitialState(): OrchestratorState {
     maxReviewPasses: 2,
     reviewPassCounts: {},
     iterationRound: 0,
+    currentGateIndex: 0,
     hasSophia: false,
   };
 }
