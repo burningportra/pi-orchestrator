@@ -890,8 +890,14 @@ export default function (pi: ExtensionAPI) {
         persistState();
 
         ctx.ui.notify(`Spawning 3 planners...`, "info");
-        const deepResults = await runDeepPlanAgents(pi, ctx.cwd, agentConfigs);
+        const deepResults = await runDeepPlanAgents(pi, ctx.cwd, agentConfigs, signal);
         ctx.ui.notify(`All 3 planners completed.`, "info");
+
+        const successCount = deepResults.filter((r) => r.exitCode === 0 && r.plan).length;
+        if (successCount === 0) {
+          const errors = deepResults.map((r) => `- ${r.name}: ${r.error || "(no output)"}`).join("\n");
+          throw new Error(`All 3 planners failed. Cannot synthesize.\n${errors}`);
+        }
 
         const planBlocks = deepResults.map((r) => {
           const status = r.exitCode === 0 ? "✅" : "⚠️";
@@ -1354,14 +1360,12 @@ export default function (pi: ExtensionAPI) {
           task: `Reality checker (round ${round}).\n\n${realityCheckInstructions(st.plan!.goal, st.plan!.steps, st.stepResults)}\n\nDo NOT edit code. Just report findings.\n\ncd ${ctx.cwd}`,
         },
       ];
-      // Spawn peer review agents inline (don't rely on agent to call parallel_subagents)
-      const peerResult = await runHitMeAgents(peerAgents, ctx.cwd, ctx);
-      const peerDiffInfo = peerResult.diff ? `\n\n### 📝 Changes applied by reviewers\n\`\`\`diff\n${peerResult.diff}\n\`\`\`` : "";
+      const peerJson = JSON.stringify({ agents: peerAgents }, null, 2);
       return {
         content: [
           {
             type: "text",
-            text: `## 👥 Peer Review — Round ${round}\n\n${peerResult.text}${peerDiffInfo}\n\n---\n\n**NEXT: Review the findings above. Fix any issues, then call \`orch_review\` with stepIndex ${stepCount + 1} and verdict "pass".**`,
+            text: `**NEXT: Call \`parallel_subagents\` NOW with the config below.**\n\n## 👥 Peer Review — Round ${round}\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` with stepIndex ${stepCount + 1} and verdict "pass".`,
           },
         ],
         details: { iterating: true, round, peerReview: true },
@@ -1424,15 +1428,12 @@ export default function (pi: ExtensionAPI) {
       },
     ];
 
-    ctx.ui.notify(`🔥 Hit me — spawning 4 review agents (round ${round})...`, "info");
-    const gateResult = await runHitMeAgents(agentConfigs, ctx.cwd, ctx);
-    const gateDiffInfo = gateResult.diff ? `\n\n### 📝 Changes applied by reviewers\n\`\`\`diff\n${gateResult.diff}\n\`\`\`` : "";
-
+    const gateJson = JSON.stringify({ agents: agentConfigs }, null, 2);
     return {
       content: [
         {
           type: "text",
-          text: `## 🔥 Hit me — Round ${round} Results\n\n${gateResult.text}${gateDiffInfo}\n\n---\n\nReview the findings above, apply any fixes needed, then call \`orch_review\` again.${callbackHint}`,
+          text: `**NEXT: Call \`parallel_subagents\` NOW with the config below.**\n\n## 🔥 Hit me — Round ${round}\n\n\`\`\`json\n${gateJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` again.${callbackHint}`,
         },
       ],
       details: { iterating: true, round, agents: agentConfigs.map((a) => a.name) },
@@ -1729,15 +1730,13 @@ export default function (pi: ExtensionAPI) {
             },
           ];
 
-          ctx.ui.notify(`🔥 Hit me — spawning 4 review agents (step ${params.stepIndex}, round ${round})...`, "info");
-          const stepHitResult = await runHitMeAgents(agentConfigs, ctx.cwd, ctx);
-          const stepDiffInfo = stepHitResult.diff ? `\n\n### 📝 Changes applied by reviewers\n\`\`\`diff\n${stepHitResult.diff}\n\`\`\`` : "";
+          const stepReviewJson = JSON.stringify({ agents: agentConfigs }, null, 2);
 
           return {
             content: [
               {
                 type: "text",
-                text: `## 🔥 Hit me — Step ${params.stepIndex}, Round ${round} Results\n\n${stepHitResult.text}${stepDiffInfo}\n\n---\n\nReview the findings above, apply any fixes needed, then call \`orch_review\` again for step ${params.stepIndex} with what was fixed.`,
+                text: `**NEXT: Call \`parallel_subagents\` NOW with the config below.**\n\n## 🔥 Hit me — Step ${params.stepIndex}, Round ${round}\n\n\`\`\`json\n${stepReviewJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` again for step ${params.stepIndex} with what was fixed.`,
               },
             ],
             details: { review, hitMe: true, round, step: params.stepIndex },
