@@ -1,6 +1,6 @@
 {
   "name": "pi-orchestrator",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Repo-aware multi-agent meta-orchestrator plugin for pi",
   "scripts": {
     "test": "vitest run",
