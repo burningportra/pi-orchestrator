@@ -117,6 +117,8 @@ export interface OrchestratorState {
   reviewPassCounts: Record<number, number>;
   /** Tracks whether hit-me review agents were triggered for a step. Prevents bypass via double orch_review calls. */
   hitMeTriggered: Record<number, boolean>;
+  /** Tracks whether hit-me review agents have completed and returned results. Only set true by the orchestrator after agents finish. */
+  hitMeCompleted: Record<number, boolean>;
   iterationRound: number;
   /** Index into the guided gates array — tracks which gate to show next */
   currentGateIndex: number;
@@ -144,6 +146,7 @@ export function createInitialState(): OrchestratorState {
     maxReviewPasses: 2,
     reviewPassCounts: {},
     hitMeTriggered: {},
+    hitMeCompleted: {},
     iterationRound: 0,
     currentGateIndex: 0,
     hasSophia: false,

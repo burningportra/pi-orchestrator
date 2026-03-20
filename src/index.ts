@@ -1586,13 +1586,27 @@ export default function (pi: ExtensionAPI) {
 
       const step = state.plan.steps.find((s) => s.index === params.stepIndex);
 
-      // Sentinel: any orch_review while iterating = show next gate
-      if (state.phase === "iterating" && (!step || params.stepIndex > state.plan.steps.length)) {
+      // Sentinel: orch_review with stepIndex = steps.length + 1 while iterating = show next gate
+      // Only accept exactly steps.length + 1 to prevent manipulation via arbitrary high values
+      if (state.phase === "iterating" && params.stepIndex === state.plan.steps.length + 1) {
         return await runGuidedGates(state, ctx, "");
       }
 
       if (!step) {
-        throw new Error(`Step ${params.stepIndex} not found in plan.`);
+        throw new Error(`Step ${params.stepIndex} not found in plan (valid range: 1-${state.plan.steps.length}).`);
+      }
+
+      // Guard: reject re-review of already-completed steps (prevents re-triggering merge/review flow)
+      const alreadyCompleted = state.stepResults.find(
+        (r) => r.stepIndex === params.stepIndex && r.status === "success"
+      );
+      if (alreadyCompleted && params.verdict === "pass") {
+        return {
+          content: [
+            { type: "text", text: `Step ${params.stepIndex} already completed. Move to the next step or call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} for guided gates.` },
+          ],
+          details: { review: { stepIndex: params.stepIndex, passed: true }, alreadyDone: true },
+        };
       }
 
       // Record the step result
@@ -1703,12 +1717,17 @@ export default function (pi: ExtensionAPI) {
 
         setPhase("reviewing", ctx);
 
-        // Only auto-advance if hit-me was previously triggered for this step.
-        // Without this check, an agent can bypass hit-me by calling orch_review
-        // twice — the second call would see prevPassCount > 0 and skip.
+        // Hit-me flow uses two flags:
+        // - hitMeTriggered: set when user picks "🔥 Hit me" and agents are spawned
+        // - hitMeCompleted: set by the orchestrator ONLY after review agents return results
+        //
+        // An agent calling orch_review while hitMeTriggered=true but hitMeCompleted=false
+        // means it's trying to bypass — we block it and re-present the spawn instruction.
         const hitMeWasTriggered = state.hitMeTriggered?.[params.stepIndex] ?? false;
+        const hitMeWasCompleted = state.hitMeCompleted?.[params.stepIndex] ?? false;
         const allArtifactsForStep = step.artifacts;
         let hitMeChoice: string | undefined;
+
         if (!hitMeWasTriggered) {
           // No hit-me agents have run yet — user decides
           hitMeChoice = await ctx.ui.select(
@@ -1718,47 +1737,57 @@ export default function (pi: ExtensionAPI) {
               "✅ Looks good — move on",
             ]
           );
+        } else if (!hitMeWasCompleted) {
+          // Hit-me was triggered but agents haven't completed — bypass attempt
+          ctx.ui.notify(`⚠️ Review agents haven't completed yet. Re-presenting spawn instruction.`, "warning");
+          // Don't decrement counters — just re-present the spawn instruction
+          const round = Math.max(0, prevPassCount - 1);
+          const agentConfigs = [
+            {
+              name: `fresh-eyes-s${params.stepIndex}-r${round}`,
+              task: `Fresh-eyes reviewer for step ${params.stepIndex} (round ${round}). NEVER seen this code.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
+            },
+            {
+              name: `polish-s${params.stepIndex}-r${round}`,
+              task: `Polish reviewer for step ${params.stepIndex} (round ${round}). De-slopify.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
+            },
+            {
+              name: `ergonomics-s${params.stepIndex}-r${round}`,
+              task: `Ergonomics reviewer for step ${params.stepIndex} (round ${round}).\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
+            },
+            {
+              name: `reality-check-s${params.stepIndex}-r${round}`,
+              task: `Reality checker for step ${params.stepIndex} (round ${round}).\n\n${realityCheckInstructions(state.plan!.goal, state.plan!.steps, state.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+            },
+          ];
+          const stepReviewJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `**Review agents must complete before advancing. Call \`parallel_subagents\` NOW with the config below.**\n\n## 🔥 Hit me — Step ${params.stepIndex}, Round ${round} (re-presented)\n\n\`\`\`json\n${stepReviewJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` again for step ${params.stepIndex} with what was fixed.`,
+              },
+            ],
+            details: { review, hitMe: true, round, step: params.stepIndex, rePresented: true },
+          };
         } else {
-          // Returning from a hit-me round — check if review agents actually ran.
-          // If the summary is too short or generic, the agent likely bypassed.
-          const hasReviewEvidence = params.summary.length > 50 ||
-            params.summary.toLowerCase().includes("review") ||
-            params.summary.toLowerCase().includes("finding") ||
-            params.summary.toLowerCase().includes("agent") ||
-            params.summary.toLowerCase().includes("fix");
-
-          if (!hasReviewEvidence) {
-            // Bypass detected — re-present the spawn instruction
-            ctx.ui.notify(`⚠️ No review evidence found. Re-presenting review agents.`, "warning");
-            state.hitMeTriggered[params.stepIndex] = false;
-            state.reviewPassCounts[params.stepIndex] = prevPassCount - 1;
-            persistState();
-            // Fall through to the menu — user will see Hit Me option again
-            hitMeChoice = undefined;
-            hitMeChoice = await ctx.ui.select(
-              `⚠️ Review agents may not have run. Step ${params.stepIndex}:`,
-              [
-                "🔥 Hit me — spawn parallel review agents for this step",
-                "✅ Looks good — move on anyway",
-              ]
-            );
-          } else {
-            // Legit review round completed — auto-advance
-            hitMeChoice = "✅";
-            state.hitMeTriggered[params.stepIndex] = false;
-            persistState();
-            ctx.ui.notify(`✅ Step ${params.stepIndex} passed review (round ${prevPassCount}).`, "info");
-          }
+          // Hit-me triggered AND completed — legit review round, auto-advance
+          hitMeChoice = "✅";
+          state.hitMeTriggered[params.stepIndex] = false;
+          state.hitMeCompleted[params.stepIndex] = false;
+          persistState();
+          ctx.ui.notify(`✅ Step ${params.stepIndex} passed review (round ${prevPassCount}).`, "info");
         }
 
         if (hitMeChoice?.startsWith("🔥")) {
-          // Mark that hit-me was triggered so next orch_review auto-advances
+          // Mark that hit-me was triggered
           if (!state.hitMeTriggered) state.hitMeTriggered = {};
+          if (!state.hitMeCompleted) state.hitMeCompleted = {};
           state.hitMeTriggered[params.stepIndex] = true;
+          state.hitMeCompleted[params.stepIndex] = false;
           persistState();
 
           const round = prevPassCount;
-          const stepDesc = step.description.slice(0, 60);
           const agentConfigs = [
             {
               name: `fresh-eyes-s${params.stepIndex}-r${round}`,
@@ -1778,13 +1807,21 @@ export default function (pi: ExtensionAPI) {
             },
           ];
 
+          // Run review agents inline — wait for completion before returning
+          // This prevents the LLM from bypassing by calling orch_review before agents finish
+          const hitMeResults = await runHitMeAgents(agentConfigs, ctx.cwd, ctx);
+
+          // Mark completion — only the orchestrator can set this flag
+          state.hitMeCompleted[params.stepIndex] = true;
+          persistState();
+
           const stepReviewJson = JSON.stringify({ agents: agentConfigs }, null, 2);
 
           return {
             content: [
               {
                 type: "text",
-                text: `**NEXT: Call \`parallel_subagents\` NOW with the config below.**\n\n## 🔥 Hit me — Step ${params.stepIndex}, Round ${round}\n\n\`\`\`json\n${stepReviewJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` again for step ${params.stepIndex} with what was fixed.`,
+                text: `## 🔥 Hit me — Step ${params.stepIndex}, Round ${round}\n\n${hitMeResults.text}\n\n${hitMeResults.diff ? `### Diff\n\`\`\`diff\n${hitMeResults.diff}\n\`\`\`\n\n` : ""}After reviewing the findings above, call \`orch_review\` again for step ${params.stepIndex} with what was fixed.`,
               },
             ],
             details: { review, hitMe: true, round, step: params.stepIndex },
