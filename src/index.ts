@@ -546,133 +546,8 @@ export default function (pi: ExtensionAPI) {
         setPhase("planning", ctx);
         persistState();
 
-        // Ask: standard plan or deep plan?
-        const planMode = await ctx.ui.select(
-          "Planning mode:",
-          [
-            "📋 Standard — single plan",
-            "🧠 Deep plan — 3 competing agents → best-of-all-worlds synthesis",
-          ]
-        );
-
-        const isDeepPlan = planMode?.startsWith("🧠");
-
-        if (isDeepPlan) {
-          // Deep plan — spawn 3 competing agents then synthesize
-          const profileSummary = formatRepoProfile(profile);
-          const planPrompt = `Create a detailed step-by-step plan (3-7 steps) for this goal.\n\n## Goal\n${goal}\n\n## Repo\n${profileSummary}\n\n## Constraints\n${constraints.length > 0 ? constraints.join(", ") : "None"}\n\n**IMPORTANT: Output your plan as plain text. Do NOT call any orch_ tools (orch_plan, orch_select, etc). Do NOT try to implement anything. Just write the plan and summarize it.**\n\nReturn your plan as a numbered list with: step description, acceptance criteria, and files to modify. Be specific and opinionated.`;
-
-          const available = ctx.modelRegistry.getAvailable();
-          const seen = new Set<string>();
-          const filtered = available
-            .sort((a, b) => b.contextWindow - a.contextWindow)
-            .filter((m) => {
-              const dateMatch = m.id.match(/-(\d{8})$/);
-              if (dateMatch) {
-                const baseId = m.id.replace(/-(\d{8})$/, "");
-                const hasLatest = available.some(
-                  (o) =>
-                    o.provider === m.provider &&
-                    (o.id === baseId ||
-                      o.id === baseId + "-0" ||
-                      o.id.startsWith(baseId + "-latest"))
-                );
-                if (hasLatest) return false;
-              }
-              const key = `${m.provider}/${m.id}`;
-              if (seen.has(key)) return false;
-              seen.add(key);
-              return true;
-            });
-
-          const perProvider = new Map<string, typeof filtered>();
-          for (const m of filtered) {
-            const list = perProvider.get(m.provider) ?? [];
-            if (list.length < 3) list.push(m);
-            perProvider.set(m.provider, list);
-          }
-          const topModels = [...perProvider.values()]
-            .flat()
-            .sort((a, b) => {
-              if (a.provider !== b.provider)
-                return a.provider.localeCompare(b.provider);
-              return b.contextWindow - a.contextWindow;
-            });
-
-          const modelOptions = topModels.map((m) => {
-            const ctx_k =
-              m.contextWindow >= 1000000
-                ? `${(m.contextWindow / 1000000).toFixed(1)}M`
-                : `${Math.round(m.contextWindow / 1000)}K`;
-            const r = m.reasoning ? " 🧠" : "";
-            return `${m.provider}/${m.id} (${ctx_k}${r})`;
-          });
-
-          const labels = ["Alpha (correctness)", "Beta (robustness)", "Gamma (ergonomics)"];
-          const pickedModels: (string | undefined)[] = [];
-          for (const label of labels) {
-            const choice = await ctx.ui.select(
-              `Pick model for Planner ${label}:`,
-              modelOptions
-            );
-            pickedModels.push(choice ? choice.split(" (")[0] : undefined);
-          }
-
-          const agentConfigs = [
-            {
-              name: "planner-alpha",
-              task: `You are Planner Alpha. ${planPrompt}\n\nFocus on: correctness, minimal scope, and clean architecture.\n\ncd ${ctx.cwd}`,
-              ...(pickedModels[0] ? { model: pickedModels[0] } : {}),
-            },
-            {
-              name: "planner-beta",
-              task: `You are Planner Beta. ${planPrompt}\n\nFocus on: robustness, edge cases, and testing strategy.\n\ncd ${ctx.cwd}`,
-              ...(pickedModels[1] ? { model: pickedModels[1] } : {}),
-            },
-            {
-              name: "planner-gamma",
-              task: `You are Planner Gamma. ${planPrompt}\n\nFocus on: developer experience, ergonomics, and future extensibility.\n\ncd ${ctx.cwd}`,
-              ...(pickedModels[2] ? { model: pickedModels[2] } : {}),
-            },
-          ];
-
-          const modelInfo = `\n\nModels selected:\n${agentConfigs.map((a) => `- **${a.name}**: ${a.model ?? "default"}`).join("\n")}`;
-
-          ctx.ui.notify(`Spawning 3 planners...`, "info");
-          const deepResults = await runDeepPlanAgents(pi, ctx.cwd, agentConfigs, signal);
-          ctx.ui.notify(`All 3 planners completed.`, "info");
-
-          const successCount = deepResults.filter((r) => r.exitCode === 0 && r.plan).length;
-          if (successCount === 0) {
-            const errors = deepResults.map((r) => `- ${r.name}: ${r.error || "(no output)"}`).join("\n");
-            throw new Error(`All 3 planners failed. Cannot synthesize.\n${errors}`);
-          }
-
-          const planBlocks = deepResults.map((r) => {
-            const status = r.exitCode === 0 ? "✅" : "⚠️";
-            return `### ${status} ${r.name} (${r.model}, ${r.elapsed}s)\n\n${r.plan || r.error || "(no output)"}`;
-          }).join("\n\n---\n\n");
-
-          const synthesis = synthesisInstructions(deepResults.map((r) => ({
-            name: r.name, model: r.model, plan: r.plan,
-          })));
-
-          const constraintLine = constraints.length > 0
-            ? `\nConstraints: ${constraints.join(", ")}`
-            : "";
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: `**NEXT: Synthesize the 3 plans below into one superior hybrid, then call \`orch_plan\` NOW.**\n\nGoal: "${goal}"${constraintLine}${modelInfo}\n\n---\n\n${planBlocks}\n\n---\n\n${synthesis}`,
-              },
-            ],
-            details: { profile, customGoal: goal, deepPlan: true, deepResults },
-          };
-        }
-
-        // Standard plan
+        // Generate standard plan first — user can upgrade to deep plan
+        // in orch_plan after seeing it
         const instructions = plannerInstructions(goal, profile, constraints);
 
         return {
@@ -918,163 +793,14 @@ export default function (pi: ExtensionAPI) {
       }
       persistState();
 
-      // Ask: standard plan or deep plan (3 competing agents → synthesis)?
-      const planMode = await ctx.ui.select(
-        "Planning mode:",
-        [
-          "📋 Standard — single plan",
-          "🧠 Deep plan — 3 competing agents → best-of-all-worlds synthesis",
-        ]
-      );
-
-      const isDeepPlan = planMode?.startsWith("🧠");
-
+      // Generate a standard plan first — user can upgrade to deep plan
+      // in orch_plan after seeing it
       const instructions = plannerInstructions(
         goal,
         state.repoProfile!,
         state.constraints
       );
 
-      if (isDeepPlan) {
-        // Spawn 3 parallel agents to create competing plans
-        const profileSummary = formatRepoProfile(state.repoProfile!);
-        const planPrompt = `Create a detailed step-by-step plan (3-7 steps) for this goal.\n\n## Goal\n${goal}\n\n## Repo\n${profileSummary}\n\n## Constraints\n${state.constraints.length > 0 ? state.constraints.join(", ") : "None"}\n\n**IMPORTANT: Output your plan as plain text. Do NOT call any orch_ tools (orch_plan, orch_select, etc). Do NOT try to implement anything. Just write the plan and summarize it.**\n\nReturn your plan as a numbered list with: step description, acceptance criteria, and files to modify. Be specific and opinionated.`;
-
-        // Let user pick 3 models from available ones
-        const available = ctx.modelRegistry.getAvailable();
-
-        // Group by provider, pick best per provider, sort by context window
-        const byProvider = new Map<string, typeof available>();
-        for (const m of available) {
-          const list = byProvider.get(m.provider) ?? [];
-          list.push(m);
-          byProvider.set(m.provider, list);
-        }
-
-        // Filter to top models per provider, deduplicate date-versioned aliases
-        const seen = new Set<string>();
-        const filtered = available
-          .sort((a, b) => b.contextWindow - a.contextWindow)
-          .filter((m) => {
-            // Skip date-versioned models (e.g., claude-sonnet-4-20250514) if a latest alias exists
-            const dateMatch = m.id.match(/-(\d{8})$/);
-            if (dateMatch) {
-              const baseId = m.id.replace(/-(\d{8})$/, "");
-              const hasLatest = available.some(
-                (o) =>
-                  o.provider === m.provider &&
-                  (o.id === baseId ||
-                    o.id === baseId + "-0" ||
-                    o.id.startsWith(baseId + "-latest"))
-              );
-              if (hasLatest) return false;
-            }
-            // Deduplicate by provider+id
-            const key = `${m.provider}/${m.id}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-
-        // Top 3 per provider
-        const perProvider = new Map<string, typeof filtered>();
-        for (const m of filtered) {
-          const list = perProvider.get(m.provider) ?? [];
-          if (list.length < 3) list.push(m);
-          perProvider.set(m.provider, list);
-        }
-        const topModels = [...perProvider.values()]
-          .flat()
-          .sort((a, b) => {
-            if (a.provider !== b.provider)
-              return a.provider.localeCompare(b.provider);
-            return b.contextWindow - a.contextWindow;
-          });
-
-        const modelOptions = topModels.map((m) => {
-          const ctx_k =
-            m.contextWindow >= 1000000
-              ? `${(m.contextWindow / 1000000).toFixed(1)}M`
-              : `${Math.round(m.contextWindow / 1000)}K`;
-          const r = m.reasoning ? " 🧠" : "";
-          return `${m.provider}/${m.id} (${ctx_k}${r})`;
-        });
-
-        // Pick 3 models
-        const labels = ["Alpha (correctness)", "Beta (robustness)", "Gamma (ergonomics)"];
-        const pickedModels: (string | undefined)[] = [];
-
-        for (const label of labels) {
-          const choice = await ctx.ui.select(
-            `Pick model for Planner ${label}:`,
-            modelOptions
-          );
-          if (choice) {
-            // Extract "provider/model-id" from "provider/model-id (context...)"
-            pickedModels.push(choice.split(" (")[0]);
-          } else {
-            pickedModels.push(undefined);
-          }
-        }
-
-        const agentConfigs = [
-          {
-            name: "planner-alpha",
-            task: `You are Planner Alpha. ${planPrompt}\n\nFocus on: correctness, minimal scope, and clean architecture.\n\ncd ${ctx.cwd}`,
-            ...(pickedModels[0] ? { model: pickedModels[0] } : {}),
-          },
-          {
-            name: "planner-beta",
-            task: `You are Planner Beta. ${planPrompt}\n\nFocus on: robustness, edge cases, and testing strategy.\n\ncd ${ctx.cwd}`,
-            ...(pickedModels[1] ? { model: pickedModels[1] } : {}),
-          },
-          {
-            name: "planner-gamma",
-            task: `You are Planner Gamma. ${planPrompt}\n\nFocus on: developer experience, ergonomics, and future extensibility.\n\ncd ${ctx.cwd}`,
-            ...(pickedModels[2] ? { model: pickedModels[2] } : {}),
-          },
-        ];
-
-        const modelInfo = `\n\nModels selected:\n${agentConfigs.map((a) => `- **${a.name}**: ${a.model ?? "default"}`).join("\n")}`;
-
-        setPhase("planning", ctx);
-        persistState();
-
-        ctx.ui.notify(`Spawning 3 planners...`, "info");
-        const deepResults = await runDeepPlanAgents(pi, ctx.cwd, agentConfigs, signal);
-        ctx.ui.notify(`All 3 planners completed.`, "info");
-
-        const successCount = deepResults.filter((r) => r.exitCode === 0 && r.plan).length;
-        if (successCount === 0) {
-          const errors = deepResults.map((r) => `- ${r.name}: ${r.error || "(no output)"}`).join("\n");
-          throw new Error(`All 3 planners failed. Cannot synthesize.\n${errors}`);
-        }
-
-        const planBlocks = deepResults.map((r) => {
-          const status = r.exitCode === 0 ? "✅" : "⚠️";
-          return `### ${status} ${r.name} (${r.model}, ${r.elapsed}s)\n\n${r.plan || r.error || "(no output)"}`;
-        }).join("\n\n---\n\n");
-
-        const synthesis = synthesisInstructions(deepResults.map((r) => ({
-          name: r.name, model: r.model, plan: r.plan,
-        })));
-
-        const constraintLine = state.constraints.length > 0
-          ? `\nConstraints: ${state.constraints.join(", ")}`
-          : "";
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `**NEXT: Synthesize the 3 plans below into one superior hybrid, then call \`orch_plan\` NOW.**\n\nGoal: "${goal}"${constraintLine}${modelInfo}\n\n---\n\n${planBlocks}\n\n---\n\n${synthesis}`,
-            },
-          ],
-          details: { selected: true, goal, constraints: state.constraints, deepPlan: true, deepResults },
-        };
-      }
-
-      // Standard: single plan
       return {
         content: [
           {
@@ -1167,10 +893,122 @@ export default function (pi: ExtensionAPI) {
         `📝 Plan: ${plan.goal}\n\n${planText}`,
         [
           "✅ Approve this plan",
+          "🧠 Deep plan — 3 competing LLMs → best-of-all-worlds synthesis",
           "🚀 Creative brainstorm — enhance before approving",
           "❌ Reject",
         ]
       );
+
+      if (planChoice?.startsWith("🧠")) {
+        // Deep plan — spawn 3 competing agents then synthesize
+        const profileSummary = state.repoProfile ? formatRepoProfile(state.repoProfile) : "";
+        const planPrompt = `Create a detailed step-by-step plan (3-7 steps) for this goal.\n\n## Goal\n${plan.goal}\n\n## Repo\n${profileSummary}\n\n## Constraints\n${plan.constraints.length > 0 ? plan.constraints.join(", ") : "None"}\n\n## Current Plan (for reference — you may improve on it)\n${planText}\n\n**IMPORTANT: Output your plan as plain text. Do NOT call any orch_ tools. Do NOT try to implement anything. Just write the plan.**\n\nReturn your plan as a numbered list with: step description, acceptance criteria, and files to modify. Be specific and opinionated.`;
+
+        const available = ctx.modelRegistry.getAvailable();
+        const seen = new Set<string>();
+        const filtered = available
+          .sort((a, b) => b.contextWindow - a.contextWindow)
+          .filter((m) => {
+            const dateMatch = m.id.match(/-(\d{8})$/);
+            if (dateMatch) {
+              const baseId = m.id.replace(/-(\d{8})$/, "");
+              const hasLatest = available.some(
+                (o) =>
+                  o.provider === m.provider &&
+                  (o.id === baseId ||
+                    o.id === baseId + "-0" ||
+                    o.id.startsWith(baseId + "-latest"))
+              );
+              if (hasLatest) return false;
+            }
+            const key = `${m.provider}/${m.id}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+
+        const perProvider = new Map<string, typeof filtered>();
+        for (const m of filtered) {
+          const list = perProvider.get(m.provider) ?? [];
+          if (list.length < 3) list.push(m);
+          perProvider.set(m.provider, list);
+        }
+        const topModels = [...perProvider.values()]
+          .flat()
+          .sort((a, b) => {
+            if (a.provider !== b.provider)
+              return a.provider.localeCompare(b.provider);
+            return b.contextWindow - a.contextWindow;
+          });
+
+        const modelOptions = topModels.map((m) => {
+          const ctx_k =
+            m.contextWindow >= 1000000
+              ? `${(m.contextWindow / 1000000).toFixed(1)}M`
+              : `${Math.round(m.contextWindow / 1000)}K`;
+          const r = m.reasoning ? " 🧠" : "";
+          return `${m.provider}/${m.id} (${ctx_k}${r})`;
+        });
+
+        const labels = ["Alpha (correctness)", "Beta (robustness)", "Gamma (ergonomics)"];
+        const pickedModels: (string | undefined)[] = [];
+        for (const label of labels) {
+          const choice = await ctx.ui.select(
+            `Pick model for Planner ${label}:`,
+            modelOptions
+          );
+          pickedModels.push(choice ? choice.split(" (")[0] : undefined);
+        }
+
+        const agentConfigs = [
+          {
+            name: "planner-alpha",
+            task: `You are Planner Alpha. ${planPrompt}\n\nFocus on: correctness, minimal scope, and clean architecture.\n\ncd ${ctx.cwd}`,
+            ...(pickedModels[0] ? { model: pickedModels[0] } : {}),
+          },
+          {
+            name: "planner-beta",
+            task: `You are Planner Beta. ${planPrompt}\n\nFocus on: robustness, edge cases, and testing strategy.\n\ncd ${ctx.cwd}`,
+            ...(pickedModels[1] ? { model: pickedModels[1] } : {}),
+          },
+          {
+            name: "planner-gamma",
+            task: `You are Planner Gamma. ${planPrompt}\n\nFocus on: developer experience, ergonomics, and future extensibility.\n\ncd ${ctx.cwd}`,
+            ...(pickedModels[2] ? { model: pickedModels[2] } : {}),
+          },
+        ];
+
+        const modelInfo = `\n\nModels selected:\n${agentConfigs.map((a) => `- **${a.name}**: ${a.model ?? "default"}`).join("\n")}`;
+
+        ctx.ui.notify(`🧠 Spawning 3 competing planners...`, "info");
+        const deepResults = await runDeepPlanAgents(pi, ctx.cwd, agentConfigs);
+        ctx.ui.notify(`All 3 planners completed.`, "info");
+
+        const successCount = deepResults.filter((r) => r.exitCode === 0 && r.plan).length;
+        if (successCount === 0) {
+          const errors = deepResults.map((r) => `- ${r.name}: ${r.error || "(no output)"}`).join("\n");
+          throw new Error(`All 3 planners failed. Cannot synthesize.\n${errors}`);
+        }
+
+        const planBlocks = deepResults.map((r) => {
+          const status = r.exitCode === 0 ? "✅" : "⚠️";
+          return `### ${status} ${r.name} (${r.model}, ${r.elapsed}s)\n\n${r.plan || r.error || "(no output)"}`;
+        }).join("\n\n---\n\n");
+
+        const synthesis = synthesisInstructions(deepResults.map((r) => ({
+          name: r.name, model: r.model, plan: r.plan,
+        })));
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `**NEXT: Synthesize the 3 plans below into one superior hybrid, then call \`orch_plan\` again NOW.**\n\nGoal: "${plan.goal}"${modelInfo}\n\n---\n\n${planBlocks}\n\n---\n\n${synthesis}`,
+            },
+          ],
+          details: { approved: false, deepPlan: true, deepResults },
+        };
+      }
 
       if (planChoice?.startsWith("🚀")) {
         const brainstormTask = `You are a creative brainstormer. Here is a plan that needs enhancement:\n\n${planText}\n\nGoal: ${plan.goal}\n\nThink of ONE HUNDRED ways to make this plan more powerful, innovative, and robust. Then pick only your 3-5 VERY BEST ideas. Each idea must be:\n- **Positive expected value**: the benefit clearly outweighs the implementation cost and complexity burden\n- **Pragmatic**: can be implemented without heroic effort\n- **Concrete**: specific enough to act on, not vague hand-waving\n\nFor each idea, output:\n1. **Title** — short name\n2. **What it does** — one sentence\n3. **Why it's +EV** — why the payoff justifies the cost\n\nDo NOT rewrite the plan. Do NOT call any tools.`;
