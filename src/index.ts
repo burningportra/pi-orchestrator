@@ -979,7 +979,7 @@ export default function (pi: ExtensionAPI) {
         const round = state.iterationRound;
         persistState();
 
-        // Sequential guided flow — each gate offers "do this" or "skip"
+        // Sequential guided flow — resume from saved gate index
         const gates = [
           { emoji: "🔍", label: "Fresh self-review", desc: "read all new code with fresh eyes" },
           { emoji: "👥", label: "Peer review", desc: "parallel agents review each other's work" },
@@ -989,7 +989,9 @@ export default function (pi: ExtensionAPI) {
         ];
 
         let chosen: string | undefined;
-        for (const gate of gates) {
+        const startGate = state.currentGateIndex ?? 0;
+        for (let i = startGate; i < gates.length; i++) {
+          const gate = gates[i];
           const pick = await ctx.ui.select(
             `Round ${round} — ${gate.emoji} ${gate.label}`,
             [
@@ -1002,7 +1004,15 @@ export default function (pi: ExtensionAPI) {
             chosen = "✅";
             break;
           }
-          if (pick.startsWith("⏭️")) continue;
+          if (pick.startsWith("⏭️")) {
+            // Advance gate index so next re-entry starts from next gate
+            state.currentGateIndex = i + 1;
+            persistState();
+            continue;
+          }
+          // User picked this gate — advance index for next re-entry
+          state.currentGateIndex = i + 1;
+          persistState();
           chosen = pick;
           break;
         }
@@ -1012,6 +1022,7 @@ export default function (pi: ExtensionAPI) {
 
         if (!chosen || chosen.startsWith("✅")) {
           orchestratorActive = false;
+          state.currentGateIndex = 0;
           setPhase("complete", ctx);
           persistState();
           return {
@@ -1028,7 +1039,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}\n\nAfter fixing everything, **commit**: commit all changed files in logically connected groupings with super detailed commit messages and push. Don't edit code during commit. Don't commit ephemeral files.\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+                text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
               },
             ],
             details: { iterating: true, round, selfReview: true },
@@ -1060,7 +1071,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `## 👥 Peer Review — Round ${round}\n\nSpawning 4 parallel reviewers:\n- **bugs**: root-cause analysis, security, reliability\n- **polish**: de-slopify, clarity\n- **ergonomics**: agent-friendliness\n- **reality-check**: are we on track?\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then **commit**: commit all changed files in logically connected groupings with super detailed messages and push. Don't edit code during commit. Don't commit ephemeral files.\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+                text: `## 👥 Peer Review — Round ${round}\n\nSpawning 4 parallel reviewers:\n- **bugs**: root-cause analysis, security, reliability\n- **polish**: de-slopify, clarity\n- **ergonomics**: agent-friendliness\n- **reality-check**: are we on track?\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. After committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
               },
             ],
             details: { iterating: true, round, peerReview: true },
@@ -1131,7 +1142,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `## 🔥 Hit me — Round ${round}\n\nSpawning 4 parallel review agents: fresh-eyes, polish, ergonomics, reality-check.\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then **commit**: commit all changed files in logically connected groupings with super detailed commit messages and push. Don't edit code during commit. Don't commit ephemeral files.\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+              text: `## 🔥 Hit me — Round ${round}\n\nSpawning 4 parallel review agents: fresh-eyes, polish, ergonomics, reality-check.\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
             },
           ],
           details: { iterating: true, round, agents: agentConfigs.map((a) => a.name) },
