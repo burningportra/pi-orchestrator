@@ -924,7 +924,7 @@ export default function (pi: ExtensionAPI) {
 
       const step = state.plan.steps.find((s) => s.index === params.stepIndex);
 
-      // Sentinel: any orch_review while iterating = re-show "hit me" menu
+      // Sentinel: any orch_review while iterating = show next gate
       if (state.phase === "iterating" && (!step || params.stepIndex > state.plan.steps.length)) {
         const allArtifacts = [...new Set(state.plan.steps.flatMap((s) => s.artifacts))];
         const polish = polishInstructions(state.plan.goal, allArtifacts);
@@ -935,9 +935,11 @@ export default function (pi: ExtensionAPI) {
         persistState();
 
         const chosen = await ctx.ui.select(
-          `Round ${round} complete. Go again?`,
+          `Round ${round}. What next?`,
           [
-            "🔥 Hit me — spawn parallel review agents",
+            "🔍 Fresh self-review — read all new code with fresh eyes",
+            "👥 Peer review — parallel agents review each other's work",
+            "🔥 Hit me — spawn 4 parallel review agents (fresh-eyes/polish/ergonomics/reality-check)",
             "✅ Done — finish orchestration",
           ]
         );
@@ -954,7 +956,44 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // Spawn parallel review agents
+        if (chosen.startsWith("🔍")) {
+          // Fresh self-review — LLM reviews its own code
+          return {
+            content: [
+              {
+                type: "text",
+                text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}\n\nAfter fixing everything, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+              },
+            ],
+            details: { iterating: true, round, selfReview: true },
+          };
+        }
+
+        if (chosen.startsWith("👥")) {
+          // Peer review — parallel agents review code written by other agents
+          const peerAgents = [
+            {
+              name: `peer-reviewer-a-r${round}`,
+              task: `You are a peer reviewer (round ${round}). Review the code written by your fellow agents. Check for any issues, bugs, errors, problems, inefficiencies, security problems, reliability issues, etc. Carefully diagnose their underlying root causes using first-principle analysis and then fix or revise them if necessary. Don't restrict yourself to the latest commits — cast a wider net and go super deep!\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nMake fixes directly.\n\ncd ${ctx.cwd}`,
+            },
+            {
+              name: `peer-reviewer-b-r${round}`,
+              task: `You are a peer reviewer (round ${round}). Review the code written by your fellow agents. Focus on: architectural coherence, naming consistency, error handling completeness, and whether the implementation actually achieves the stated goal. Diagnose root causes, not symptoms.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nMake fixes directly.\n\ncd ${ctx.cwd}`,
+            },
+          ];
+          const peerJson = JSON.stringify({ agents: peerAgents }, null, 2);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `## 👥 Peer Review — Round ${round}\n\nSpawning 2 parallel peer reviewers to review code written by other agents:\n- **peer-reviewer-a**: bugs, security, reliability, root-cause analysis\n- **peer-reviewer-b**: architecture, naming, error handling, goal alignment\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter both complete, present findings then call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+              },
+            ],
+            details: { iterating: true, round, peerReview: true },
+          };
+        }
+
+        // "🔥 Hit me" — spawn 4 parallel review agents
         const agentConfigs = [
           {
             name: `fresh-eyes-r${round}`,
@@ -979,7 +1018,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `## 🔥 Hit me — Round ${round}\n\nSpawning 3 parallel review agents: fresh-eyes, polish, ergonomics.\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings then call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for another round.`,
+              text: `## 🔥 Hit me — Round ${round}\n\nSpawning 4 parallel review agents: fresh-eyes, polish, ergonomics, reality-check.\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings then call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
             },
           ],
           details: { iterating: true, round, agents: agentConfigs.map((a) => a.name) },
@@ -1248,65 +1287,53 @@ export default function (pi: ExtensionAPI) {
             worktreePool = undefined;
           }
 
-          ctx.ui.notify("🔄 All steps done — ready to iterate", "info");
+          ctx.ui.notify("🔄 All steps done — post-implementation review", "info");
           setPhase("iterating", ctx);
           persistState();
 
-          // First entry into iteration — same "hit me" pattern
-          const chosen = await ctx.ui.select(
+          // Sequential post-implementation gates
+          // Gate 1: Fresh self-review (the implementing agent reviews its own work)
+          const selfReviewChoice = await ctx.ui.select(
             `🎉 All ${state.plan.steps.length} steps completed!${sophiaReviewInfo}`,
             [
-              "🔥 Hit me — spawn parallel review agents",
+              "🔍 Fresh self-review — read over all new code with fresh eyes",
+              "⏭️  Skip to peer review",
               "✅ Done — finish orchestration",
             ]
           );
 
-          if (!chosen || chosen.startsWith("✅")) {
+          if (!selfReviewChoice || selfReviewChoice.startsWith("✅")) {
             orchestratorActive = false;
             setPhase("complete", ctx);
             persistState();
             return {
-              content: [
-                { type: "text", text: `${summary}\n\nOrchestration complete.` },
-              ],
+              content: [{ type: "text", text: `${summary}\n\nOrchestration complete.` }],
               details: { review, complete: true },
             };
           }
 
-          // "Hit me" — spawn parallel review agents
-          state.iterationRound = (state.iterationRound ?? 0) + 1;
-          const round = state.iterationRound;
-          persistState();
+          if (selfReviewChoice.startsWith("🔍")) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `${summary}\n\n---\n## 🔍 Fresh Self-Review\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}\n\nAfter fixing everything, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" to proceed to peer review.`,
+                },
+              ],
+              details: { review, iterating: true, selfReview: true },
+            };
+          }
 
-          const agentConfigs = [
-            {
-              name: `fresh-eyes-r${round}`,
-              task: `Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Give exact file:line fixes.\n\ncd ${ctx.cwd}`,
-            },
-            {
-              name: `polish-r${round}`,
-              task: `Polish/de-slopify reviewer round ${round}.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly — don't just report.\n\ncd ${ctx.cwd}`,
-            },
-            {
-              name: `ergonomics-r${round}`,
-              task: `Agent-ergonomics reviewer round ${round}. Make this maximally intuitive for coding agents.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything that fails that test.\n\ncd ${ctx.cwd}`,
-            },
-            {
-              name: `reality-check-r${round}`,
-              task: `Reality checker round ${round}.\n\n${realityCheckInstructions(state.plan!.goal, state.plan!.steps, state.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
-            },
-          ];
-
-          const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
-
+          // User picked "skip to peer review" — trigger sentinel re-entry
+          // which will show the full gate menu including peer review
           return {
             content: [
               {
                 type: "text",
-                text: `${summary}\n\n---\n## 🔥 Hit me — Round ${round}\n\nSpawning 3 parallel review agents: **fresh-eyes**, **polish**, **ergonomics**.\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings then call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for another round.`,
+                text: `${summary}\n\nSkipping self-review. Call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" to see the review options.`,
               },
             ],
-            details: { review, iterating: true, round, agents: agentConfigs.map((a) => a.name) },
+            details: { review, iterating: true, skippedSelfReview: true },
           };
         }
       } else {
