@@ -61,11 +61,16 @@ export default function (pi: ExtensionAPI) {
   let orchestratorActive = false;
 
   // Helper: spawn hit-me review agents inline via pi.exec (like deep-plan.ts)
+  interface HitMeResult {
+    text: string;
+    diff: string;
+  }
+
   async function runHitMeAgents(
     agentConfigs: { name: string; task: string }[],
     cwd: string,
     ctx: ExtensionContext
-  ): Promise<string> {
+  ): Promise<HitMeResult> {
     const outputDir = join(tmpdir(), `pi-hit-me-${Date.now()}`);
     mkdirSync(outputDir, { recursive: true });
 
@@ -102,8 +107,25 @@ export default function (pi: ExtensionAPI) {
       const status = r.ok ? "✅" : "⚠️";
       return `### ${status} ${r.name}\n\n${r.output || "(no output)"}\n`;
     });
+    const text = sections.join("\n---\n\n");
 
-    return sections.join("\n---\n\n");
+    // Capture git diff — agents' edits persist to disk in --print mode
+    let diff = "";
+    try {
+      const diffResult = await pi.exec("git", ["diff"], { timeout: 5000, cwd });
+      diff = diffResult.stdout.trim();
+    } catch {
+      // ignore — no diff available
+    }
+
+    ctx.ui.notify(
+      diff
+        ? `✅ Review agents completed — ${diff.split("\n").filter(l => l.startsWith("+") || l.startsWith("-")).length} lines changed`
+        : `✅ Review agents completed — no file changes`,
+      "info"
+    );
+
+    return { text, diff };
   }
   let hasSophia = false;
   let sophiaCRResult: PlanToCRResult | undefined;
@@ -1260,15 +1282,15 @@ export default function (pi: ExtensionAPI) {
       const peerAgents = [
         {
           name: `peer-bugs-r${round}`,
-          task: `Peer reviewer (round ${round}). Review code written by your fellow agents. Check for issues, bugs, errors, inefficiencies, security problems, reliability issues. Diagnose root causes using first-principle analysis. Don't restrict to latest commits — cast a wider net and go super deep!\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nMake fixes directly.\n\ncd ${ctx.cwd}`,
+          task: `Peer reviewer (round ${round}). Review code written by your fellow agents. Check for issues, bugs, errors, inefficiencies, security problems, reliability issues. Diagnose root causes using first-principle analysis. Don't restrict to latest commits — cast a wider net and go super deep!\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
         },
         {
           name: `peer-polish-r${round}`,
-          task: `Polish reviewer (round ${round}). De-slopify the code. Remove AI slop, improve clarity, make it agent-friendly.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly.\n\ncd ${ctx.cwd}`,
+          task: `Polish reviewer (round ${round}). De-slopify the code. Remove AI slop, improve clarity, make it agent-friendly.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
         },
         {
           name: `peer-ergonomics-r${round}`,
-          task: `Ergonomics reviewer (round ${round}). If you came in fresh with zero context, would you understand this code? Fix anything confusing.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nMake fixes directly.\n\ncd ${ctx.cwd}`,
+          task: `Ergonomics reviewer (round ${round}). If you came in fresh with zero context, would you understand this code? Fix anything confusing.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
         },
         {
           name: `peer-reality-r${round}`,
@@ -1276,12 +1298,13 @@ export default function (pi: ExtensionAPI) {
         },
       ];
       // Spawn peer review agents inline (don't rely on agent to call parallel_subagents)
-      const combinedPeerOutput = await runHitMeAgents(peerAgents, ctx.cwd, ctx);
+      const peerResult = await runHitMeAgents(peerAgents, ctx.cwd, ctx);
+      const peerDiffInfo = peerResult.diff ? `\n\n### 📝 Changes applied by reviewers\n\`\`\`diff\n${peerResult.diff}\n\`\`\`` : "";
       return {
         content: [
           {
             type: "text",
-            text: `## 👥 Peer Review — Round ${round}\n\n${combinedPeerOutput}\n\n---\n\n**NEXT: Review the findings above. Fix any issues, then call \`orch_review\` with stepIndex ${stepCount + 1} and verdict "pass".**`,
+            text: `## 👥 Peer Review — Round ${round}\n\n${peerResult.text}${peerDiffInfo}\n\n---\n\n**NEXT: Review the findings above. Fix any issues, then call \`orch_review\` with stepIndex ${stepCount + 1} and verdict "pass".**`,
           },
         ],
         details: { iterating: true, round, peerReview: true },
@@ -1328,7 +1351,7 @@ export default function (pi: ExtensionAPI) {
     const agentConfigs = [
       {
         name: `fresh-eyes-r${round}`,
-        task: `Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Give exact file:line fixes.\n\ncd ${ctx.cwd}`,
+        task: `Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
       },
       {
         name: `polish-r${round}`,
@@ -1345,14 +1368,14 @@ export default function (pi: ExtensionAPI) {
     ];
 
     ctx.ui.notify(`🔥 Hit me — spawning 4 review agents (round ${round})...`, "info");
-    const combinedOutput = await runHitMeAgents(agentConfigs, ctx.cwd, ctx);
-    ctx.ui.notify(`✅ All 4 review agents completed (round ${round}).`, "info");
+    const gateResult = await runHitMeAgents(agentConfigs, ctx.cwd, ctx);
+    const gateDiffInfo = gateResult.diff ? `\n\n### 📝 Changes applied by reviewers\n\`\`\`diff\n${gateResult.diff}\n\`\`\`` : "";
 
     return {
       content: [
         {
           type: "text",
-          text: `## 🔥 Hit me — Round ${round} Results\n\n${combinedOutput}\n\n---\n\nReview the findings above, apply any fixes needed, then call \`orch_review\` again.${callbackHint}`,
+          text: `## 🔥 Hit me — Round ${round} Results\n\n${gateResult.text}${gateDiffInfo}\n\n---\n\nReview the findings above, apply any fixes needed, then call \`orch_review\` again.${callbackHint}`,
         },
       ],
       details: { iterating: true, round, agents: agentConfigs.map((a) => a.name) },
@@ -1633,11 +1656,11 @@ export default function (pi: ExtensionAPI) {
           const agentConfigs = [
             {
               name: `fresh-eyes-s${params.stepIndex}-r${round}`,
-              task: `Fresh-eyes reviewer for step ${params.stepIndex} (round ${round}). NEVER seen this code.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Give exact file:line fixes.\n\ncd ${ctx.cwd}`,
+              task: `Fresh-eyes reviewer for step ${params.stepIndex} (round ${round}). NEVER seen this code.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
             },
             {
               name: `polish-s${params.stepIndex}-r${round}`,
-              task: `Polish reviewer for step ${params.stepIndex} (round ${round}). De-slopify.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Make edits directly.\n\ncd ${ctx.cwd}`,
+              task: `Polish reviewer for step ${params.stepIndex} (round ${round}). De-slopify.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
             },
             {
               name: `ergonomics-s${params.stepIndex}-r${round}`,
@@ -1650,14 +1673,14 @@ export default function (pi: ExtensionAPI) {
           ];
 
           ctx.ui.notify(`🔥 Hit me — spawning 4 review agents (step ${params.stepIndex}, round ${round})...`, "info");
-          const combinedOutput = await runHitMeAgents(agentConfigs, ctx.cwd, ctx);
-          ctx.ui.notify(`✅ All 4 review agents completed (step ${params.stepIndex}, round ${round}).`, "info");
+          const stepHitResult = await runHitMeAgents(agentConfigs, ctx.cwd, ctx);
+          const stepDiffInfo = stepHitResult.diff ? `\n\n### 📝 Changes applied by reviewers\n\`\`\`diff\n${stepHitResult.diff}\n\`\`\`` : "";
 
           return {
             content: [
               {
                 type: "text",
-                text: `## 🔥 Hit me — Step ${params.stepIndex}, Round ${round} Results\n\n${combinedOutput}\n\n---\n\nReview the findings above, apply any fixes needed, then call \`orch_review\` again for step ${params.stepIndex} with what was fixed.`,
+                text: `## 🔥 Hit me — Step ${params.stepIndex}, Round ${round} Results\n\n${stepHitResult.text}${stepDiffInfo}\n\n---\n\nReview the findings above, apply any fixes needed, then call \`orch_review\` again for step ${params.stepIndex} with what was fixed.`,
               },
             ],
             details: { review, hitMe: true, round, step: params.stepIndex },
