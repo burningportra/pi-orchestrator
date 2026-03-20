@@ -1,7 +1,26 @@
 {
   "name": "pi-orchestrator",
   "version": "0.2.0",
-  "description": "Repo-aware multi-agent meta-orchestrator plugin for pi",
+  "description": "Multi-agent orchestrator for pi — deep planning, parallel execution, guided review gates, compound memory. Based on the Agentic Coding Flywheel.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/burningportra/pi-orchestrator.git"
+  },
+  "homepage": "https://github.com/burningportra/pi-orchestrator",
+  "keywords": [
+    "pi",
+    "orchestrator",
+    "multi-agent",
+    "flywheel",
+    "coding-agent",
+    "parallel-execution",
+    "sophia"
+  ],
+  "files": [
+    "src/",
+    "README.md",
+    "package.json"
+  ],
   "pi": {
     "extensions": ["./src/index.ts"]
   },
