@@ -91,6 +91,10 @@ After all steps and reviews pass, the orchestrator offers:
 - **Commit strategy**: Group changes into logical commits with detailed messages
 - **Skill extraction**: Check if the work product should become a reusable skill
 
+## Compound Memory
+- Use \`/memory\` to view, search, and prune learnings from prior orchestrations
+- Use \`orch_memory\` tool to search memory programmatically during implementation
+
 ## Rules
 - Follow the workflow in order. Do not skip steps.
 - After each tool call, read the result carefully before proceeding.
@@ -260,6 +264,7 @@ ${prevContext}
 
 ### Marching Orders
 First read the relevant files to fully understand the code and technical architecture.
+Use \`orch_memory\` to search for relevant learnings from prior orchestrations if applicable.
 Then implement this step using the standard code tools (read, write, edit, bash).
 Work systematically and meticulously. Don't get stuck in analysis — be proactive.
 Make focused, targeted changes. Stay within the plan scope.
