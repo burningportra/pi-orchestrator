@@ -286,6 +286,13 @@ export default function (pi: ExtensionAPI) {
 
       const formatted = formatRepoProfile(profile);
 
+      // Read compound memory from prior orchestrations
+      const { readMemory } = await import("./memory.js");
+      const memory = readMemory(ctx.cwd);
+      const memoryContext = memory
+        ? `\n\n### Compound Memory (from prior runs)\n${memory}`
+        : "";
+
       const discoveryMode = await ctx.ui.select(
         "Discovery mode:",
         [
@@ -303,7 +310,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `Repository profiled successfully.\n\n${formatted}\n\n---\n${discoveryPrompt}`,
+            text: `Repository profiled successfully.\n\n${formatted}${memoryContext}\n\n---\n${discoveryPrompt}`,
           },
         ],
         details: { profile },
@@ -1009,7 +1016,7 @@ export default function (pi: ExtensionAPI) {
           persistState();
           return {
             content: [
-              { type: "text", text: `${summaryText}\n\nOrchestration complete after ${round} round(s).` },
+              { type: "text", text: `${summaryText}\n\nOrchestration complete after ${round} round(s).\n\n---\n## 🧠 Compound Memory\n\nDistill the key decisions, gotchas, patterns, and architectural choices from this orchestration. What would a future agent need to know about this repo? Write 3-7 bullet points and append them to \`.pi-orchestrator/memory.md\` using the write or bash tool. Format as a timestamped markdown section.` },
             ],
             details: { complete: true, rounds: round },
           };
@@ -1414,7 +1421,7 @@ export default function (pi: ExtensionAPI) {
             setPhase("complete", ctx);
             persistState();
             return {
-              content: [{ type: "text", text: `${summary}\n\nOrchestration complete.` }],
+              content: [{ type: "text", text: `${summary}\n\nOrchestration complete.\n\n---\n## 🧠 Compound Memory\n\nDistill the key decisions, gotchas, patterns, and architectural choices from this orchestration. What would a future agent need to know? Write 3-7 bullet points and append them to \`.pi-orchestrator/memory.md\`.` }],
               details: { review, complete: true },
             };
           }
