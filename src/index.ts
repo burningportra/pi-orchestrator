@@ -745,29 +745,47 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      // Polish tasks in plan space before implementing
-      const polishTasks = await ctx.ui.select(
-        `${plan.steps.length} tasks ready.${sophiaInfo ? ` Sophia CR created.` : ""} Review before implementing?`,
-        [
-          "🔍 Polish tasks — review each task in plan space first",
-          "▶️  Start implementing",
-        ]
-      );
-
-      if (polishTasks?.startsWith("🔍")) {
+      // Polish tasks in plan space — loop until user is satisfied
+      let polishing = true;
+      while (polishing) {
         const taskList = plan.steps
-          .map((s) => `**Step ${s.index}: ${s.description}**\n   ✓ ${s.acceptanceCriteria.join("\n   ✓ ")}\n   📄 ${s.artifacts.join(", ")}`)
+          .map((s) => `**Step ${s.index}: ${s.description}**\n   ✓ ${s.acceptanceCriteria.join("\n   ✓ ")}\n   📄 ${s.artifacts.join(", ")}${(s as any).dependsOn?.length ? `\n   🔗 depends on: ${(s as any).dependsOn.join(", ")}` : ""}`)
           .join("\n\n");
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: `## 🔍 Task Polishing — Plan Space Review${sophiaInfo}\n\n${taskList}\n\n---\n\nCheck over each task super carefully — are you sure it makes sense? Is it optimal? Could we change anything to make the system work better for users? It's a lot easier and faster to operate in "plan space" before we start implementing!\n\nIf any tasks need revision, call \`orch_plan\` again with the revised steps (sophia tasks will be recreated). If everything looks good, call \`orch_plan\` again with the same steps to proceed.`,
-            },
-          ],
-          details: { approved: true, plan, polishing: true, sophiaCR: sophiaCRResult?.cr },
-        };
+        const polishChoice = await ctx.ui.select(
+          `${plan.steps.length} tasks ready.${sophiaInfo}\n\n${taskList}`,
+          [
+            "▶️  Start implementing",
+            "🔍 Polish — send tasks back for LLM review",
+            "❌ Reject plan",
+          ]
+        );
+
+        if (polishChoice?.startsWith("🔍")) {
+          // Return to LLM for revision — it will call orch_plan again
+          return {
+            content: [
+              {
+                type: "text",
+                text: `## 🔍 Task Polishing${sophiaInfo}\n\n${taskList}\n\n---\n\nCheck over each task super carefully — are you sure it makes sense? Is it optimal? Could we change anything to make the system work better for users? It's a lot easier and faster to operate in "plan space" before we start implementing!\n\nRevise and call \`orch_plan\` again with updated steps (sophia tasks will be recreated).`,
+              },
+            ],
+            details: { approved: true, plan, polishing: true, sophiaCR: sophiaCRResult?.cr },
+          };
+        }
+
+        if (!polishChoice || polishChoice.startsWith("❌")) {
+          orchestratorActive = false;
+          setPhase("idle", ctx);
+          persistState();
+          return {
+            content: [{ type: "text", text: "Plan rejected. Orchestration stopped." }],
+            details: { approved: false },
+          };
+        }
+
+        // "▶️ Start implementing" — break out of polish loop
+        polishing = false;
       }
 
       // Analyze parallel groups
