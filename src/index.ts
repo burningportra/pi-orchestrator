@@ -280,28 +280,14 @@ export default function (pi: ExtensionAPI) {
 
       const formatted = formatRepoProfile(profile);
 
-      // Ask discovery mode
-      const discoveryMode = await ctx.ui.select(
-        "Discovery mode:",
-        [
-          "📋 Standard — 3-7 practical improvement ideas",
-          "🚀 Creative — think of 100 ideas, only tell me your 10 BEST",
-        ]
-      );
-
-      const isCreative = discoveryMode?.startsWith("🚀");
-      const discoveryPrompt = isCreative
-        ? `\n\n---\n**🚀 Creative Discovery Mode**\n\nNow I want you to come up with your top 7 most brilliant ideas for adding extremely powerful and cool functionality that will make this system far more compelling, useful, intuitive, versatile, powerful, robust, and reliable for users. Be pragmatic — don't suggest features that are extremely hard to implement or not worth the complexity. But I don't want you to just think of 7 ideas: seriously think hard, come up with ONE HUNDRED ideas internally, then only tell me your 7 VERY BEST and most brilliant, clever, and radically innovative ideas.\n\nCall \`orch_discover\` with your top 7.`
-        : `\n\n---\nNext: Call \`orch_discover\` to generate project ideas based on this profile.`;
-
       return {
         content: [
           {
             type: "text",
-            text: `Repository profiled successfully.\n\n${formatted}${discoveryPrompt}`,
+            text: `Repository profiled successfully.\n\n${formatted}\n\n---\nNext: Call \`orch_discover\` to generate project ideas based on this profile.`,
           },
         ],
-        details: { profile, creativeMode: isCreative },
+        details: { profile },
       };
     },
 
@@ -586,7 +572,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n## 🧠 Deep Planning — 3 Competing Plans${modelInfo}\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all 3 complete, **synthesize the best ideas from all plans** into one superior "best of all worlds" hybrid. Be intellectually honest about what each planner did better than the others. Blend the strongest ideas from every plan. Then call \`orch_plan\` with the synthesized plan.`,
+              text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n## 🧠 Deep Planning — 3 Competing Plans${modelInfo}\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all 3 complete:\n\n1. **Synthesize** the best ideas from all plans into one superior "best of all worlds" hybrid. Be intellectually honest about what each planner did better.\n\n2. **Creative brainstorm**: Before finalizing, think of 100 additional ideas for how to make this plan even more powerful, innovative, and robust. Then pick only your 3-5 VERY BEST ideas and fold them into the synthesized plan. Be pragmatic — skip anything too complex for the payoff.\n\n3. Call \`orch_plan\` with the final synthesized + creatively enhanced plan.`,
             },
           ],
           details: { selected: true, goal, constraints: state.constraints, deepPlan: true },
