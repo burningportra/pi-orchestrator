@@ -63,8 +63,11 @@ export default function (pi: ExtensionAPI) {
 
   function setPhase(phase: OrchestratorPhase, ctx: ExtensionContext) {
     state.phase = phase;
-    if (phase === "idle" || phase === "complete") {
+    if (phase === "idle") {
       ctx.ui.setStatus("orchestrator", undefined);
+      ctx.ui.setWidget("orchestrator", undefined);
+    } else if (phase === "complete") {
+      ctx.ui.setStatus("orchestrator", "✅ Orchestrator: done");
       ctx.ui.setWidget("orchestrator", undefined);
     } else {
       ctx.ui.setStatus(
