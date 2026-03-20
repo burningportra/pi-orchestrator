@@ -167,24 +167,14 @@ Return a structured plan with:
 
 // ─── Deep Planning Synthesis Prompt ──────────────────────────
 export function synthesisInstructions(plans: { name: string; model: string; plan: string }[]): string {
-  const planBlocks = plans
-    .map((p) => `### ${p.name} (${p.model})\n\n${p.plan}`)
-    .join("\n\n---\n\n");
+  return `## Synthesis Instructions
 
-  return `## Best-of-All-Worlds Synthesis
+${plans.length} independent planners produced the plans above. Synthesize them into one plan:
 
-I asked ${plans.length} competing LLMs to independently create plans. They came up with pretty different approaches. Read them below.
-
-${planBlocks}
-
----
-
-REALLY carefully analyze each plan with an open mind. Be intellectually honest about what each one did that's better than the others. Then come up with the best possible hybrid that artfully and skillfully blends the "best of all worlds" to create a true, ultimate, superior version that:
-
-- Integrates every good idea (you don't need to mention which came from which model)
-- Resolves contradictions by picking the stronger approach
-- Ensures the plan covers: workflows, constraints, architecture, testing, and failure handling
-- Is detailed enough that a fresh agent can execute without guessing
+1. Identify the strongest ideas from each plan
+2. Where plans contradict, pick the approach with better justification
+3. Ensure coverage of: architecture, constraints, testing, and error handling
+4. Make the result detailed enough for a fresh agent to execute without guessing
 
 Then call \`orch_plan\` with the synthesized plan.`;
 }

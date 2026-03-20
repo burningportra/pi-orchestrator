@@ -30,6 +30,7 @@ import {
   skillExtractionInstructions,
   summaryInstructions,
   realityCheckInstructions,
+  synthesisInstructions,
 } from "./prompts.js";
 import { runGoalRefinement, extractConstraints } from "./goal-refinement.js";
 import {
@@ -42,6 +43,7 @@ import {
   type ParallelAnalysis,
 } from "./sophia.js";
 import { WorktreePool } from "./worktree.js";
+import { runDeepPlanAgents } from "./deep-plan.js";
 
 const PHASE_EMOJI: Record<OrchestratorPhase, string> = {
   idle: "⏸",
@@ -676,7 +678,7 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "Present ideas to user for selection",
     parameters: Type.Object({}),
 
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
       if (!state.candidateIdeas || state.candidateIdeas.length === 0) {
         throw new Error("No ideas available. Call orch_discover first.");
       }
@@ -864,24 +866,20 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
-        type PlanAgent = { name: string; task: string; model?: string; tools?: string };
-        const agentConfigs: PlanAgent[] = [
+        const agentConfigs = [
           {
             name: "planner-alpha",
             task: `You are Planner Alpha. ${planPrompt}\n\nFocus on: correctness, minimal scope, and clean architecture.\n\ncd ${ctx.cwd}`,
-            tools: "read,bash,grep,find,ls",
             ...(pickedModels[0] ? { model: pickedModels[0] } : {}),
           },
           {
             name: "planner-beta",
             task: `You are Planner Beta. ${planPrompt}\n\nFocus on: robustness, edge cases, and testing strategy.\n\ncd ${ctx.cwd}`,
-            tools: "read,bash,grep,find,ls",
             ...(pickedModels[1] ? { model: pickedModels[1] } : {}),
           },
           {
             name: "planner-gamma",
             task: `You are Planner Gamma. ${planPrompt}\n\nFocus on: developer experience, ergonomics, and future extensibility.\n\ncd ${ctx.cwd}`,
-            tools: "read,bash,grep,find,ls",
             ...(pickedModels[2] ? { model: pickedModels[2] } : {}),
           },
         ];
@@ -891,17 +889,31 @@ export default function (pi: ExtensionAPI) {
         setPhase("planning", ctx);
         persistState();
 
-        // Return immediately with parallel_subagents JSON — don't block the tool
-        const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+        ctx.ui.notify(`Spawning 3 planners...`, "info");
+        const deepResults = await runDeepPlanAgents(pi, ctx.cwd, agentConfigs);
+        ctx.ui.notify(`All 3 planners completed.`, "info");
+
+        const planBlocks = deepResults.map((r) => {
+          const status = r.exitCode === 0 ? "✅" : "⚠️";
+          return `### ${status} ${r.name} (${r.model}, ${r.elapsed}s)\n\n${r.plan || r.error || "(no output)"}`;
+        }).join("\n\n---\n\n");
+
+        const synthesis = synthesisInstructions(deepResults.map((r) => ({
+          name: r.name, model: r.model, plan: r.plan,
+        })));
+
+        const constraintLine = state.constraints.length > 0
+          ? `\nConstraints: ${state.constraints.join(", ")}`
+          : "";
 
         return {
           content: [
             {
               type: "text",
-              text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n## 🧠 Deep Planning — 3 Competing Plans${modelInfo}\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all 3 complete, **synthesize the best ideas from all plans** into one superior "best of all worlds" hybrid. Be intellectually honest about what each planner did better. Then call \`orch_plan\` with the synthesized plan.`,
+              text: `Synthesize the 3 plans below, then call \`orch_plan\` with the result.\n\nGoal: "${goal}"${constraintLine}${modelInfo}\n\n---\n\n${planBlocks}\n\n---\n\n${synthesis}`,
             },
           ],
-          details: { selected: true, goal, constraints: state.constraints, deepPlan: true },
+          details: { selected: true, goal, constraints: state.constraints, deepPlan: true, deepResults },
         };
       }
 
@@ -1024,13 +1036,15 @@ export default function (pi: ExtensionAPI) {
           },
         ];
 
-        const brainstormJson = JSON.stringify({ agents: brainstormAgents }, null, 2);
+        // Spawn brainstorm agents inline (don't rely on agent to call parallel_subagents)
+        ctx.ui.notify(`🚀 Spawning 3 brainstorm agents...`, "info");
+        const brainstormResults = await runHitMeAgents(brainstormAgents, ctx.cwd, ctx);
 
         return {
           content: [
             {
               type: "text",
-              text: `## 🚀 Creative Brainstorm — 3 Parallel Agents\n\nSpawning 3 brainstormers with different angles:\n- **innovator**: novel +EV features\n- **hardener**: robustness, failure modes, safety\n- **simplifier**: reduce complexity, find shortcuts\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${brainstormJson}\n\`\`\`\n\nAfter all 3 complete:\n1. **List ALL ideas** from every brainstormer in this format:\n   \`[N] Title — What it does (Source: innovator/hardener/simplifier)\`\n2. **Ask the user** which numbers to include\n3. Fold ONLY user-selected ideas into the plan\n4. Call \`orch_plan\` again with the enhanced steps`,
+              text: `## 🚀 Creative Brainstorm — 3 Parallel Agents\n\nResults from innovator, hardener, and simplifier:\n\n${brainstormResults.text}\n\n---\n\nAfter reviewing ALL ideas above:\n1. **List ALL ideas** from every brainstormer in this format:\n   \`[N] Title — What it does (Source: innovator/hardener/simplifier)\`\n2. **Ask the user** which numbers to include\n3. Fold ONLY user-selected ideas into the plan\n4. Call \`orch_plan\` again with the enhanced steps`,
             },
           ],
           details: { approved: false, creativeBrainstorm: true },

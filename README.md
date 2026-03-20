@@ -1,4 +1,4 @@
-TESTING PI
+# pi-orchestrator
 
 [![CI](https://github.com/burningportra/pi-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/burningportra/pi-orchestrator/actions/workflows/ci.yml)
 
