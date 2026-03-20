@@ -1,229 +1,232 @@
 # pi-orchestrator
 
-A [pi](https://github.com/badlogic/pi-mono) extension that turns "improve this repo" into a structured, multi-agent workflow.
+A [pi](https://github.com/badlogic/pi-mono) extension that turns `/orchestrate` into a structured, multi-agent workflow. Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
 
-**What it does:** Type `/orchestrate` in any repo → it scans the codebase → proposes improvements → plans the work (optionally with 3 competing AI models) → implements steps in parallel git worktrees → reviews with 4 specialized agents → repeats until you're satisfied.
-
-Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
+Type `/orchestrate` in any repo → it scans the codebase → proposes improvements → plans the work (optionally with 3 competing AI models) → implements steps in parallel git worktrees → reviews with parallel agents → repeats until you're satisfied.
 
 ## Architecture
 
 ```
 /orchestrate
   │
-  ├─► orch_profile     — Scan repo (languages, frameworks, commits, TODOs, key files)
-  ├─► orch_discover    — LLM generates 3–7 project ideas
+  ├─► orch_profile     — Scan repo + load compound memory from prior runs
+  │     └─ Discovery mode: 📋 Standard or 🚀 Creative (think 100, tell me 7 best)
+  │
+  ├─► orch_discover    — LLM generates 3–7 ideas (minimum enforced)
+  │
   ├─► orch_select      — User picks idea + planning mode:
   │     │
   │     ├─ 📋 Standard    → single plan
-  │     └─ 🧠 Deep plan   → 3 competing agents (pick models) → synthesis
-  │                           ┌─────────────┐
-  │                           │ Gemini plan  │
-  │                           │ GPT plan     │──► "best of all worlds" hybrid
-  │                           │ Claude plan  │
-  │                           └─────────────┘
+  │     └─ 🧠 Deep plan   → pick 3 models → competing plans → synthesis
+  │                           ┌──────────────────┐
+  │                           │ Gemini plan       │
+  │                           │ GPT plan          │──► "best of all worlds"
+  │                           │ Claude plan       │
+  │                           └──────────────────┘
   │
-  ├─► orch_plan        — Plan shown to user for approval
-  │     │                Sophia CR + tasks created automatically
-  │     │                Parallel groups detected from artifact deps
-  │     │                Worktrees created for parallel steps
+  ├─► orch_plan        — Plan approval:
+  │     │   ✅ Approve / 🚀 Creative brainstorm (3 agents) / ❌ Reject
   │     │
-  │     ├─ Parallel steps → parallel_subagents in isolated worktrees
-  │     └─ Sequential steps → implement one at a time
+  │     ├─► Sophia CR + tasks created
+  │     ├─► 🔍 Polish tasks in plan space / ▶️ Start implementing
+  │     ├─► dependsOn analysis → parallel groups detected
+  │     ├─► Worktrees created for parallel steps
+  │     └─► 🐝 Swarm tender starts monitoring
   │
-  │   ┌─── Per-Step Loop ───────────────────────────────────┐
-  │   │  Implement with code tools (read, write, edit, bash) │
-  │   │                                                      │
-  │   │  orch_review — self-review against criteria          │
-  │   │    │                                                 │
-  │   │    ├─► 🔥 Hit me — spawn 4 parallel review agents:  │
-  │   │    │     • fresh-eyes (bug hunting)                  │
-  │   │    │     • polish (de-slopify)                       │
-  │   │    │     • ergonomics (agent-friendliness)           │
-  │   │    │     • reality-check (are we on track?)          │
-  │   │    │   → present findings → hit me again or:         │
-  │   │    │                                                 │
-  │   │    └─► ✅ Looks good — advance to next step          │
-  │   │                                                      │
-  │   │  Auto-commit fallback if sub-agents forget to commit │
-  │   │  Worktree merge-back on step pass                    │
-  │   │  Sophia task checkpoint on step pass                 │
-  │   └──────────────────────────────────────────────────────┘
+  │   ┌─── Per-Step Loop ──────────────────────────────────────┐
+  │   │  Implement (with fresh-eyes self-review before commit)  │
+  │   │                                                         │
+  │   │  orch_review — per-step gate:                          │
+  │   │    🔥 Hit me → 4 parallel review agents                │
+  │   │    ✅ Looks good → advance                             │
+  │   │                                                         │
+  │   │  Auto-commit fallback for forgetful sub-agents          │
+  │   │  Worktree merge-back on pass                           │
+  │   │  ⏭️ Skip to completion if work done early              │
+  │   └────────────────────────────────────────────────────────┘
   │
-  └─► Post-completion iteration:
-        🔥 Hit me — 4 parallel review agents on full project
-        ✅ Done — finish orchestration
+  └─► Post-Implementation Guided Gates (sequential):
+        🔍 Self-review → 👥 Peer review (4 agents) →
+        🧪 Test coverage → 📦 Commit → 🚀 Ship it → ✅ Done
+        │
+        └─► 🧠 Compound memory: extract learnings for future runs
 ```
 
-### Key Design Decision
-
-Pi extensions can't call the LLM directly — the LLM calls tools. Instead of an imperative orchestrator, this is a **tool-driven state machine**: each tool advances state and returns context for the next phase.
-
-## Quick Start
+## Install
 
 ```bash
-# 1. Install
 cd ~/.pi/agent/extensions/
 git clone <this-repo> pi-orchestrator
-cd pi-orchestrator
-npm install
-
-# 2. Use — open any repo in pi, then type:
-/orchestrate
+cd pi-orchestrator && npm install
 ```
 
-That's it. The extension walks you through profiling → idea selection → planning → implementation → review.
-
-You can also skip discovery and go straight to a goal:
-```bash
-/orchestrate add comprehensive error handling
-```
-
-Other commands: `/orchestrate-status` (check progress), `/orchestrate-stop` (cancel & clean up).
+Or test: `pi -e /path/to/pi-orchestrator/src/index.ts`
 
 ## Deep Planning (Multi-Model Synthesis)
 
-Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/core-flywheel) competing plans pattern. When you select "🧠 Deep plan":
+When you select "🧠 Deep plan":
 
-1. **Pick 3 models** from your available providers (Gemini, GPT, Claude, etc.)
-2. **3 parallel agents** each independently create a plan with different focus:
-   - Alpha: correctness, minimal scope, clean architecture
-   - Beta: robustness, edge cases, testing strategy
-   - Gamma: developer experience, ergonomics, extensibility
-3. **Synthesis**: the main LLM combines the strongest elements into a hybrid plan
-4. The synthesized plan is submitted to `orch_plan` for approval
+1. **Pick 3 models** from available providers (sorted by context window)
+2. **3 parallel agents** each create a plan with different focus (correctness / robustness / ergonomics)
+3. **Synthesis**: LLM blends "best of all worlds" into a hybrid
+4. **🚀 Creative brainstorm** (optional): 3 parallel brainstorm agents (innovator / hardener / simplifier) each think of 100 ideas, output top 3-5 with +EV justification. User picks which to include.
 
-Agents get read-only tools (`read,bash,grep,find,ls`) and explicit instructions not to call `orch_*` tools or implement anything.
+Agents get read-only tools and can't call `orch_*` tools.
 
-If only one provider is available, all 3 agents use the same model with different focus prompts.
+## Plan Approval & Task Polishing
+
+Plan approval is a 3-option select showing the full plan text:
+- **✅ Approve** → create sophia tasks, start work
+- **🚀 Creative brainstorm** → 3 parallel agents enhance the plan
+- **❌ Reject** → stop
+
+After approval, sophia tasks are created and shown with dependencies. User can:
+- **🔍 Polish** — review tasks in plan space, send back for revision
+- **▶️ Start implementing** — proceed to execution
+
+## Step Dependencies (dependsOn)
+
+Steps declare dependencies for parallel scheduling:
+
+| `dependsOn` | Meaning |
+|-------------|---------|
+| omitted | Sequential — depends on previous step (default) |
+| `[]` | Independent — can run in parallel |
+| `[1, 3]` | Explicit — depends on steps 1 and 3 |
+
+`resolveDependencies()` normalizes all modes, filters self-refs and invalid indices, detects cycles with exact path reporting. Merged additively with artifact-based deps.
+
+The planner prompt includes a self-check: *"if your description says after/once/then, you probably need dependsOn."*
+
+## Parallel Execution & Worktrees
+
+When steps have no shared deps, they run in parallel:
+
+1. `WorktreePool` creates isolated git worktrees (`git worktree add`)
+2. `parallel_subagents` spawns agents in separate panes
+3. Each agent's task includes explicit git commit instructions
+4. `autoCommitWorktree` fallback commits uncommitted changes
+5. `mergeWorktreeChanges` merges back with `--no-ff`
+6. Worktrees cleaned up after merge
+
+**Fallback**: worktree creation failure → sequential execution.
+
+## Swarm Tending
+
+`SwarmTender` monitors parallel agents automatically:
+
+- **Polls every 60s** via `git status --porcelain` per worktree
+- **Classifies agents**: active (< 2 min idle) / idle (2-5 min) / stuck (> 5 min)
+- **Conflict detection**: flags same file modified in multiple worktrees
+- **Alerts**: `ctx.ui.notify` on stuck agents or conflicts
+- **Widget**: shows `🐝 Tender: 2 active, 1 stuck`
+
+Starts on parallel launch, stops on completion.
+
+## Per-Step Review
+
+After each step's self-review passes:
+- **🔥 Hit me** — 4 parallel agents (fresh-eyes / polish / ergonomics / reality-check)
+- **✅ Looks good** — advance to next step
+
+After hit-me agents finish, auto-advances (no re-prompt). First round only shows the menu.
+
+## Post-Implementation Guided Gates
+
+After all steps pass, a sequential gate flow (each: do it / ⏭️ skip / ✅ done):
+
+| Gate | What happens |
+|------|-------------|
+| 🔍 Self-review | LLM reads all new code with fresh eyes, fixes issues |
+| 👥 Peer review | 4 parallel agents: bugs, polish, ergonomics, reality-check |
+| 🧪 Test coverage | Check unit tests + e2e, create tasks for gaps |
+| 📦 Commit | Logical groupings with detailed messages, push |
+| 🚀 Ship it | Tag, release, deploy, monitor CI, checksums |
+
+Every review action includes auto-commit instructions.
 
 ## Sophia Integration
 
-When Sophia is detected (`sophia init` has been run):
+When [Sophia](https://github.com/sophialab/sophia) is initialized:
 
-- **`orch_plan`** creates a Sophia CR with tasks matching plan steps, each with contracts (intent, acceptance criteria, scope)
-- **`orch_review`** checkpoints completed tasks via `sophia cr task done`
-- **Post-completion** runs `sophia cr validate` and `sophia cr review`
-- **Session restore** re-detects Sophia, queries `getCRStatus` to rebuild full CR state
+- `orch_plan` creates CR with task contracts (intent, acceptance, scope)
+- `orch_review` checkpoints tasks via `sophia cr task done`
+- Completion runs `sophia cr validate` + `sophia cr review`
+- Session restore re-detects sophia, rebuilds CR state via `getCRStatus`
 
-If Sophia is not installed or not initialized, the orchestrator works without it — no CR tracking, no errors.
+**Fallback**: no sophia = no CR tracking, everything else works.
 
-## Parallel Execution with Worktree Isolation
+## Compound Memory
 
-When plan steps have no shared file artifacts, they can run in parallel:
+`.pi-orchestrator/memory.md` carries learnings across orchestration runs:
 
-1. `analyzeParallelGroups()` builds a dependency graph from artifact overlaps
-2. A `WorktreePool` creates isolated git worktrees (`git worktree add`) for each parallel step
-3. `parallel_subagents` spawns agents in separate terminal panes, each working in its own worktree
-4. On step pass, `autoCommitWorktree` commits any uncommitted changes (fallback for forgetful agents)
-5. `mergeWorktreeChanges` merges the worktree branch back with `--no-ff`
-6. Worktrees are cleaned up after merge or on `/orchestrate-stop`
+- **Read**: injected into `orch_profile` result as context
+- **Write**: completion prompts LLM to extract decisions/gotchas/patterns
+- **Truncation**: last 10KB on read to protect context window
+- **Format**: timestamped markdown sections
 
-If worktree creation fails, falls back to sequential execution in the shared directory.
-
-## Review System
-
-### Per-Step Review
-After self-review passes, the user chooses:
-- **🔥 Hit me** — spawns 4 parallel review agents (fresh-eyes, polish, ergonomics, reality-check)
-- **✅ Looks good** — advance to next step
-
-Each "hit me" round is tracked. You can hit me multiple times per step.
-
-### Post-Completion Review
-After all steps pass, the same "🔥 Hit me / ✅ Done" loop runs on the full project.
-
-### Reality Check Agent
-Every "hit me" round includes a reality-check agent that answers:
-1. Would implementing remaining tasks close the gap?
-2. What's actually blocking us?
-3. Are there missing tasks the plan didn't account for?
-4. Is completed work actually broken despite being marked done?
-
-## Session Persistence & Restore
-
-State persisted via `pi.appendEntry()` (deep-copied):
-
-| Field | Persisted | Restored |
-|-------|-----------|----------|
-| Phase, plan, step results | ✅ | ✅ from last entry |
-| Review verdicts, pass counts | ✅ | ✅ |
-| Sophia CR ID, branch, title, task IDs | ✅ | ✅ via `getCRStatus` if sophia available, else from persisted values |
-| `hasSophia` flag | ✅ | ✅ re-validated via `isSophiaAvailable` |
-| WorktreePool state | ✅ | ✅ via `WorktreePool.fromState` |
-| Iteration round counter | ✅ | ✅ |
+The system compounds knowledge — each run benefits from prior learnings.
 
 ## Flywheel-Derived Prompts
 
-Prompt functions in `src/prompts.ts` based on the [Agentic Coding Flywheel](https://agent-flywheel.com/complete-guide):
-
-| Function | Flywheel Pattern | Used Where |
-|----------|-----------------|-----------|
-| `synthesisInstructions()` | Multi-model synthesis | After deep plan agents return |
-| `adversarialReviewInstructions()` | Fresh-eyes adversarial review | Per-step review pass |
-| `realityCheckInstructions()` | Progress validation | Every hit-me round |
-| `implementerInstructions()` | Step implementation briefing | Per-step implementation |
-| `polishInstructions()` | De-slopify | Hit-me polish agent |
-| `commitStrategyInstructions()` | Logical commit grouping | Post-completion |
-| `skillExtractionInstructions()` | Compound learnings into reusable skills | Post-completion |
-| `crossAgentReviewInstructions()` | Independent full-diff audit | Post-completion |
-| `planToTasksInstructions()` | Detailed task elaboration | Available for task elaboration |
+| Function | Pattern | Used |
+|----------|---------|------|
+| `synthesisInstructions` | "Best of all worlds" multi-model synthesis | Deep plan |
+| `adversarialReviewInstructions` | "Fresh eyes, fix what you find" | Per-step review |
+| `realityCheckInstructions` | "Do we actually have the thing?" | Peer review |
+| `implementerInstructions` | "Read, understand, be proactive" + self-review | Implementation |
+| `polishInstructions` | De-slopify | Peer review |
+| `commitStrategyInstructions` | Logical commit grouping | Commit gate |
+| `planToTasksInstructions` | "So detailed you never consult the plan" | Task creation |
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/orchestrate` | Start the full workflow |
-| `/orchestrate [goal]` | Skip discovery, go straight to planning with a stated goal |
-| `/orchestrate-stop` | Cancel and clean up worktrees |
-| `/orchestrate-status` | Show current phase and progress |
+| `/orchestrate` | Full workflow |
+| `/orchestrate [goal]` | Skip discovery, plan directly |
+| `/orchestrate-stop` | Cancel + cleanup worktrees |
+| `/orchestrate-status` | Show phase + progress |
 
 ## Tools (called by LLM)
 
-| Tool | Phase | Description |
-|------|-------|-------------|
-| `orch_profile` | Profiling | Scans repo via shell commands, detects Sophia |
-| `orch_discover` | Discovery | LLM submits 3–7 structured ideas (enforced minimum) |
-| `orch_select` | Selection | User picks idea, constraints, planning mode (standard/deep), models |
-| `orch_plan` | Planning | LLM submits plan; creates Sophia CR; detects parallel groups; creates worktrees |
-| `orch_review` | Review | Self-review → hit-me prompt → parallel agents → iteration loop |
+| Tool | Description |
+|------|-------------|
+| `orch_profile` | Scan repo, load compound memory, detect sophia |
+| `orch_discover` | LLM submits 3–7 ideas (min 3 enforced) |
+| `orch_select` | User picks idea, constraints, planning mode, models |
+| `orch_plan` | Plan approval + brainstorm + sophia CR + polish + parallel launch |
+| `orch_review` | Per-step review gates + post-implementation guided sequence |
 
 ## Project Structure
 
 ```
 src/
-├── index.ts        # Extension entry: commands, 5 tools, events, state machine
-├── profiler.ts     # Repo signal collection (find, git, grep) + language/framework detection
-├── prompts.ts      # 10 flywheel-derived prompt templates for each agent phase
-├── sophia.ts       # Sophia CLI wrapper: CR/task lifecycle, getCRStatus, parallel analysis, merge
-├── types.ts        # TypeScript types: OrchestratorState, phases, plans, review verdicts
-├── worktree.ts     # WorktreePool: create/acquire/release/cleanup + autoCommitWorktree
-└── deep-plan.ts    # Direct pi CLI spawning for deep plan agents (--no-extensions)
+├── index.ts      # Extension: 5 tools, commands, state machine
+├── profiler.ts   # Repo scanning (find, git, grep) + detection
+├── prompts.ts    # Flywheel-derived prompt templates
+├── sophia.ts     # Sophia CLI wrapper + dependency analysis + merge
+├── types.ts      # TypeScript types: state, plans, reviews
+├── worktree.ts   # WorktreePool + autoCommitWorktree
+├── tender.ts     # SwarmTender: agent health + conflict detection
+├── memory.ts     # Compound memory: read/append .pi-orchestrator/memory.md
+└── deep-plan.ts  # Direct pi CLI spawning (unused, kept for reference)
 ```
 
 ## Extending
 
-Add new phases by registering tools and updating the system prompt:
-
-```typescript
-pi.registerTool({
-  name: "orch_security_review",
-  description: "Security-focused review",
-  // ...
-});
-```
-
-Add new "hit me" review agents by appending to the `agentConfigs` array in the hit-me handler.
-
-Add new prompts by exporting functions from `src/prompts.ts` — follow the existing pattern.
-
-Add new post-completion actions by extending the iteration menu in the `orch_review` completion path.
+- **New review agents**: add to `peerAgents` array in the peer review handler
+- **New prompts**: export from `src/prompts.ts`, follow existing pattern
+- **New guided gates**: add to the `gates` array in the sentinel handler
+- **New tools**: `pi.registerTool()` + update system prompt
 
 ## Known Limitations
 
-- **Parallel dependency analysis is file-only** — steps sharing no files are considered independent even if logically dependent. A `dependsOn` field would fix this.
-- **Gemini + extensions** — Gemini API rejects `patternProperties` in tool schemas from other extensions. Deep planning works around this with `--no-extensions`.
-- **No tests** — `analyzeParallelGroups`, `WorktreePool`, and other core logic lack unit tests.
+- **Gemini + extensions**: Gemini API rejects `patternProperties` in tool schemas from other extensions
+- **No tests**: core logic needs vitest coverage
+- **Worktree merge conflicts**: detected but not auto-resolved
+- **Sub-agent output capture**: some models exit without summary (Gemini particularly)
+- **dependsOn is LLM-declared**: the model can forget to set it
 
 ## License
 
