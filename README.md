@@ -57,12 +57,8 @@ Type `/orchestrate` in any repo → it scans the codebase → proposes improveme
 ## Install
 
 ```bash
-cd ~/.pi/agent/extensions/
-git clone <this-repo> pi-orchestrator
-cd pi-orchestrator && npm install
+pi install git:github.com/burningportra/pi-orchestrator
 ```
-
-Or test: `pi -e /path/to/pi-orchestrator/src/index.ts`
 
 ## Deep Planning (Multi-Model Synthesis)
 
@@ -249,6 +245,16 @@ src/
 - **Worktree merge conflicts**: detected but not auto-resolved
 - **Sub-agent output capture**: some models exit without summary (Gemini particularly)
 - **dependsOn is LLM-declared**: the model can forget to set it
+
+## Development
+
+```bash
+git clone https://github.com/burningportra/pi-orchestrator.git
+cd pi-orchestrator && npm install
+
+# Test locally
+pi -e ./src/index.ts
+```
 
 ## License
 
