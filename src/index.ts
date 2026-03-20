@@ -585,7 +585,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n## 🧠 Deep Planning — 3 Competing Plans${modelInfo}\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all 3 complete:\n\n1. **Synthesize** the best ideas from all plans into one superior "best of all worlds" hybrid. Be intellectually honest about what each planner did better.\n\n2. **Creative brainstorm**: Before finalizing, think of 100 additional ideas for how to make this plan even more powerful, innovative, and robust. Then pick only your 3-5 VERY BEST ideas and fold them into the synthesized plan. Be pragmatic — skip anything too complex for the payoff.\n\n3. Call \`orch_plan\` with the final synthesized + creatively enhanced plan.`,
+              text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n## 🧠 Deep Planning — 3 Competing Plans${modelInfo}\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all 3 complete, **synthesize the best ideas from all plans** into one superior "best of all worlds" hybrid. Be intellectually honest about what each planner did better. Then **present the synthesized plan to the user** and ask: "🚀 Creative brainstorm — enhance this plan?" or "📋 Submit as-is". If creative, think of 100 additional ideas, fold your 3-5 BEST into the plan. Then call \`orch_plan\`.`,
             },
           ],
           details: { selected: true, goal, constraints: state.constraints, deepPlan: true },
