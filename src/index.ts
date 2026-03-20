@@ -1212,7 +1212,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `Plan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n---\n**IMPORTANT: Call \`parallel_subagents\` NOW to launch Group 1 (Steps ${firstGroup.join(", ")}).**\n\nUse exactly these parameters:\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\n🔄 Swarm tender active — monitoring agent health every 60s.\n\nAfter all agents complete, call \`orch_review\` for each step with the sub-agent's summary.`,
+              text: `**NEXT: Call \`parallel_subagents\` NOW to launch Group 1 (Steps ${firstGroup.join(", ")}).**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each step with the sub-agent's summary.\n\n---\n\nPlan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n🔄 Swarm tender active — monitoring agent health every 60s.`,
             },
           ],
           details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr, launchingParallel: true },
@@ -1695,12 +1695,36 @@ export default function (pi: ExtensionAPI) {
             ]
           );
         } else {
-          // Returning from a hit-me round — auto-advance
-          hitMeChoice = "✅";
-          // Reset flag so hit-me can be triggered again if needed
-          state.hitMeTriggered[params.stepIndex] = false;
-          persistState();
-          ctx.ui.notify(`✅ Step ${params.stepIndex} passed review (round ${prevPassCount}).`, "info");
+          // Returning from a hit-me round — check if review agents actually ran.
+          // If the summary is too short or generic, the agent likely bypassed.
+          const hasReviewEvidence = params.summary.length > 50 ||
+            params.summary.toLowerCase().includes("review") ||
+            params.summary.toLowerCase().includes("finding") ||
+            params.summary.toLowerCase().includes("agent") ||
+            params.summary.toLowerCase().includes("fix");
+
+          if (!hasReviewEvidence) {
+            // Bypass detected — re-present the spawn instruction
+            ctx.ui.notify(`⚠️ No review evidence found. Re-presenting review agents.`, "warning");
+            state.hitMeTriggered[params.stepIndex] = false;
+            state.reviewPassCounts[params.stepIndex] = prevPassCount - 1;
+            persistState();
+            // Fall through to the menu — user will see Hit Me option again
+            hitMeChoice = undefined;
+            hitMeChoice = await ctx.ui.select(
+              `⚠️ Review agents may not have run. Step ${params.stepIndex}:`,
+              [
+                "🔥 Hit me — spawn parallel review agents for this step",
+                "✅ Looks good — move on anyway",
+              ]
+            );
+          } else {
+            // Legit review round completed — auto-advance
+            hitMeChoice = "✅";
+            state.hitMeTriggered[params.stepIndex] = false;
+            persistState();
+            ctx.ui.notify(`✅ Step ${params.stepIndex} passed review (round ${prevPassCount}).`, "info");
+          }
         }
 
         if (hitMeChoice?.startsWith("🔥")) {
