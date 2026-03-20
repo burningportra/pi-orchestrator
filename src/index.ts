@@ -697,7 +697,7 @@ export default function (pi: ExtensionAPI) {
       );
 
       if (planChoice?.startsWith("🚀")) {
-        const brainstormTask = `You are a creative brainstormer. Here is a plan that needs enhancement:\n\n${planText}\n\nGoal: ${plan.goal}\n\nThink of ONE HUNDRED ways to make this plan more powerful, innovative, and robust. Then pick only your 3-5 VERY BEST and most brilliant, clever, and radically innovative ideas. Be pragmatic — skip anything that isn't worth the complexity.\n\nOutput ONLY your top ideas as a numbered list with a one-sentence justification each. Do NOT rewrite the plan. Do NOT call any tools.`;
+        const brainstormTask = `You are a creative brainstormer. Here is a plan that needs enhancement:\n\n${planText}\n\nGoal: ${plan.goal}\n\nThink of ONE HUNDRED ways to make this plan more powerful, innovative, and robust. Then pick only your 3-5 VERY BEST ideas. Each idea must be:\n- **Positive expected value**: the benefit clearly outweighs the implementation cost and complexity burden\n- **Pragmatic**: can be implemented without heroic effort\n- **Concrete**: specific enough to act on, not vague hand-waving\n\nFor each idea, output:\n1. **Title** — short name\n2. **What it does** — one sentence\n3. **Why it's +EV** — why the payoff justifies the cost\n\nDo NOT rewrite the plan. Do NOT call any tools.`;
 
         const brainstormAgents = [
           {
@@ -723,7 +723,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `## 🚀 Creative Brainstorm — 3 Parallel Agents\n\nSpawning 3 brainstormers with different angles:\n- **innovator**: novel features nobody has thought of\n- **hardener**: robustness, failure modes, safety\n- **simplifier**: reduce complexity, find shortcuts\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${brainstormJson}\n\`\`\`\n\nAfter all 3 complete:\n1. **List ALL ideas** from every brainstormer as a numbered list\n2. **Present them to the user** and ask which ones to include (the user will pick from the list)\n3. Fold ONLY the user-selected ideas into the plan\n4. Call \`orch_plan\` again with the enhanced steps`,
+              text: `## 🚀 Creative Brainstorm — 3 Parallel Agents\n\nSpawning 3 brainstormers with different angles:\n- **innovator**: novel +EV features\n- **hardener**: robustness, failure modes, safety\n- **simplifier**: reduce complexity, find shortcuts\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${brainstormJson}\n\`\`\`\n\nAfter all 3 complete:\n1. **List ALL ideas** from every brainstormer in this format:\n   \`[N] Title — What it does (Source: innovator/hardener/simplifier)\`\n2. **Ask the user** which numbers to include\n3. Fold ONLY user-selected ideas into the plan\n4. Call \`orch_plan\` again with the enhanced steps`,
             },
           ],
           details: { approved: false, creativeBrainstorm: true },
