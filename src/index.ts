@@ -1039,7 +1039,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+                text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}\n\nAfter fixing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next gate.`,
               },
             ],
             details: { iterating: true, round, selfReview: true },
@@ -1071,7 +1071,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `## 👥 Peer Review — Round ${round}\n\nSpawning 4 parallel reviewers:\n- **bugs**: root-cause analysis, security, reliability\n- **polish**: de-slopify, clarity\n- **ergonomics**: agent-friendliness\n- **reality-check**: are we on track?\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. After committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+                text: `## 👥 Peer Review — Round ${round}\n\nSpawning 4 parallel reviewers:\n- **bugs**: root-cause analysis, security, reliability\n- **polish**: de-slopify, clarity\n- **ergonomics**: agent-friendliness\n- **reality-check**: are we on track?\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
               },
             ],
             details: { iterating: true, round, peerReview: true },
@@ -1367,11 +1367,8 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
+        // All steps done — enter guided review gates
         {
-          // All steps done — cross-agent review + post-completion
-          setPhase("reviewing", ctx);
-          persistState();
-
           // Run sophia validate/review if available
           let sophiaReviewInfo = "";
           if (hasSophia && sophiaCRResult) {
@@ -1381,45 +1378,29 @@ export default function (pi: ExtensionAPI) {
             sophiaReviewInfo = `\n\n**Sophia validation:** ${valResult.ok ? "✅ passed" : `⚠️ ${valResult.error}`}\n**Sophia review:** ${revResult.ok ? "✅ passed" : `⚠️ ${revResult.error}`}`;
           }
 
-          const crossReview = crossAgentReviewInstructions(
-            state.plan.goal,
-            state.plan.steps,
-            state.stepResults
-          );
-
-          const allArtifacts = [
-            ...new Set(state.plan.steps.flatMap((s) => s.artifacts)),
-          ];
           const summary = summaryInstructions(
             state.plan.goal,
             state.plan.steps,
             state.stepResults
           );
-          const polish = polishInstructions(state.plan.goal, allArtifacts);
-          const commits = commitStrategyInstructions(
-            state.plan.steps,
-            state.stepResults
-          );
-          const skillCheck = skillExtractionInstructions(
-            state.plan.goal,
-            allArtifacts
-          );
 
-          // Clean up remaining worktrees
+          // Clean up worktrees and tender
           if (worktreePool) {
             await worktreePool.cleanup();
             worktreePool = undefined;
-      if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
+          }
+          if (swarmTender) {
+            swarmTender.stop();
+            swarmTender = undefined;
           }
 
           ctx.ui.notify("🔄 All steps done — entering review gates", "info");
           setPhase("iterating", ctx);
-          // Set iteration round to 0 so the sentinel handler starts at round 1
           state.iterationRound = 0;
+          state.currentGateIndex = 0;
           persistState();
 
-          // Redirect to the sentinel handler which has the full guided gate sequence.
-          // This ensures first entry and re-entry use the same flow.
+          // Redirect to sentinel handler for unified guided gate flow
           return {
             content: [
               {
