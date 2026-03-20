@@ -50,8 +50,6 @@ export interface GoalRefinementOutcome {
   enrichedGoal: string;
   answers: RefinementAnswer[];
   skipped: boolean;
-  /** Debug: why refinement was skipped (only set when skipped=true) */
-  skipReason?: string;
 }
 
 // ─── refineGoal ─────────────────────────────────────────────
@@ -433,12 +431,11 @@ export async function runGoalRefinement(
   pi: ExtensionAPI,
   ctx: ExtensionContext
 ): Promise<GoalRefinementOutcome> {
-  const fallback = (reason: string): GoalRefinementOutcome => ({
+  const fallback: GoalRefinementOutcome = {
     enrichedGoal: rawGoal,
     answers: [],
     skipped: true,
-    skipReason: reason,
-  });
+  };
 
   // 1. Generate questions via LLM
   // Write prompt to temp file to avoid shell escaping issues and argument length limits
@@ -470,13 +467,13 @@ export async function runGoalRefinement(
         `⚠️ Goal refinement failed (exit ${result.code}): ${result.stderr.slice(0, 200)}. Using raw goal.`,
         "warning"
       );
-      return fallback(`pi --print exit code ${result.code}: ${result.stderr.slice(0, 100)}`);
+      return fallback;
     }
 
     const output = result.stdout.trim();
     if (!output) {
       ctx.ui.notify("⚠️ Goal refinement returned empty output. Using raw goal.", "warning");
-      return fallback("pi --print returned empty stdout");
+      return fallback;
     }
 
     questions = parseQuestionsJSON(output);
@@ -486,13 +483,13 @@ export async function runGoalRefinement(
       `⚠️ Goal refinement LLM call failed: ${msg}. Using raw goal.`,
       "warning"
     );
-    return fallback(`exception: ${msg}`);
+    return fallback;
   }
 
   // Enforce 1–5 question cap
   if (questions.length === 0) {
     ctx.ui.notify("⚠️ LLM returned no questions. Using raw goal.", "warning");
-    return fallback("parseQuestionsJSON returned 0 questions");
+    return fallback;
   }
   if (questions.length > 5) {
     questions = questions.slice(0, 5);
@@ -502,7 +499,7 @@ export async function runGoalRefinement(
   const result = await refineGoal(questions, ctx);
 
   if (result.cancelled) {
-    return fallback("user cancelled questionnaire");
+    return fallback;
   }
 
   // 3. Synthesize enriched goal
@@ -515,13 +512,13 @@ export async function runGoalRefinement(
   );
 
   if (!confirmation || confirmation.startsWith("⏭️")) {
-    return fallback("user skipped confirmation");
+    return fallback;
   }
 
   if (confirmation.startsWith("✏️")) {
     const edited = await ctx.ui.input("Edit the enriched goal:", enrichedGoal);
     if (!edited) {
-      return fallback("user cancelled edit");
+      return fallback;
     }
     return {
       enrichedGoal: edited,
