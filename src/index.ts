@@ -119,7 +119,16 @@ export default function (pi: ExtensionAPI) {
     if (lastStateEntry) {
       {
         state = lastStateEntry;
-        orchestratorActive = state.phase !== "idle" && state.phase !== "complete";
+
+        // If a previous orchestration was mid-flight, reset it
+        // (stale iterating/implementing state from a prior session)
+        if (state.phase === "iterating" || state.phase === "implementing" || state.phase === "reviewing") {
+          state.phase = "complete";
+          state.currentGateIndex = 0;
+          orchestratorActive = false;
+        } else {
+          orchestratorActive = state.phase !== "idle" && state.phase !== "complete";
+        }
 
         // Restore worktree pool
         if (state.worktreePoolState) {
