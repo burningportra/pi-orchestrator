@@ -164,7 +164,7 @@ Every review action includes auto-commit instructions.
 
 ## Sophia Integration
 
-When [Sophia](https://github.com/sophialab/sophia) is initialized:
+When [Sophia](https://github.com/Kevandrew/sophia) is initialized:
 
 - `orch_plan` creates CR with task contracts (intent, acceptance, scope)
 - `orch_review` checkpoints tasks via `sophia cr task done`
