@@ -678,11 +678,33 @@ export default function (pi: ExtensionAPI) {
       );
 
       if (planChoice?.startsWith("🚀")) {
+        const brainstormTask = `You are a creative brainstormer. Here is a plan that needs enhancement:\n\n${planText}\n\nGoal: ${plan.goal}\n\nThink of ONE HUNDRED ways to make this plan more powerful, innovative, and robust. Then pick only your 3-5 VERY BEST and most brilliant, clever, and radically innovative ideas. Be pragmatic — skip anything that isn't worth the complexity.\n\nOutput ONLY your top ideas as a numbered list with a one-sentence justification each. Do NOT rewrite the plan. Do NOT call any tools.`;
+
+        const brainstormAgents = [
+          {
+            name: "brainstorm-innovator",
+            task: `${brainstormTask}\n\nFocus on: novel features and capabilities nobody has thought of.`,
+            tools: "read,bash,grep,find,ls",
+          },
+          {
+            name: "brainstorm-hardener",
+            task: `${brainstormTask}\n\nFocus on: robustness, failure modes, edge cases, and safety.`,
+            tools: "read,bash,grep,find,ls",
+          },
+          {
+            name: "brainstorm-simplifier",
+            task: `${brainstormTask}\n\nFocus on: removing complexity, merging steps, finding shortcuts that achieve the same outcome with less work.`,
+            tools: "read,bash,grep,find,ls",
+          },
+        ];
+
+        const brainstormJson = JSON.stringify({ agents: brainstormAgents }, null, 2);
+
         return {
           content: [
             {
               type: "text",
-              text: `## 🚀 Creative Brainstorm\n\nHere's the current plan:\n\n${planText}\n\n---\n\nNow think of ONE HUNDRED ways to make this plan more powerful, innovative, and robust. Then pick only your 3-5 VERY BEST and most brilliant ideas and fold them into the plan. Be pragmatic — skip anything that isn't worth the complexity.\n\nThen call \`orch_plan\` again with the creatively enhanced steps.`,
+              text: `## 🚀 Creative Brainstorm — 3 Parallel Agents\n\nSpawning 3 brainstormers with different angles:\n- **innovator**: novel features nobody has thought of\n- **hardener**: robustness, failure modes, safety\n- **simplifier**: reduce complexity, find shortcuts\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${brainstormJson}\n\`\`\`\n\nAfter all 3 complete, synthesize the best ideas from all brainstormers. Fold the top 3-5 enhancements into the plan and call \`orch_plan\` again with the creatively enhanced steps.`,
             },
           ],
           details: { approved: false, creativeBrainstorm: true },
