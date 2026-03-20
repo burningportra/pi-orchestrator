@@ -664,8 +664,17 @@ export default function (pi: ExtensionAPI) {
       // Present plan for approval
       const planText = plan.steps
         .map(
-          (s) =>
-            `${s.index}. ${s.description}\n   ✓ ${s.acceptanceCriteria.join("\n   ✓ ")}\n   📄 ${s.artifacts.join(", ")}${s.dependsOn !== undefined ? (s.dependsOn.length === 0 ? "\n   ⚡ independent" : `\n   🔗 depends on: ${s.dependsOn.join(", ")}`) : ""}`
+          (s) => {
+            const criteria = s.acceptanceCriteria.join("\n   ✓ ");
+            const files = s.artifacts.join(", ");
+            let depLine = "";
+            if (s.dependsOn !== undefined) {
+              depLine = s.dependsOn.length === 0
+                ? "\n   ⚡ independent"
+                : `\n   🔗 depends on: ${s.dependsOn.join(", ")}`;
+            }
+            return `${s.index}. ${s.description}\n   ✓ ${criteria}\n   📄 ${files}${depLine}`;
+          }
         )
         .join("\n\n");
 
@@ -752,7 +761,7 @@ export default function (pi: ExtensionAPI) {
       let polishing = true;
       while (polishing) {
         const taskList = plan.steps
-          .map((s) => `**Step ${s.index}: ${s.description}**\n   ✓ ${s.acceptanceCriteria.join("\n   ✓ ")}\n   📄 ${s.artifacts.join(", ")}${(s as any).dependsOn?.length ? `\n   🔗 depends on: ${(s as any).dependsOn.join(", ")}` : ""}`)
+          .map((s) => `**Step ${s.index}: ${s.description}**\n   ✓ ${s.acceptanceCriteria.join("\n   ✓ ")}\n   📄 ${s.artifacts.join(", ")}${s.dependsOn !== undefined ? (s.dependsOn.length === 0 ? "\n   ⚡ independent" : `\n   🔗 depends on: ${s.dependsOn.join(", ")}`) : ""}`)
           .join("\n\n");
 
         const polishChoice = await ctx.ui.select(
