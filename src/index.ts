@@ -498,15 +498,22 @@ export default function (pi: ExtensionAPI) {
             providers.some((p) => m.provider === p)
           );
           if (providerModels.length > 0) {
-            // Pick best by keyword preference
+            // Pick the model with the largest context window as a proxy for "latest/best"
+            // Among ties, prefer reasoning-capable models
+            const sorted = [...providerModels].sort((a, b) => {
+              if (b.contextWindow !== a.contextWindow) return b.contextWindow - a.contextWindow;
+              if (b.reasoning !== a.reasoning) return b.reasoning ? 1 : -1;
+              return 0;
+            });
+            // But if idKeywords are given, prefer keyword matches among top models
             for (const kw of idKeywords) {
-              const match = providerModels.find(
+              const match = sorted.find(
                 (m) => m.id.toLowerCase().includes(kw) || m.name.toLowerCase().includes(kw)
               );
               if (match) return `${match.provider}/${match.id}`;
             }
-            // Fallback: first available from this provider
-            return `${providerModels[0].provider}/${providerModels[0].id}`;
+            // No keyword match — just take the best by context window
+            return `${sorted[0].provider}/${sorted[0].id}`;
           }
           // Fallback: search all models by keyword
           for (const kw of idKeywords) {
