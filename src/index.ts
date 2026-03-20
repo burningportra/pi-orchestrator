@@ -985,15 +985,26 @@ export default function (pi: ExtensionAPI) {
         state.reviewPassCounts[params.stepIndex] = prevPassCount + 1;
         persistState();
 
-        // After self-review passes, ask user: iterate or move on?
+        setPhase("reviewing", ctx);
+
+        // After first pass: ask user to hit-me or move on
+        // After hit-me round (prevPassCount > 0): auto-advance — agents already reviewed
         const allArtifactsForStep = step.artifacts;
-        const hitMeChoice = await ctx.ui.select(
-          `✅ Step ${params.stepIndex} passed self-review (round ${prevPassCount}).`,
-          [
-            "🔥 Hit me — spawn parallel review agents for this step",
-            "✅ Looks good — move on",
-          ]
-        );
+        let hitMeChoice: string | undefined;
+        if (prevPassCount === 0) {
+          // First review pass — user decides
+          hitMeChoice = await ctx.ui.select(
+            `✅ Step ${params.stepIndex} passed self-review.`,
+            [
+              "🔥 Hit me — spawn parallel review agents for this step",
+              "✅ Looks good — move on",
+            ]
+          );
+        } else {
+          // Returning from a hit-me round — auto-advance
+          hitMeChoice = "✅";
+          ctx.ui.notify(`✅ Step ${params.stepIndex} passed review (round ${prevPassCount}).`, "info");
+        }
 
         if (hitMeChoice?.startsWith("🔥")) {
           const round = prevPassCount;
@@ -1038,29 +1049,66 @@ export default function (pi: ExtensionAPI) {
         );
 
         if (nextStep) {
-          state.currentStepIndex = nextStep.index;
-          state.retryCount = 0;
-          setPhase("implementing", ctx);
-          persistState();
+          // Check if remaining steps can be skipped (work already done)
+          const remainingSteps = state.plan.steps.filter(
+            (s) => s.index > params.stepIndex && !state.stepResults.find((r) => r.stepIndex === s.index)
+          );
+          if (remainingSteps.length > 1) {
+            const skipChoice = await ctx.ui.select(
+              `${remainingSteps.length} steps remaining. Some may already be done.`,
+              [
+                `▶️  Continue to step ${nextStep.index}`,
+                "⏭️  Skip to completion — mark remaining steps as done",
+              ]
+            );
+            if (skipChoice?.startsWith("⏭️")) {
+              // Mark all remaining steps as done
+              for (const rs of remainingSteps) {
+                state.stepResults.push({
+                  stepIndex: rs.index,
+                  status: "success",
+                  summary: "Skipped — work completed in earlier step",
+                });
+              }
+              // Jump to completion path
+              state.currentStepIndex = state.plan.steps[state.plan.steps.length - 1].index;
+              persistState();
+              // Fall through to the "all steps done" branch below
+            }
+          }
 
-          const implInstr = implementerInstructions(
-            nextStep,
-            state.repoProfile!,
-            state.stepResults
+          // Re-check if we still have a next step (might have skipped)
+          const actualNextStep = state.plan.steps.find(
+            (s) => s.index > params.stepIndex && !state.stepResults.find((r) => r.stepIndex === s.index)
           );
 
-          ctx.ui.notify(`✅ Step ${params.stepIndex} fully passed!`, "info");
+          if (actualNextStep) {
+            state.currentStepIndex = actualNextStep.index;
+            state.retryCount = 0;
+            setPhase("implementing", ctx);
+            persistState();
 
-          return {
-            content: [
-              {
-                type: "text",
-                text: `✅ Step ${params.stepIndex} passed all review passes.\n\n---\nMoving to Step ${nextStep.index}:\n\n${implInstr}`,
-              },
-            ],
-            details: { review, nextStep: nextStep.index },
-          };
-        } else {
+            const implInstr = implementerInstructions(
+              actualNextStep,
+              state.repoProfile!,
+              state.stepResults
+            );
+
+            ctx.ui.notify(`✅ Step ${params.stepIndex} passed! Moving to step ${actualNextStep.index}.`, "info");
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `✅ Step ${params.stepIndex} passed.\n\n---\nMoving to Step ${actualNextStep.index}:\n\n${implInstr}`,
+                },
+              ],
+              details: { review, nextStep: actualNextStep.index },
+            };
+          }
+        }
+
+        {
           // All steps done — cross-agent review + post-completion
           setPhase("reviewing", ctx);
           persistState();
