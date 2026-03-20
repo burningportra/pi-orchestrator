@@ -310,8 +310,41 @@ export default function (pi: ExtensionAPI) {
         [
           "📋 Standard — 3-7 practical ideas",
           "🚀 Creative — think of 100, tell me your 7 best",
+          "✏️  I know what I want — enter my own goal",
         ]
       );
+
+      if (discoveryMode?.startsWith("✏️")) {
+        const customGoal = await ctx.ui.input(
+          "Enter your goal:",
+          "e.g., Add API rate limiting with Redis"
+        );
+        if (!customGoal) {
+          orchestratorActive = false;
+          setPhase("idle", ctx);
+          persistState();
+          return {
+            content: [{ type: "text", text: "No goal entered. Orchestration stopped." }],
+            details: { profile },
+          };
+        }
+        // Skip discovery entirely — go straight to planning
+        state.selectedGoal = customGoal;
+        state.candidateIdeas = [];
+        setPhase("planning", ctx);
+        persistState();
+
+        const instructions = plannerInstructions(customGoal, profile, []);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Repository profiled successfully.\n\n${formatted}${memoryContext}\n\nGoal: "${customGoal}"\n\n---\nNext: Call \`orch_plan\` with a structured plan.\n\n${instructions}`,
+            },
+          ],
+          details: { profile, customGoal },
+        };
+      }
 
       const isCreative = discoveryMode?.startsWith("🚀");
       const discoveryPrompt = isCreative
