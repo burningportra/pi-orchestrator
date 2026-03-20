@@ -1869,46 +1869,121 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // User said "looks good" — move to next step or complete
-        const nextStep = state.plan.steps.find(
-          (s) => s.index === params.stepIndex + 1
+        // User said "looks good" — figure out what to do next.
+        // Key scenarios:
+        // A) Parallel group: other steps in the same group may still need review
+        // B) Next group: if current group is done, launch the next parallel group
+        // C) Sequential: simple advance to next step
+        // D) All done: enter guided gates
+
+        // Find all steps that still need review (no success result yet)
+        const unreviewedSteps = state.plan.steps.filter(
+          (s) => !state.stepResults.find((r) => r.stepIndex === s.index && r.status === "success")
         );
 
-        if (nextStep) {
+        if (unreviewedSteps.length > 0) {
           // Check if remaining steps can be skipped (work already done)
-          const remainingSteps = state.plan.steps.filter(
-            (s) => s.index > params.stepIndex && !state.stepResults.find((r) => r.stepIndex === s.index)
-          );
-          if (remainingSteps.length > 1) {
+          if (unreviewedSteps.length > 1) {
             const skipChoice = await ctx.ui.select(
-              `${remainingSteps.length} steps remaining. Some may already be done.`,
+              `${unreviewedSteps.length} steps remaining.`,
               [
-                `▶️  Continue to step ${nextStep.index}`,
+                `▶️  Continue`,
                 "⏭️  Skip to completion — mark remaining steps as done",
               ]
             );
             if (skipChoice?.startsWith("⏭️")) {
-              // Mark all remaining steps as done
-              for (const rs of remainingSteps) {
+              for (const rs of unreviewedSteps) {
                 state.stepResults.push({
                   stepIndex: rs.index,
                   status: "success",
                   summary: "Skipped — work completed in earlier step",
                 });
               }
-              // Jump to completion path
               state.currentStepIndex = state.plan.steps[state.plan.steps.length - 1].index;
               persistState();
               // Fall through to the "all steps done" branch below
             }
           }
 
-          // Re-check if we still have a next step (might have skipped)
-          const actualNextStep = state.plan.steps.find(
-            (s) => s.index > params.stepIndex && !state.stepResults.find((r) => r.stepIndex === s.index)
+          // Re-check unreviewed after potential skip
+          const stillUnreviewed = state.plan.steps.filter(
+            (s) => !state.stepResults.find((r) => r.stepIndex === s.index && r.status === "success")
           );
 
-          if (actualNextStep) {
+          if (stillUnreviewed.length > 0) {
+            // Check if these steps were already implemented in a parallel group
+            // (they have worktrees or were part of a parallel_subagents call)
+            // If so, tell the agent to call orch_review for them, not implement them.
+            const alreadyImplemented = stillUnreviewed.filter(
+              (s) => worktreePool?.getPath(s.index) || worktreePool?.getBranch(s.index)
+            );
+
+            if (alreadyImplemented.length > 0) {
+              // These steps were implemented in parallel — just need review
+              const stepList = alreadyImplemented.map((s) => `- Step ${s.index}: ${s.description}`).join("\n");
+              ctx.ui.notify(`✅ Step ${params.stepIndex} passed! ${alreadyImplemented.length} parallel steps await review.`, "info");
+
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `✅ Step ${params.stepIndex} passed.\n\nThese steps were implemented in parallel and need review. Call \`orch_review\` for each:\n\n${stepList}`,
+                  },
+                ],
+                details: { review, parallelReviewPending: alreadyImplemented.map((s) => s.index) },
+              };
+            }
+
+            // Check if the next unreviewed steps form a parallel group
+            // and should be launched together
+            if (parallelAnalysis) {
+              const currentGroup = parallelAnalysis.groups.find((g) =>
+                g.includes(params.stepIndex)
+              );
+              const currentGroupIdx = currentGroup
+                ? parallelAnalysis.groups.indexOf(currentGroup)
+                : -1;
+
+              // Are all steps in the current group done?
+              const currentGroupDone = currentGroup?.every(
+                (idx) => state.stepResults.find((r) => r.stepIndex === idx && r.status === "success")
+              );
+
+              if (currentGroupDone && currentGroupIdx >= 0) {
+                const nextGroupIdx = currentGroupIdx + 1;
+                if (nextGroupIdx < parallelAnalysis.groups.length) {
+                  const nextGroup = parallelAnalysis.groups[nextGroupIdx];
+
+                  if (nextGroup.length > 1 && worktreePool) {
+                    // Launch next parallel group
+                    const agentConfigs = nextGroup.map((stepIdx) => {
+                      const s = state.plan!.steps.find((st) => st.index === stepIdx)!;
+                      const wtPath = worktreePool!.getPath(stepIdx);
+                      return {
+                        name: `step-${stepIdx}`,
+                        task: `You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${s.description}\n\n### Acceptance Criteria\n${s.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${s.artifacts.join(", ")}\n\n⚠️ SCOPE CONSTRAINT: You MUST NOT create or modify any files outside the list above.\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step.\n\nWhen done, do a fresh-eyes review then COMMIT:\n\`\`\`bash\ncd ${wtPath ?? ctx.cwd}\ngit add ${s.artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "step ${stepIdx}: ${s.description.slice(0, 60)}"\n\`\`\`\n\nSummarize what you did.`,
+                      };
+                    });
+
+                    const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+                    ctx.ui.notify(`✅ Group ${currentGroupIdx + 1} complete! Launching Group ${nextGroupIdx + 1} (steps ${nextGroup.join(", ")}).`, "info");
+
+                    return {
+                      content: [
+                        {
+                          type: "text",
+                          text: `✅ Step ${params.stepIndex} passed. Group ${currentGroupIdx + 1} complete!\n\n**NEXT: Call \`parallel_subagents\` NOW to launch Group ${nextGroupIdx + 1} (Steps ${nextGroup.join(", ")}).**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each step.`,
+                        },
+                      ],
+                      details: { review, nextGroup: nextGroup, launchingParallel: true },
+                    };
+                  }
+                }
+              }
+            }
+
+            // Default: advance to next sequential step
+            const actualNextStep = stillUnreviewed[0];
             state.currentStepIndex = actualNextStep.index;
             state.retryCount = 0;
             setPhase("implementing", ctx);
