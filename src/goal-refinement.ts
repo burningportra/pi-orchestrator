@@ -470,7 +470,8 @@ export async function runGoalRefinement(
       return fallback;
     }
 
-    const output = result.stdout.trim();
+    // pi --print may output to stdout or stderr depending on version/config
+    const output = (result.stdout || result.stderr || "").trim();
     if (!output) {
       ctx.ui.notify("⚠️ Goal refinement returned empty output. Using raw goal.", "warning");
       return fallback;
