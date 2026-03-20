@@ -1,0 +1,93 @@
+version: v1
+
+contract:
+  required_fields:
+    - why
+    - scope
+    - non_goals
+    - invariants
+    - blast_radius
+    - test_plan
+    - rollback_plan
+
+task_contract:
+  required_fields:
+    - intent
+    - acceptance_criteria
+    - scope
+
+scope:
+  allowed_prefixes:
+    - "."
+
+classification:
+  test:
+    suffixes:
+      - "_test.go"
+      - ".spec.js"
+      - ".spec.ts"
+      - ".spec.jsx"
+      - ".spec.tsx"
+      - ".test.js"
+      - ".test.ts"
+      - ".test.jsx"
+      - ".test.tsx"
+    path_contains:
+      - "/test/"
+      - "/tests/"
+  dependency:
+    file_names:
+      - "go.mod"
+      - "go.sum"
+      - "package.json"
+      - "package-lock.json"
+      - "pnpm-lock.yaml"
+      - "yarn.lock"
+      - "cargo.toml"
+      - "cargo.lock"
+      - "requirements.txt"
+      - "poetry.lock"
+
+merge:
+  allow_override: true
+  mode: local
+  required_approvals: 1
+  require_non_author_approval: true
+  require_ready_for_review: true
+  require_passing_checks: true
+
+archive:
+  enabled: true
+  path: ".sophia-tracked/cr"
+  format: yaml
+  include_full_diffs: false
+
+trust:
+  mode: advisory
+  gate:
+    enabled: false
+    apply_risk_tiers:
+      - high
+    min_verdict: trusted
+  thresholds:
+    low: 0.85
+    medium: 0.90
+    high: 0.95
+  checks:
+    freshness_hours: 24
+    definitions:
+      # Example:
+      # - key: unit_tests
+      #   command: go test ./...
+      #   tiers: [low, medium, high]
+      #   allow_exit_codes: [0]
+  review_depth:
+    low:
+      min_samples: 0
+      require_critical_scope_coverage: false
+    medium:
+      min_samples: 0
+      require_critical_scope_coverage: false
+    high:
+      min_samples: 0
+      require_critical_scope_coverage: false
