@@ -706,6 +706,31 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
+      // Polish tasks in plan space before implementing
+      const polishTasks = await ctx.ui.select(
+        `${plan.steps.length} tasks ready.${sophiaInfo ? ` Sophia CR created.` : ""} Review before implementing?`,
+        [
+          "🔍 Polish tasks — review each task in plan space first",
+          "▶️  Start implementing",
+        ]
+      );
+
+      if (polishTasks?.startsWith("🔍")) {
+        const taskList = plan.steps
+          .map((s) => `**Step ${s.index}: ${s.description}**\n   ✓ ${s.acceptanceCriteria.join("\n   ✓ ")}\n   📄 ${s.artifacts.join(", ")}`)
+          .join("\n\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `## 🔍 Task Polishing — Plan Space Review\n\n${taskList}\n\n---\n\nCheck over each task super carefully — are you sure it makes sense? Is it optimal? Could we change anything to make the system work better for users? It's a lot easier and faster to operate in "plan space" before we start implementing!\n\nIf any tasks need revision, call \`orch_plan\` again with the revised steps. If everything looks good, call \`orch_plan\` again with the same steps to proceed.`,
+            },
+          ],
+          details: { approved: true, plan, polishing: true, sophiaCR: sophiaCRResult?.cr },
+        };
+      }
+
       // Analyze parallel groups
       const analysis = analyzeParallelGroups(plan.steps);
       parallelAnalysis = analysis;
