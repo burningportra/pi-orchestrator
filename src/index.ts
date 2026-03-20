@@ -28,6 +28,7 @@ import {
   summaryInstructions,
   realityCheckInstructions,
 } from "./prompts.js";
+import { runGoalRefinement, extractConstraints } from "./goal-refinement.js";
 import {
   isSophiaAvailable,
   isSophiaInitialized,
@@ -328,21 +329,28 @@ export default function (pi: ExtensionAPI) {
             details: { profile },
           };
         }
+
+        // Refine the goal via LLM-generated questionnaire
+        const refinement = await runGoalRefinement(customGoal, profile, pi, ctx);
+        const goal = refinement.enrichedGoal;
+        const constraints = refinement.skipped ? [] : extractConstraints(refinement.answers);
+
         // Skip discovery entirely — go straight to planning
-        state.selectedGoal = customGoal;
+        state.selectedGoal = goal;
         state.candidateIdeas = [];
+        state.constraints = constraints;
         setPhase("planning", ctx);
         persistState();
 
-        const instructions = plannerInstructions(customGoal, profile, []);
+        const instructions = plannerInstructions(goal, profile, constraints);
         return {
           content: [
             {
               type: "text",
-              text: `Repository profiled successfully.\n\n${formatted}${memoryContext}\n\nGoal: "${customGoal}"\n\n---\nNext: Call \`orch_plan\` with a structured plan.\n\n${instructions}`,
+              text: `Repository profiled successfully.\n\n${formatted}${memoryContext}\n\nGoal: "${goal}"\n\n---\nNext: Call \`orch_plan\` with a structured plan.\n\n${instructions}`,
             },
           ],
-          details: { profile, customGoal },
+          details: { profile, customGoal: goal },
         };
       }
 
@@ -511,6 +519,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       let goal: string;
+      let refinementUsed = false;
       if (choice === "✏️  Enter a custom goal") {
         const custom = await ctx.ui.input(
           "Enter your goal:",
@@ -527,7 +536,15 @@ export default function (pi: ExtensionAPI) {
             details: { selected: false },
           };
         }
-        goal = custom;
+
+        // Refine the goal via LLM-generated questionnaire
+        const refinement = await runGoalRefinement(custom, state.repoProfile!, pi, ctx);
+        goal = refinement.enrichedGoal;
+        refinementUsed = !refinement.skipped;
+
+        if (refinementUsed) {
+          state.constraints = extractConstraints(refinement.answers);
+        }
       } else {
         const choiceIndex = options.indexOf(choice);
         const idea = state.candidateIdeas[choiceIndex];
@@ -538,14 +555,16 @@ export default function (pi: ExtensionAPI) {
       setPhase("planning", ctx);
       persistState();
 
-      // Ask for constraints
-      const constraintInput = await ctx.ui.input(
-        "Any constraints? (comma-separated, or leave empty)",
-        "e.g., no new dependencies, keep backward compat"
-      );
-      state.constraints = constraintInput
-        ? constraintInput.split(",").map((c) => c.trim()).filter(Boolean)
-        : [];
+      // Ask for constraints only if refinement didn't already capture them
+      if (!refinementUsed) {
+        const constraintInput = await ctx.ui.input(
+          "Any constraints? (comma-separated, or leave empty)",
+          "e.g., no new dependencies, keep backward compat"
+        );
+        state.constraints = constraintInput
+          ? constraintInput.split(",").map((c) => c.trim()).filter(Boolean)
+          : [];
+      }
       persistState();
 
       // Ask: standard plan or deep plan (3 competing agents → synthesis)?

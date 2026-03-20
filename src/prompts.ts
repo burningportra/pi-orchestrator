@@ -472,6 +472,61 @@ A skill is worth creating if:
 - Suggest if any PART of it could be a skill`;
 }
 
+// ─── Goal Refinement Prompt ──────────────────────────────────
+export function goalRefinementPrompt(goal: string, profile: RepoProfile): string {
+  return `## Goal Refinement
+
+The user wants to work on this goal:
+> ${goal}
+
+${formatRepoProfile(profile)}
+
+## Your Task
+Analyze the goal against the repository context above. Generate clarifying questions that will sharpen the goal into an unambiguous, actionable plan. Each question should reference specific aspects of the repo (languages, frameworks, file structure, recent commits) — do NOT ask generic questions.
+
+**Adaptive depth:** If the goal is already specific and detailed, generate fewer questions (as few as 1–2). If it's vague or broad, generate up to 5. Assess specificity before generating.
+
+**Required:** One question MUST ask about constraints and non-goals — things the user explicitly does NOT want changed or wants to avoid.
+
+## Output Format
+Return a JSON array of question objects. Each question has:
+- \`id\`: kebab-case identifier (e.g. "target-framework")
+- \`label\`: short display label (e.g. "Target Framework")
+- \`prompt\`: the full question text, referencing repo context where relevant
+- \`options\`: array of 3–5 options, each with \`value\` (kebab-case), \`label\` (display text), and optional \`description\`
+- \`allowOther\`: boolean — whether the user can type a custom answer
+
+## Example Output
+\`\`\`json
+[
+  {
+    "id": "scope",
+    "label": "Scope",
+    "prompt": "The repo has both src/api/ and src/cli/ entrypoints. Should this change target the API layer, the CLI, or both?",
+    "options": [
+      { "value": "api-only", "label": "API only", "description": "Changes limited to src/api/" },
+      { "value": "cli-only", "label": "CLI only", "description": "Changes limited to src/cli/" },
+      { "value": "both", "label": "Both", "description": "Coordinate changes across API and CLI" }
+    ],
+    "allowOther": false
+  },
+  {
+    "id": "constraints",
+    "label": "Constraints & Non-Goals",
+    "prompt": "Are there parts of the codebase or behaviors you want to explicitly preserve or avoid changing?",
+    "options": [
+      { "value": "no-breaking", "label": "No breaking changes", "description": "Public API must remain backward-compatible" },
+      { "value": "no-new-deps", "label": "No new dependencies", "description": "Solve with existing packages only" },
+      { "value": "no-constraints", "label": "No specific constraints", "description": "Open to any approach" }
+    ],
+    "allowOther": true
+  }
+]
+\`\`\`
+
+Return ONLY the JSON array, no surrounding text or markdown fences.`;
+}
+
 // ─── Summary Instructions ────────────────────────────────────
 export function summaryInstructions(
   goal: string,
