@@ -427,6 +427,76 @@ export async function mergeWorktreeChanges(
   }
 }
 
+// ─── Dependency Resolution ─────────────────────────────────────
+
+/**
+ * Resolve dependsOn for all steps. Applies implicit-sequential-default:
+ * - omitted dependsOn → depends on previous step (index - 1)
+ * - dependsOn: [] → independent (can parallelize)
+ * - dependsOn: [1,3] → explicit deps
+ *
+ * Filters self-references and invalid indices.
+ * Detects cycles and returns them as warnings.
+ */
+export function resolveDependencies(
+  steps: PlanStep[]
+): { resolved: Map<number, number[]>; warnings: string[] } {
+  const resolved = new Map<number, number[]>();
+  const warnings: string[] = [];
+  const validIndices = new Set(steps.map((s) => s.index));
+
+  for (const step of steps) {
+    let deps: number[];
+
+    if (step.dependsOn === undefined) {
+      // Implicit sequential default: depend on previous step
+      const prevStep = steps.find((s) => s.index === step.index - 1);
+      deps = prevStep ? [prevStep.index] : [];
+    } else {
+      // Explicit: filter self-refs and invalid indices
+      deps = step.dependsOn.filter((d) => {
+        if (d === step.index) return false; // self-ref
+        if (!validIndices.has(d)) return false; // invalid index
+        return true;
+      });
+    }
+
+    resolved.set(step.index, deps);
+  }
+
+  // Cycle detection via DFS
+  const visited = new Set<number>();
+  const inStack = new Set<number>();
+
+  function dfs(node: number, path: number[]): boolean {
+    if (inStack.has(node)) {
+      const cycleStart = path.indexOf(node);
+      const cycle = path.slice(cycleStart).concat(node);
+      warnings.push(`Cycle detected: ${cycle.join(" → ")}`);
+      return true;
+    }
+    if (visited.has(node)) return false;
+
+    visited.add(node);
+    inStack.add(node);
+
+    for (const dep of resolved.get(node) ?? []) {
+      if (dfs(dep, [...path, node])) return true;
+    }
+
+    inStack.delete(node);
+    return false;
+  }
+
+  for (const step of steps) {
+    if (!visited.has(step.index)) {
+      dfs(step.index, []);
+    }
+  }
+
+  return { resolved, warnings };
+}
+
 export interface ParallelAnalysis {
   groups: number[][];
   /** Flat merge order — groups in sequence, steps within a group in index order */
@@ -439,7 +509,13 @@ export interface ParallelAnalysis {
  * plus a flat merge order for applying results sequentially.
  */
 export function analyzeParallelGroups(steps: PlanStep[]): ParallelAnalysis {
-  // Build artifact → step mapping
+  // 1. Resolve explicit dependsOn (with implicit-sequential-default)
+  const { resolved: resolvedDeps, warnings } = resolveDependencies(steps);
+  if (warnings.length > 0) {
+    console.warn("Dependency warnings:", warnings.join("; "));
+  }
+
+  // 2. Build artifact → step mapping
   const artifactToSteps = new Map<string, number[]>();
   for (const step of steps) {
     for (const artifact of step.artifacts) {
@@ -449,13 +525,20 @@ export function analyzeParallelGroups(steps: PlanStep[]): ParallelAnalysis {
     }
   }
 
-  // Build dependency graph: step A depends on step B if they share an artifact and B comes first
+  // 3. Build merged dependency graph: resolved dependsOn + artifact overlap
   const deps = new Map<number, Set<number>>();
   for (const step of steps) deps.set(step.index, new Set());
 
+  // Add resolved dependsOn edges
+  for (const [stepIdx, stepDeps] of resolvedDeps) {
+    for (const dep of stepDeps) {
+      deps.get(stepIdx)?.add(dep);
+    }
+  }
+
+  // Add artifact-based edges (additive — doesn't remove dependsOn edges)
   for (const [_artifact, stepIndices] of artifactToSteps) {
     if (stepIndices.length > 1) {
-      // Later steps depend on earlier ones for this artifact
       for (let i = 1; i < stepIndices.length; i++) {
         deps.get(stepIndices[i])!.add(stepIndices[i - 1]);
       }

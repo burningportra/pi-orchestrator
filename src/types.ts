@@ -63,6 +63,13 @@ export interface PlanStep {
   description: string;
   acceptanceCriteria: string[];
   artifacts: string[]; // file paths expected to be created/modified
+  /**
+   * Logical execution dependencies — step indices that must complete before this step runs.
+   * - omitted: implicitly depends on the previous step (sequential by default)
+   * - []: explicitly independent, can run in parallel
+   * - [1, 3]: depends on steps 1 and 3
+   */
+  dependsOn?: number[];
 }
 
 // ─── Implementation ──────────────────────────────────────────
