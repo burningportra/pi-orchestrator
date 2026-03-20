@@ -487,8 +487,29 @@ export default function (pi: ExtensionAPI) {
 
         // Detect available models — prefer different providers for true diversity
         const available = ctx.modelRegistry.getAvailable();
-        const findModel = (keywords: string[]): string | undefined => {
-          for (const kw of keywords) {
+
+        // Find best model for a provider group (by provider names, then by model id keywords)
+        const findModel = (
+          providers: string[],
+          idKeywords: string[]
+        ): string | undefined => {
+          // First: find models from preferred providers
+          const providerModels = available.filter((m) =>
+            providers.some((p) => m.provider === p)
+          );
+          if (providerModels.length > 0) {
+            // Pick best by keyword preference
+            for (const kw of idKeywords) {
+              const match = providerModels.find(
+                (m) => m.id.toLowerCase().includes(kw) || m.name.toLowerCase().includes(kw)
+              );
+              if (match) return `${match.provider}/${match.id}`;
+            }
+            // Fallback: first available from this provider
+            return `${providerModels[0].provider}/${providerModels[0].id}`;
+          }
+          // Fallback: search all models by keyword
+          for (const kw of idKeywords) {
             const m = available.find(
               (m) => m.id.toLowerCase().includes(kw) || m.name.toLowerCase().includes(kw)
             );
@@ -497,9 +518,18 @@ export default function (pi: ExtensionAPI) {
           return undefined;
         };
 
-        const geminiModel = findModel(["gemini-2.5-pro", "gemini-pro", "gemini"]);
-        const gptModel = findModel(["gpt-4.1", "o4-mini", "o3", "gpt-4o", "gpt-4"]);
-        const claudeModel = findModel(["opus", "sonnet"]);
+        const geminiModel = findModel(
+          ["google-antigravity", "google", "google-gemini-cli", "google-vertex"],
+          ["gemini-2.5-pro", "gemini-pro", "gemini"]
+        );
+        const gptModel = findModel(
+          ["openai-codex", "openai", "azure-openai-responses"],
+          ["o3", "gpt-4.1", "o4-mini", "gpt-4o", "gpt-4"]
+        );
+        const claudeModel = findModel(
+          ["anthropic"],
+          ["claude-opus", "opus", "claude-sonnet", "sonnet"]
+        );
 
         const models = [geminiModel, gptModel, claudeModel].filter(Boolean);
         const hasMultipleProviders = models.length >= 2;
