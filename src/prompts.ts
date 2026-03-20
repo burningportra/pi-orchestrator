@@ -151,6 +151,78 @@ Return a structured plan with:
 - **steps**: array of { index, description, acceptanceCriteria[], artifacts[] }`;
 }
 
+// ─── Deep Planning Synthesis Prompt ──────────────────────────
+export function synthesisInstructions(plans: { name: string; model: string; plan: string }[]): string {
+  const planBlocks = plans
+    .map((p) => `### ${p.name} (${p.model})\n\n${p.plan}`)
+    .join("\n\n---\n\n");
+
+  return `## Best-of-All-Worlds Synthesis
+
+I asked ${plans.length} competing LLMs to independently create plans. They came up with pretty different approaches. Read them below.
+
+${planBlocks}
+
+---
+
+REALLY carefully analyze each plan with an open mind. Be intellectually honest about what each one did that's better than the others. Then come up with the best possible hybrid that artfully and skillfully blends the "best of all worlds" to create a true, ultimate, superior version that:
+
+- Integrates every good idea (you don't need to mention which came from which model)
+- Resolves contradictions by picking the stronger approach
+- Ensures the plan covers: workflows, constraints, architecture, testing, and failure handling
+- Is detailed enough that a fresh agent can execute without guessing
+
+Then call \`orch_plan\` with the synthesized plan.`;
+}
+
+// ─── Plan-to-Tasks Conversion Prompt ─────────────────────────
+export function planToTasksInstructions(goal: string, steps: PlanStep[]): string {
+  return `## Convert Plan to Tasks
+
+Take ALL of the plan below and create a comprehensive and granular set of tasks with subtasks and dependency structure, with detailed comments so the whole thing is totally self-contained and self-documenting.
+
+### Goal
+${goal}
+
+### Steps
+${steps.map((s) => `${s.index}. ${s.description}\n   Criteria: ${s.acceptanceCriteria.join("; ")}\n   Files: ${s.artifacts.join(", ")}`).join("\n\n")}
+
+The tasks should be so detailed that we never need to consult back to the original plan. Each task should carry its own context, reasoning, dependencies, and acceptance criteria.`;
+}
+
+// ─── Reality Check Prompt ────────────────────────────────────
+export function realityCheckInstructions(
+  goal: string,
+  steps: PlanStep[],
+  results: StepResult[]
+): string {
+  const done = results.filter((r) => r.status === "success").length;
+  const total = steps.length;
+
+  return `## Reality Check
+
+Where are we on this project? Do we actually have the thing we are trying to build?
+
+### Goal
+${goal}
+
+### Progress
+${done}/${total} steps completed.
+
+${steps.map((s) => {
+  const r = results.find((r) => r.stepIndex === s.index);
+  return `- Step ${s.index}: ${r?.status ?? "not started"} — ${s.description}${r?.summary ? `\n  Summary: ${r.summary}` : ""}`;
+}).join("\n")}
+
+### Questions to answer honestly
+1. If we intelligently implement all remaining open tasks, would we close the gap completely? Why or why not?
+2. What is actually blocking us right now?
+3. Are there missing tasks or dependencies that the plan didn't account for?
+4. Is any completed work actually broken or incomplete despite being marked done?
+
+Be brutally honest. If the answer is "no, we wouldn't close the gap," the fix is usually to revise the plan or add missing work, not to push harder on implementation.`;
+}
+
 // ─── Implementer Instructions ────────────────────────────────
 export function implementerInstructions(
   step: PlanStep,
@@ -177,12 +249,12 @@ ${step.artifacts.map((a) => `- ${a}`).join("\n")}
 - **Frameworks:** ${profile.frameworks.join(", ")}
 ${prevContext}
 
-### Instructions
-Now use the standard code tools (read, write, edit, bash) to implement this step.
-- Read relevant files first to understand the codebase
-- Make focused, targeted changes
-- Stay within the plan scope
-- After completing changes, call \`orch_review\` with a summary of what you did`;
+### Marching Orders
+First read the relevant files to fully understand the code and technical architecture.
+Then implement this step using the standard code tools (read, write, edit, bash).
+Work systematically and meticulously. Don't get stuck in analysis — be proactive.
+Make focused, targeted changes. Stay within the plan scope.
+After completing changes, call \`orch_review\` with a summary of what you did.`;
 }
 
 // ─── Reviewer Instructions ───────────────────────────────────
