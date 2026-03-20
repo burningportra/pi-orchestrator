@@ -409,10 +409,22 @@ export default function (pi: ExtensionAPI) {
       );
       options.push("✏️  Enter a custom goal");
 
-      const choice = await ctx.ui.select(
-        "🎯 Select a project idea to implement:",
-        options
-      );
+      let choice: string | undefined;
+      try {
+        choice = await ctx.ui.select(
+          "🎯 Select a project idea to implement:",
+          options
+        );
+      } catch (err) {
+        ctx.ui.notify(`Select failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+        orchestratorActive = false;
+        setPhase("idle", ctx);
+        persistState();
+        return {
+          content: [{ type: "text", text: `Selection dialog failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: { selected: false, error: true },
+        };
+      }
 
       if (choice === undefined) {
         orchestratorActive = false;

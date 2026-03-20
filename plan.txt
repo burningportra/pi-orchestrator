@@ -1,0 +1,14 @@
+1. Update review agent prompts to include commit instructions
+In `src/index.ts`, locate the two places where the parallel review agents (`fresh-eyes`, `polish`, `ergonomics`) are configured for the "hit me" rounds. Append explicit instructions to their `task` definitions telling them to commit their changes when done, matching the format used for implementation agents.
+**Acceptance Criteria:**
+- `fresh-eyes`, `polish`, and `ergonomics` tasks include a bash snippet to `git add -A && git commit -m "review(<agent>): round <round> fixes"`.
+- The instruction tells them to summarize their actions after committing.
+**Files to modify:** `src/index.ts`
+
+2. Implement autoCommitWorktree fallback for review rounds
+In `src/index.ts`, locate the `orch_review` execute block handling the "hit me" state (`if (state.phase === "iterating" && (!step || params.stepIndex > state.plan.steps.length))`). Before showing the UI menu to either start another round or finish, import and call `autoCommitWorktree` on `ctx.cwd` to catch any uncommitted fixes from the parallel review agents.
+**Acceptance Criteria:**
+- `autoCommitWorktree` is called with `ctx.cwd` and message `auto-commit review round <round> fixes`.
+- If a commit is made, a UI notification is displayed to inform the user.
+- This ensures no changes from review agents are left unstaged before the next round or finishing.
+**Files to modify:** `src/index.ts`
