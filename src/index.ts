@@ -59,6 +59,7 @@ export default function (pi: ExtensionAPI) {
   let sophiaCRResult: PlanToCRResult | undefined;
   let worktreePool: WorktreePool | undefined;
   let parallelAnalysis: ParallelAnalysis | undefined;
+  let swarmTender: import("./tender.js").SwarmTender | undefined;
 
   function setPhase(phase: OrchestratorPhase, ctx: ExtensionContext) {
     state.phase = phase;
@@ -88,6 +89,9 @@ export default function (pi: ExtensionAPI) {
       const total = state.plan.steps.length;
       const passed = state.reviewVerdicts.filter((r) => r.passed).length;
       lines.push(`📊 Progress: ${done}/${total} steps (${passed} passed)`);
+    }
+    if (swarmTender) {
+      lines.push(`🐝 Tender: ${swarmTender.getSummary()}`);
     }
     ctx.ui.setWidget("orchestrator", lines);
   }
@@ -172,6 +176,7 @@ export default function (pi: ExtensionAPI) {
     if (worktreePool) {
       await worktreePool.cleanup();
       worktreePool = undefined;
+      if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
     }
     orchestratorActive = false;
   });
@@ -233,6 +238,7 @@ export default function (pi: ExtensionAPI) {
         if (worktreePool) {
           await worktreePool.cleanup();
           worktreePool = undefined;
+      if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
         }
         orchestratorActive = false;
         setPhase("idle", ctx);
@@ -829,6 +835,7 @@ export default function (pi: ExtensionAPI) {
         } catch {
           worktreeInfo = "\n\n⚠️ Worktree creation failed — falling back to sequential execution.";
           worktreePool = undefined;
+      if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
         }
       }
 
@@ -855,11 +862,30 @@ export default function (pi: ExtensionAPI) {
         // duplicate instructions if the LLM already acted on the tool result.
         const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
 
+        // Start swarm tender to monitor parallel agents
+        if (worktreePool) {
+          const { SwarmTender } = await import("./tender.js");
+          const worktreeInfos = firstGroup
+            .map((idx) => ({ path: worktreePool!.getPath(idx)!, stepIndex: idx }))
+            .filter((w) => w.path);
+          if (worktreeInfos.length > 0) {
+            swarmTender = new SwarmTender(pi, ctx.cwd, worktreeInfos, {
+              onStuck: (agent) => {
+                ctx.ui.notify(`⚠️ Step ${agent.stepIndex} agent appears stuck (no activity for 5 min)`, "warning");
+              },
+              onConflict: (conflict) => {
+                ctx.ui.notify(`⚠️ Conflict: ${conflict.file} modified in steps ${conflict.stepIndices.join(", ")}`, "warning");
+              },
+            });
+            swarmTender.start();
+          }
+        }
+
         return {
           content: [
             {
               type: "text",
-              text: `Plan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n---\n**IMPORTANT: Call \`parallel_subagents\` NOW to launch Group 1 (Steps ${firstGroup.join(", ")}).**\n\nUse exactly these parameters:\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each step with the sub-agent's summary.`,
+              text: `Plan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n---\n**IMPORTANT: Call \`parallel_subagents\` NOW to launch Group 1 (Steps ${firstGroup.join(", ")}).**\n\nUse exactly these parameters:\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\n🔄 Swarm tender active — monitoring agent health every 60s.\n\nAfter all agents complete, call \`orch_review\` for each step with the sub-agent's summary.`,
             },
           ],
           details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr, launchingParallel: true },
@@ -1339,6 +1365,7 @@ export default function (pi: ExtensionAPI) {
           if (worktreePool) {
             await worktreePool.cleanup();
             worktreePool = undefined;
+      if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
           }
 
           ctx.ui.notify("🔄 All steps done — post-implementation review", "info");
