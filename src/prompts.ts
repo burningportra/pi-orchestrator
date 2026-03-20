@@ -254,7 +254,10 @@ First read the relevant files to fully understand the code and technical archite
 Then implement this step using the standard code tools (read, write, edit, bash).
 Work systematically and meticulously. Don't get stuck in analysis — be proactive.
 Make focused, targeted changes. Stay within the plan scope.
-After completing changes, call \`orch_review\` with a summary of what you did.`;
+
+**After implementing, do a fresh-eyes review:** carefully read over ALL the new code you just wrote and any existing code you modified, looking super carefully for any obvious bugs, errors, problems, issues, or confusion. Fix anything you uncover.
+
+After the fresh-eyes review, call \`orch_review\` with a summary of what you did and what the review found.`;
 }
 
 // ─── Reviewer Instructions ───────────────────────────────────
