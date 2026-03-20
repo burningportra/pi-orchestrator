@@ -55,7 +55,7 @@ Type `/orchestrate` in any repo → it scans the codebase → proposes improveme
 ## Install
 
 ```bash
-pi install burningportra/pi-orchestrator
+pi install git:github.com/burningportra/pi-orchestrator
 ```
 
 ## Deep Planning (Multi-Model Synthesis)
