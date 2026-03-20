@@ -19,20 +19,20 @@ Verify it loaded:
 ```bash
 pi
 # Then type: /orchestrate-status
-# Should print current phase (idle if no session active)
+# Expected output: "Phase: idle" (no active session)
 ```
 
 ## Subscription Setup (Multi-Model Features)
 
-Some features spawn multiple AI agents in parallel, which requires a pi subscription with access to multiple model providers.
+Parallel agent features (deep planning, creative brainstorm) require access to multiple model providers.
 
 ### What a subscription unlocks
 
 | Feature | What happens | Models needed |
 |---------|-------------|---------------|
-| **🧠 Deep planning** | 3 competing plans from different models, then synthesis | 3 models (e.g. Gemini + GPT + Claude) |
-| **🚀 Creative brainstorm** | 3 parallel agents (innovator / hardener / simplifier) | 3 models |
-| **👥 Peer review** | 4 parallel review agents with different focuses | Works with 1 model, better with variety |
+| **Deep planning** | 3 competing plans from different models, then synthesis | 3 models (e.g. Gemini + GPT + Claude) |
+| **Creative brainstorm** | 3 parallel agents (innovator / hardener / simplifier) | 3 models |
+| **Peer review** | 4 parallel review agents with different focuses | Works with 1 model, better with variety |
 
 ### How to enable
 
@@ -40,7 +40,7 @@ Some features spawn multiple AI agents in parallel, which requires a pi subscrip
 2. **Add providers** — follow [pi's model docs](https://github.com/badlogic/pi-mono) to add API keys for providers you want (OpenAI, Google, Anthropic, etc.)
 3. **During deep planning** — the orchestrator shows available models sorted by context window; pick any 3
 
-> **No subscription?** Everything still works — you just use "📋 Standard" planning (single model) instead of "🧠 Deep plan". Reviews still run with your default model.
+> **No subscription?** Everything still works — use "Standard" planning (single model) instead of "Deep plan". Reviews run with your default model.
 
 ## Sophia Integration (Optional)
 
@@ -68,13 +68,13 @@ Some features spawn multiple AI agents in parallel, which requires a pi subscrip
 
 3. **Run `/orchestrate`** — the extension auto-detects Sophia and uses it. No extra flags needed.
 
-> **No Sophia?** No problem — CR tracking is skipped, everything else works identically.
+> **No Sophia?** CR tracking is skipped. Everything else works the same.
 
 ## Optional Configuration
 
 ### Compound memory
 
-The orchestrator stores learnings from each run in `.pi-orchestrator/memory.md`. This file is automatically read at the start of every session to inform future planning. No setup required — it creates itself on first use.
+The orchestrator stores learnings from each session (gotchas, patterns, decisions) in `.pi-orchestrator/memory.md` inside your project. This file is automatically read at the start of every future session so the orchestrator avoids repeating mistakes. No setup required — it creates itself on first use.
 
 To reset accumulated learnings:
 
