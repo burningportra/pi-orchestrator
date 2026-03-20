@@ -668,8 +668,9 @@ export default function (pi: ExtensionAPI) {
 
       setPhase("awaiting_plan_approval", ctx);
 
+      // Show the full plan first, then ask what to do
       const planChoice = await ctx.ui.select(
-        `📝 Plan: ${plan.goal}`,
+        `📝 Plan: ${plan.goal}\n\n${planText}`,
         [
           "✅ Approve this plan",
           "🚀 Creative brainstorm — enhance before approving",
