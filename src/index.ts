@@ -524,44 +524,67 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
-        type AgentConfig = { name: string; task: string; model?: string; tools?: string };
-        const plannerTools = "read,bash,grep,find,ls"; // read-only — no orch_ tools
-        const agentConfigs: AgentConfig[] = [
+        const agentConfigs: import("./deep-plan.js").DeepPlanAgent[] = [
           {
             name: "planner-alpha",
-            task: `You are Planner Alpha. ${planPrompt}\n\nFocus on: correctness, minimal scope, and clean architecture.\n\ncd ${ctx.cwd}`,
-            tools: plannerTools,
+            task: `You are Planner Alpha. ${planPrompt}\n\nFocus on: correctness, minimal scope, and clean architecture.`,
             ...(pickedModels[0] ? { model: pickedModels[0] } : {}),
           },
           {
             name: "planner-beta",
-            task: `You are Planner Beta. ${planPrompt}\n\nFocus on: robustness, edge cases, and testing strategy.\n\ncd ${ctx.cwd}`,
-            tools: plannerTools,
+            task: `You are Planner Beta. ${planPrompt}\n\nFocus on: robustness, edge cases, and testing strategy.`,
             ...(pickedModels[1] ? { model: pickedModels[1] } : {}),
           },
           {
             name: "planner-gamma",
-            task: `You are Planner Gamma. ${planPrompt}\n\nFocus on: developer experience, ergonomics, and future extensibility.\n\ncd ${ctx.cwd}`,
-            tools: plannerTools,
+            task: `You are Planner Gamma. ${planPrompt}\n\nFocus on: developer experience, ergonomics, and future extensibility.`,
             ...(pickedModels[2] ? { model: pickedModels[2] } : {}),
           },
         ];
 
         const modelInfo = `\n\nModels selected:\n${agentConfigs.map((a) => `- **${a.name}**: ${a.model ?? "default"}`).join("\n")}`;
 
-        const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
-
         setPhase("planning", ctx);
         persistState();
+
+        ctx.ui.notify("🧠 Spawning 3 planning agents in parallel (this may take a minute)...", "info");
+
+        // Run planners directly via pi CLI with --no-extensions
+        // This avoids Gemini's patternProperties schema rejection
+        const { runDeepPlanAgents } = await import("./deep-plan.js");
+        const results = await runDeepPlanAgents(pi, ctx.cwd, agentConfigs);
+
+        const succeeded = results.filter((r) => r.exitCode === 0 && r.plan);
+        const failed = results.filter((r) => r.exitCode !== 0 || !r.plan);
+
+        let plansText = `## 🧠 Deep Planning Results${modelInfo}\n\n`;
+        plansText += `${succeeded.length}/3 planners succeeded.\n\n`;
+
+        for (const r of results) {
+          if (r.exitCode === 0 && r.plan) {
+            plansText += `### ${r.name} (${r.model}, ${r.elapsed}s)\n\n${r.plan}\n\n---\n\n`;
+          } else {
+            plansText += `### ${r.name} (${r.model}) — ❌ FAILED\n${r.error ?? "No output"}\n\n---\n\n`;
+          }
+        }
+
+        if (succeeded.length === 0) {
+          return {
+            content: [{ type: "text", text: `${plansText}\n\nAll planners failed. Try standard planning instead.` }],
+            details: { selected: true, goal, deepPlan: true, allFailed: true },
+          };
+        }
+
+        plansText += `## Synthesis Instructions\n\nNow **synthesize the best ideas from all plans** into one superior "best of all worlds" hybrid. Be intellectually honest about what each planner did better. Blend the strongest ideas. Then call \`orch_plan\` with the synthesized plan.`;
 
         return {
           content: [
             {
               type: "text",
-              text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n## 🧠 Deep Planning — 3 Competing Plans${modelInfo}\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all 3 complete, **synthesize the best ideas from all plans** into one superior "best of all worlds" hybrid. Be intellectually honest about what each planner did better than the others. Blend the strongest ideas from every plan. Then call \`orch_plan\` with the synthesized plan.`,
+              text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n${plansText}`,
             },
           ],
-          details: { selected: true, goal, constraints: state.constraints, deepPlan: true },
+          details: { selected: true, goal, constraints: state.constraints, deepPlan: true, results: results.map((r) => ({ name: r.name, model: r.model, exitCode: r.exitCode, elapsed: r.elapsed })) },
         };
       }
 
