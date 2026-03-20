@@ -90,6 +90,7 @@ export type OrchestratorPhase =
   | "awaiting_plan_approval"
   | "implementing"
   | "reviewing"
+  | "iterating"
   | "complete";
 
 export interface OrchestratorState {
