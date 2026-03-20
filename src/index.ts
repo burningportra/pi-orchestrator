@@ -26,6 +26,7 @@ import {
   commitStrategyInstructions,
   skillExtractionInstructions,
   summaryInstructions,
+  realityCheckInstructions,
 } from "./prompts.js";
 import {
   isSophiaAvailable,
@@ -886,6 +887,10 @@ export default function (pi: ExtensionAPI) {
             name: `ergonomics-r${round}`,
             task: `Agent-ergonomics reviewer round ${round}. Make this maximally intuitive for coding agents.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything that fails that test.\n\ncd ${ctx.cwd}`,
           },
+          {
+            name: `reality-check-r${round}`,
+            task: `Reality checker round ${round}.\n\n${realityCheckInstructions(state.plan.goal, state.plan.steps, state.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+          },
         ];
 
         const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
@@ -1021,6 +1026,10 @@ export default function (pi: ExtensionAPI) {
               name: `ergonomics-s${params.stepIndex}-r${round}`,
               task: `Ergonomics reviewer for step ${params.stepIndex} (round ${round}).\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
             },
+            {
+              name: `reality-check-s${params.stepIndex}-r${round}`,
+              task: `Reality checker for step ${params.stepIndex} (round ${round}).\n\n${realityCheckInstructions(state.plan!.goal, state.plan!.steps, state.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+            },
           ];
 
           const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
@@ -1152,6 +1161,10 @@ export default function (pi: ExtensionAPI) {
             {
               name: `ergonomics-r${round}`,
               task: `Agent-ergonomics reviewer round ${round}. Make this maximally intuitive for coding agents.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything that fails that test.\n\ncd ${ctx.cwd}`,
+            },
+            {
+              name: `reality-check-r${round}`,
+              task: `Reality checker round ${round}.\n\n${realityCheckInstructions(state.plan!.goal, state.plan!.steps, state.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
             },
           ];
 
