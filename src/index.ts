@@ -763,7 +763,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `## 🔍 Task Polishing — Plan Space Review\n\n${taskList}\n\n---\n\nCheck over each task super carefully — are you sure it makes sense? Is it optimal? Could we change anything to make the system work better for users? It's a lot easier and faster to operate in "plan space" before we start implementing!\n\nIf any tasks need revision, call \`orch_plan\` again with the revised steps. If everything looks good, call \`orch_plan\` again with the same steps to proceed.`,
+              text: `## 🔍 Task Polishing — Plan Space Review${sophiaInfo}\n\n${taskList}\n\n---\n\nCheck over each task super carefully — are you sure it makes sense? Is it optimal? Could we change anything to make the system work better for users? It's a lot easier and faster to operate in "plan space" before we start implementing!\n\nIf any tasks need revision, call \`orch_plan\` again with the revised steps (sophia tasks will be recreated). If everything looks good, call \`orch_plan\` again with the same steps to proceed.`,
             },
           ],
           details: { approved: true, plan, polishing: true, sophiaCR: sophiaCRResult?.cr },
