@@ -976,7 +976,6 @@ export default function (pi: ExtensionAPI) {
         const gates = [
           { emoji: "🔍", label: "Fresh self-review", desc: "read all new code with fresh eyes" },
           { emoji: "👥", label: "Peer review", desc: "parallel agents review each other's work" },
-          { emoji: "🔥", label: "Hit me", desc: "spawn 4 parallel review agents" },
           { emoji: "🧪", label: "Test coverage", desc: "check unit tests + e2e, create tasks for gaps" },
           { emoji: "📦", label: "Commit", desc: "logical groupings with detailed messages" },
           { emoji: "🚀", label: "Ship it", desc: "commit, tag, release, deploy, monitor CI" },
@@ -1030,15 +1029,23 @@ export default function (pi: ExtensionAPI) {
         }
 
         if (chosen.startsWith("👥")) {
-          // Peer review — parallel agents review code written by other agents
+          // Peer review — 4 parallel agents with different review angles
           const peerAgents = [
             {
-              name: `peer-reviewer-a-r${round}`,
-              task: `You are a peer reviewer (round ${round}). Review the code written by your fellow agents. Check for any issues, bugs, errors, problems, inefficiencies, security problems, reliability issues, etc. Carefully diagnose their underlying root causes using first-principle analysis and then fix or revise them if necessary. Don't restrict yourself to the latest commits — cast a wider net and go super deep!\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nMake fixes directly.\n\ncd ${ctx.cwd}`,
+              name: `peer-bugs-r${round}`,
+              task: `Peer reviewer (round ${round}). Review code written by your fellow agents. Check for issues, bugs, errors, inefficiencies, security problems, reliability issues. Diagnose root causes using first-principle analysis. Don't restrict to latest commits — cast a wider net and go super deep!\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nMake fixes directly.\n\ncd ${ctx.cwd}`,
             },
             {
-              name: `peer-reviewer-b-r${round}`,
-              task: `You are a peer reviewer (round ${round}). Review the code written by your fellow agents. Focus on: architectural coherence, naming consistency, error handling completeness, and whether the implementation actually achieves the stated goal. Diagnose root causes, not symptoms.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nMake fixes directly.\n\ncd ${ctx.cwd}`,
+              name: `peer-polish-r${round}`,
+              task: `Polish reviewer (round ${round}). De-slopify the code. Remove AI slop, improve clarity, make it agent-friendly.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly.\n\ncd ${ctx.cwd}`,
+            },
+            {
+              name: `peer-ergonomics-r${round}`,
+              task: `Ergonomics reviewer (round ${round}). If you came in fresh with zero context, would you understand this code? Fix anything confusing.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nMake fixes directly.\n\ncd ${ctx.cwd}`,
+            },
+            {
+              name: `peer-reality-r${round}`,
+              task: `Reality checker (round ${round}).\n\n${realityCheckInstructions(state.plan.goal, state.plan.steps, state.stepResults)}\n\nDo NOT edit code. Just report findings.\n\ncd ${ctx.cwd}`,
             },
           ];
           const peerJson = JSON.stringify({ agents: peerAgents }, null, 2);
@@ -1046,7 +1053,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `## 👥 Peer Review — Round ${round}\n\nSpawning 2 parallel peer reviewers to review code written by other agents:\n- **peer-reviewer-a**: bugs, security, reliability, root-cause analysis\n- **peer-reviewer-b**: architecture, naming, error handling, goal alignment\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter both complete, present findings and apply fixes. Then **commit**: based on your knowledge of the project, commit all changed files in a series of logically connected groupings with super detailed commit messages for each and then push. Take your time to do it right. Don't edit the code at all. Don't commit obviously ephemeral files.\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+                text: `## 👥 Peer Review — Round ${round}\n\nSpawning 4 parallel reviewers:\n- **bugs**: root-cause analysis, security, reliability\n- **polish**: de-slopify, clarity\n- **ergonomics**: agent-friendliness\n- **reality-check**: are we on track?\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then **commit**: commit all changed files in logically connected groupings with super detailed messages and push. Don't edit code during commit. Don't commit ephemeral files.\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
               },
             ],
             details: { iterating: true, round, peerReview: true },
