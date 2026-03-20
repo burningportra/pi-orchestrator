@@ -485,20 +485,47 @@ export default function (pi: ExtensionAPI) {
         const profileSummary = formatRepoProfile(state.repoProfile!);
         const planPrompt = `Create a detailed step-by-step plan (3-7 steps) for this goal.\n\n## Goal\n${goal}\n\n## Repo\n${profileSummary}\n\n## Constraints\n${state.constraints.length > 0 ? state.constraints.join(", ") : "None"}\n\nReturn your plan as a numbered list with: step description, acceptance criteria, and files to modify. Be specific and opinionated.`;
 
-        const agentConfigs = [
+        // Detect available models — prefer different providers for true diversity
+        const available = ctx.modelRegistry.getAvailable();
+        const findModel = (keywords: string[]): string | undefined => {
+          for (const kw of keywords) {
+            const m = available.find(
+              (m) => m.id.toLowerCase().includes(kw) || m.name.toLowerCase().includes(kw)
+            );
+            if (m) return `${m.provider}/${m.id}`;
+          }
+          return undefined;
+        };
+
+        const geminiModel = findModel(["gemini-2.5-pro", "gemini-pro", "gemini"]);
+        const gptModel = findModel(["gpt-4.1", "o4-mini", "o3", "gpt-4o", "gpt-4"]);
+        const claudeModel = findModel(["opus", "sonnet"]);
+
+        const models = [geminiModel, gptModel, claudeModel].filter(Boolean);
+        const hasMultipleProviders = models.length >= 2;
+
+        type AgentConfig = { name: string; task: string; model?: string };
+        const agentConfigs: AgentConfig[] = [
           {
             name: "planner-alpha",
             task: `You are Planner Alpha. ${planPrompt}\n\nFocus on: correctness, minimal scope, and clean architecture.\n\ncd ${ctx.cwd}`,
+            ...(hasMultipleProviders && geminiModel ? { model: geminiModel } : {}),
           },
           {
             name: "planner-beta",
             task: `You are Planner Beta. ${planPrompt}\n\nFocus on: robustness, edge cases, and testing strategy.\n\ncd ${ctx.cwd}`,
+            ...(hasMultipleProviders && gptModel ? { model: gptModel } : {}),
           },
           {
             name: "planner-gamma",
             task: `You are Planner Gamma. ${planPrompt}\n\nFocus on: developer experience, ergonomics, and future extensibility.\n\ncd ${ctx.cwd}`,
+            ...(hasMultipleProviders && claudeModel ? { model: claudeModel } : {}),
           },
         ];
+
+        const modelInfo = hasMultipleProviders
+          ? `\n\nUsing different models for true diversity:\n${agentConfigs.map((a) => `- **${a.name}**: ${(a as any).model ?? "default"}`).join("\n")}`
+          : "\n\n(Single provider available — using same model with different focus prompts)";
 
         const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
 
@@ -509,7 +536,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n## 🧠 Deep Planning — 3 Competing Plans\n\nSpawning 3 parallel planning agents with different focuses:\n- **Alpha**: correctness, minimal scope, clean architecture\n- **Beta**: robustness, edge cases, testing\n- **Gamma**: DX, ergonomics, extensibility\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all 3 complete, **synthesize the best ideas from all plans** into one superior hybrid. Be intellectually honest about what each planner did better. Then call \`orch_plan\` with the synthesized plan.`,
+              text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n## 🧠 Deep Planning — 3 Competing Plans${modelInfo}\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all 3 complete, **synthesize the best ideas from all plans** into one superior "best of all worlds" hybrid. Be intellectually honest about what each planner did better than the others. Blend the strongest ideas from every plan. Then call \`orch_plan\` with the synthesized plan.`,
             },
           ],
           details: { selected: true, goal, constraints: state.constraints, deepPlan: true },
