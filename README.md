@@ -10,11 +10,13 @@ Type `/orchestrate` in any repo → it scans the codebase → proposes improveme
 /orchestrate
   │
   ├─► orch_profile     — Scan repo + load compound memory from prior runs
-  │     └─ Discovery mode: 📋 Standard or 🚀 Creative (think 100, tell me 7 best)
+  │     └─ Discovery mode: 📋 Standard or 🚀 Creative or ✏️ Enter own goal
+  │           └─ ✏️ triggers Goal Refinement questionnaire (see below)
   │
   ├─► orch_discover    — LLM generates 3–7 ideas (minimum enforced)
   │
   ├─► orch_select      — User picks idea + planning mode:
+  │     │                  └─ ✏️ custom goal also triggers Goal Refinement
   │     │
   │     ├─ 📋 Standard    → single plan
   │     └─ 🧠 Deep plan   → pick 3 models → competing plans → synthesis
@@ -72,6 +74,23 @@ When you select "🧠 Deep plan":
 4. **🚀 Creative brainstorm** (optional): 3 parallel brainstorm agents (innovator / hardener / simplifier) each think of 100 ideas, output top 3-5 with +EV justification. User picks which to include.
 
 Agents get read-only tools and can't call `orch_*` tools.
+
+## Goal Refinement (Custom Goals)
+
+When you enter your own goal (via ✏️ in either discovery or idea selection), the orchestrator doesn't just take your one-liner — it asks follow-up questions first:
+
+```
+"Add rate limiting" → LLM generates contextual questions → questionnaire TUI → enriched goal
+```
+
+1. **LLM generates 3–5 questions** based on your goal + repo profile (not generic — references actual languages, frameworks, file structure)
+2. **Interactive questionnaire** with tab navigation, pre-built options, and freeform input
+3. **One question always asks about constraints/non-goals** — what you don't want changed
+4. **Adaptive depth** — specific goals get fewer questions, vague goals get more
+5. **Synthesizes into structured goal** with sections: Goal, Scope, Constraints, Non-Goals, Success Criteria, Implementation Notes
+6. **Confirmation step** — review the enriched goal before planning (Y / edit / skip)
+
+**Graceful degradation**: LLM timeout, bad JSON, user cancel → falls back to the raw goal. The questionnaire is an enrichment layer, not a gate.
 
 ## Plan Approval & Task Polishing
 
@@ -171,6 +190,7 @@ The system compounds knowledge — each run benefits from prior learnings.
 
 | Function | Pattern | Used |
 |----------|---------|------|
+| `goalRefinementPrompt` | Context-aware clarifying questions as JSON | Goal refinement |
 | `synthesisInstructions` | "Best of all worlds" multi-model synthesis | Deep plan |
 | `adversarialReviewInstructions` | "Fresh eyes, fix what you find" | Per-step review |
 | `realityCheckInstructions` | "Do we actually have the thing?" | Peer review |
@@ -202,15 +222,17 @@ The system compounds knowledge — each run benefits from prior learnings.
 
 ```
 src/
-├── index.ts      # Extension: 5 tools, commands, state machine
-├── profiler.ts   # Repo scanning (find, git, grep) + detection
-├── prompts.ts    # Flywheel-derived prompt templates
-├── sophia.ts     # Sophia CLI wrapper + dependency analysis + merge
-├── types.ts      # TypeScript types: state, plans, reviews
-├── worktree.ts   # WorktreePool + autoCommitWorktree
-├── tender.ts     # SwarmTender: agent health + conflict detection
-├── memory.ts     # Compound memory: read/append .pi-orchestrator/memory.md
-└── deep-plan.ts  # Direct pi CLI spawning (unused, kept for reference)
+├── index.ts               # Extension: 5 tools, commands, state machine
+├── goal-refinement.ts     # Goal refinement: questionnaire TUI + synthesis
+├── goal-refinement.test.ts # Tests for goal refinement (30 tests)
+├── profiler.ts            # Repo scanning (find, git, grep) + detection
+├── prompts.ts             # Flywheel-derived prompt templates
+├── sophia.ts              # Sophia CLI wrapper + dependency analysis + merge
+├── types.ts               # TypeScript types: state, plans, reviews
+├── worktree.ts            # WorktreePool + autoCommitWorktree
+├── tender.ts              # SwarmTender: agent health + conflict detection
+├── memory.ts              # Compound memory: read/append .pi-orchestrator/memory.md
+└── deep-plan.ts           # Direct pi CLI spawning (unused, kept for reference)
 ```
 
 ## Extending
@@ -223,7 +245,7 @@ src/
 ## Known Limitations
 
 - **Gemini + extensions**: Gemini API rejects `patternProperties` in tool schemas from other extensions
-- **No tests**: core logic needs vitest coverage
+- **Limited test coverage**: goal refinement has 30 tests, other modules need coverage
 - **Worktree merge conflicts**: detected but not auto-resolved
 - **Sub-agent output capture**: some models exit without summary (Gemini particularly)
 - **dependsOn is LLM-declared**: the model can forget to set it
