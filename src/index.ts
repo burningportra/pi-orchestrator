@@ -1095,26 +1095,12 @@ export default function (pi: ExtensionAPI) {
 
       state.plan = plan;
       state.currentStepIndex = 1;
-      setPhase("implementing", ctx);
+      setPhase("awaiting_plan_approval", ctx);
       persistState();
 
-      // Create Sophia CR if available
-      let sophiaInfo = "";
-      if (hasSophia) {
-        const available = await isSophiaAvailable(pi, ctx.cwd);
-        const initialized = available && await isSophiaInitialized(pi, ctx.cwd);
-        if (initialized) {
-          const crResult = await createCRFromPlan(
-            pi, ctx.cwd, plan.goal, plan.steps, plan.constraints
-          );
-          if (crResult.ok && crResult.data) {
-            sophiaCRResult = crResult.data;
-            sophiaInfo = `\n\n**Sophia CR #${crResult.data.cr.id}** created on branch \`${crResult.data.cr.branch}\` with ${crResult.data.taskIds.size} tasks.`;
-          }
-        }
-      }
-
-      // Polish tasks in plan space — loop until user is satisfied
+      // Polish tasks in plan space BEFORE creating sophia tasks
+      // This way, if the user sends back for revision and the LLM calls
+      // orch_plan again, we haven't created orphaned CRs/tasks yet.
       let polishing = true;
       while (polishing) {
         const taskList = plan.steps
@@ -1122,7 +1108,7 @@ export default function (pi: ExtensionAPI) {
           .join("\n\n");
 
         const polishChoice = await ctx.ui.select(
-          `${plan.steps.length} tasks ready.${sophiaInfo}\n\n${taskList}`,
+          `${plan.steps.length} tasks ready.\n\n${taskList}`,
           [
             "▶️  Start implementing",
             "🔍 Polish — send tasks back for LLM review",
@@ -1132,14 +1118,15 @@ export default function (pi: ExtensionAPI) {
 
         if (polishChoice?.startsWith("🔍")) {
           // Return to LLM for revision — it will call orch_plan again
+          // No sophia CR created yet, so no orphans
           return {
             content: [
               {
                 type: "text",
-                text: `**NEXT: Review the tasks below, revise them, and call \`orch_plan\` again with updated steps NOW.**\n\n## 🔍 Task Polishing${sophiaInfo}\n\n${taskList}\n\n---\n\nCheck over each task super carefully — are you sure it makes sense? Is it optimal? Could we change anything to make the system work better for users? If so, revise the task. It's a lot easier and faster to operate in "plan space" before we start implementing these things! Use /effort max.`,
+                text: `**NEXT: Review the tasks below, revise them, and call \`orch_plan\` again with updated steps NOW.**\n\n## 🔍 Task Polishing\n\n${taskList}\n\n---\n\nCheck over each task super carefully — are you sure it makes sense? Is it optimal? Could we change anything to make the system work better for users? If so, revise the task. It's a lot easier and faster to operate in "plan space" before we start implementing these things! Use /effort max.`,
               },
             ],
-            details: { approved: true, plan, polishing: true, sophiaCR: sophiaCRResult?.cr },
+            details: { approved: true, plan, polishing: true },
           };
         }
 
@@ -1156,6 +1143,28 @@ export default function (pi: ExtensionAPI) {
         // "▶️ Start implementing" — break out of polish loop
         polishing = false;
       }
+
+      // Now that polishing is done and user committed to implementing,
+      // create Sophia CR with the FINAL plan steps
+      let sophiaInfo = "";
+      if (hasSophia) {
+        const available = await isSophiaAvailable(pi, ctx.cwd);
+        const initialized = available && await isSophiaInitialized(pi, ctx.cwd);
+        if (initialized) {
+          const crResult = await createCRFromPlan(
+            pi, ctx.cwd, plan.goal, plan.steps, plan.constraints
+          );
+          if (crResult.ok && crResult.data) {
+            sophiaCRResult = crResult.data;
+            sophiaInfo = `\n\n**Sophia CR #${crResult.data.cr.id}** created on branch \`${crResult.data.cr.branch}\` with ${crResult.data.taskIds.size} tasks.`;
+          } else {
+            sophiaInfo = `\n\n⚠️ Sophia CR creation failed: ${crResult.error}`;
+          }
+        }
+      }
+
+      setPhase("implementing", ctx);
+      persistState();
 
       // Analyze parallel groups
       const analysis = analyzeParallelGroups(plan.steps);
