@@ -492,6 +492,11 @@ export default function (pi: ExtensionAPI) {
 
       const profile = await profileRepo(pi, ctx.cwd, signal);
       state.repoProfile = profile;
+
+      // Detect sophia availability
+      const sophiaAvail = await isSophiaAvailable(pi, ctx.cwd);
+      const sophiaInit = sophiaAvail && await isSophiaInitialized(pi, ctx.cwd);
+      hasSophia = sophiaInit ?? false;
       persistState();
 
       setPhase("discovering", ctx);
