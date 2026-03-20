@@ -146,9 +146,18 @@ ${constraints.length > 0 ? constraints.map((c) => `- ${c}`).join("\n") : "None s
 - Treat user implementation suggestions as soft constraints; justify if you deviate
 - Order steps logically (foundations first, integration last)
 
+## Step Dependencies (dependsOn)
+By default, steps run sequentially (each depends on the previous).
+Use \`dependsOn\` to control parallelism:
+- **Omit dependsOn**: step depends on the previous step (sequential, the default)
+- **dependsOn: []**: step is independent and can run in parallel with others
+- **dependsOn: [1, 3]**: step depends on specific steps 1 and 3
+
+**Self-check**: if your step description says "after", "once", "then", or "when step N is done", you probably need explicit dependsOn.
+
 Return a structured plan with:
 - **goal**: restated goal
-- **steps**: array of { index, description, acceptanceCriteria[], artifacts[] }`;
+- **steps**: array of { index, description, acceptanceCriteria[], artifacts[], dependsOn? }`;
 }
 
 // ─── Deep Planning Synthesis Prompt ──────────────────────────

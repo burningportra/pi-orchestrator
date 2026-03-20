@@ -642,6 +642,9 @@ export default function (pi: ExtensionAPI) {
           artifacts: Type.Array(Type.String(), {
             description: "files to create or modify",
           }),
+          dependsOn: Type.Optional(Type.Array(Type.Number(), {
+            description: "step indices this step depends on. Omit for sequential (depends on previous). Use [] for independent (can parallelize). Use [1,3] for explicit deps.",
+          })),
         }),
         { description: "3-7 ordered steps" }
       ),
@@ -662,7 +665,7 @@ export default function (pi: ExtensionAPI) {
       const planText = plan.steps
         .map(
           (s) =>
-            `${s.index}. ${s.description}\n   ✓ ${s.acceptanceCriteria.join("\n   ✓ ")}\n   📄 ${s.artifacts.join(", ")}`
+            `${s.index}. ${s.description}\n   ✓ ${s.acceptanceCriteria.join("\n   ✓ ")}\n   📄 ${s.artifacts.join(", ")}${s.dependsOn !== undefined ? (s.dependsOn.length === 0 ? "\n   ⚡ independent" : `\n   🔗 depends on: ${s.dependsOn.join(", ")}`) : ""}`
         )
         .join("\n\n");
 
