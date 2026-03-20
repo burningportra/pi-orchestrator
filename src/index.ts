@@ -328,18 +328,88 @@ export default function (pi: ExtensionAPI) {
             details: { profile },
           };
         }
-        // Skip discovery entirely — go straight to planning
+        // Skip discovery — but still ask constraints and planning mode
         state.selectedGoal = customGoal;
         state.candidateIdeas = [];
+        persistState();
+
+        // Constraints
+        const constraintInput = await ctx.ui.input(
+          "Any constraints? (comma-separated, or leave empty)",
+          "e.g., no new dependencies, keep backward compat"
+        );
+        state.constraints = constraintInput
+          ? constraintInput.split(",").map((c: string) => c.trim()).filter(Boolean)
+          : [];
+
+        // Planning mode
+        const planMode = await ctx.ui.select(
+          "Planning mode:",
+          [
+            "📋 Standard — single plan",
+            "🧠 Deep plan — 3 competing agents → best-of-all-worlds synthesis",
+          ]
+        );
+
+        const isDeepPlan = planMode?.startsWith("🧠");
+        const instructions = plannerInstructions(customGoal, profile, state.constraints);
+
+        if (isDeepPlan) {
+          const profileSummary = formatRepoProfile(profile);
+          const planPrompt = `Create a detailed step-by-step plan (3-7 steps) for this goal.\n\n## Goal\n${customGoal}\n\n## Repo\n${profileSummary}\n\n## Constraints\n${state.constraints.length > 0 ? state.constraints.join(", ") : "None"}\n\n**IMPORTANT: Output your plan as plain text. Do NOT call any orch_ tools (orch_plan, orch_select, etc). Do NOT try to implement anything. Just write the plan and summarize it.**\n\nReturn your plan as a numbered list with: step description, acceptance criteria, and files to modify. Be specific and opinionated.`;
+
+          // Let user pick 3 models
+          const available = ctx.modelRegistry.getAvailable();
+          const modelOptions = available
+            .sort((a: any, b: any) => b.contextWindow - a.contextWindow)
+            .map((m: any) => {
+              const ctx_k = m.contextWindow >= 1000000
+                ? `${(m.contextWindow / 1000000).toFixed(1)}M`
+                : `${Math.round(m.contextWindow / 1000)}K`;
+              const r = m.reasoning ? "🧠" : "";
+              return `${m.provider}/${m.id} (${ctx_k}${r})`;
+            });
+
+          const labels = ["Alpha (correctness)", "Beta (robustness)", "Gamma (ergonomics)"];
+          const pickedModels: (string | undefined)[] = [];
+          for (const label of labels) {
+            const choice = await ctx.ui.select(`Pick model for Planner ${label}:`, modelOptions);
+            pickedModels.push(choice ? choice.split(" (")[0] : undefined);
+          }
+
+          type PlanAgent = { name: string; task: string; model?: string; tools?: string };
+          const agentConfigs: PlanAgent[] = [
+            { name: "planner-alpha", task: `You are Planner Alpha. ${planPrompt}\n\nFocus on: correctness, minimal scope, and clean architecture.\n\ncd ${ctx.cwd}`, tools: "read,bash,grep,find,ls", ...(pickedModels[0] ? { model: pickedModels[0] } : {}) },
+            { name: "planner-beta", task: `You are Planner Beta. ${planPrompt}\n\nFocus on: robustness, edge cases, and testing strategy.\n\ncd ${ctx.cwd}`, tools: "read,bash,grep,find,ls", ...(pickedModels[1] ? { model: pickedModels[1] } : {}) },
+            { name: "planner-gamma", task: `You are Planner Gamma. ${planPrompt}\n\nFocus on: developer experience, ergonomics, and future extensibility.\n\ncd ${ctx.cwd}`, tools: "read,bash,grep,find,ls", ...(pickedModels[2] ? { model: pickedModels[2] } : {}) },
+          ];
+
+          const modelInfo = `\n\nModels selected:\n${agentConfigs.map((a) => `- **${a.name}**: ${a.model ?? "default"}`).join("\n")}`;
+          const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+
+          setPhase("planning", ctx);
+          persistState();
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Goal: "${customGoal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n## 🧠 Deep Planning — 3 Competing Plans${modelInfo}\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all 3 complete, **synthesize the best ideas from all plans** into one superior "best of all worlds" hybrid. Be intellectually honest about what each planner did better. Then call \`orch_plan\` with the synthesized plan.`,
+              },
+            ],
+            details: { profile, customGoal, deepPlan: true },
+          };
+        }
+
+        // Standard plan
         setPhase("planning", ctx);
         persistState();
 
-        const instructions = plannerInstructions(customGoal, profile, []);
         return {
           content: [
             {
               type: "text",
-              text: `Repository profiled successfully.\n\n${formatted}${memoryContext}\n\nGoal: "${customGoal}"\n\n---\nNext: Call \`orch_plan\` with a structured plan.\n\n${instructions}`,
+              text: `Repository profiled successfully.\n\n${formatted}${memoryContext}\n\nGoal: "${customGoal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\nNext: Call \`orch_plan\` with a structured plan.\n\n${instructions}`,
             },
           ],
           details: { profile, customGoal },
