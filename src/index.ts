@@ -518,7 +518,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `Repository profiled successfully.\n\n${formatted}${memoryContext}\n\nGoal: "${goal}"\n\n---\nNext: Call \`orch_plan\` with a structured plan.\n\n${instructions}`,
+              text: `**NEXT: Call \`orch_plan\` with a structured plan NOW.**\n\nGoal: "${goal}"\n\n---\n\nRepository profiled successfully.\n\n${formatted}${memoryContext}\n\n${instructions}`,
             },
           ],
           details: { profile, customGoal: goal },
@@ -527,14 +527,14 @@ export default function (pi: ExtensionAPI) {
 
       const isCreative = discoveryMode?.startsWith("🚀");
       const discoveryPrompt = isCreative
-        ? `**🚀 Creative Discovery Mode**\n\nCome up with your top 7 most brilliant ideas for adding extremely powerful and cool functionality that will make this system far more compelling, useful, intuitive, versatile, powerful, robust, and reliable for users. Be pragmatic — don't suggest features that are extremely hard to implement or not worth the complexity. But I don't want you to just think of 7 ideas: seriously think hard, come up with ONE HUNDRED ideas internally, then only tell me your 7 VERY BEST and most brilliant, clever, and radically innovative ideas.\n\nCall \`orch_discover\` with your top 7.`
-        : `Next: Call \`orch_discover\` to generate project ideas based on this profile.`;
+        ? `**NEXT: Call \`orch_discover\` with your top 7 ideas NOW.**\n\n🚀 Creative Discovery Mode: Come up with your top 7 most brilliant ideas for adding extremely powerful and cool functionality that will make this system far more compelling, useful, intuitive, versatile, powerful, robust, and reliable for users. Be pragmatic — don't suggest features that are extremely hard to implement or not worth the complexity. But I don't want you to just think of 7 ideas: seriously think hard, come up with ONE HUNDRED ideas internally, then only tell me your 7 VERY BEST and most brilliant, clever, and radically innovative ideas.`
+        : `**NEXT: Call \`orch_discover\` to generate project ideas NOW.**`;
 
       return {
         content: [
           {
             type: "text",
-            text: `Repository profiled successfully.\n\n${formatted}${memoryContext}\n\n---\n${discoveryPrompt}`,
+            text: `${discoveryPrompt}\n\n---\n\nRepository profiled successfully.\n\n${formatted}${memoryContext}`,
           },
         ],
         details: { profile },
@@ -611,7 +611,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `Generated ${state.candidateIdeas.length} project ideas:\n\n${ideaList}\n\n---\nNext: Call \`orch_select\` to present these to the user for selection.`,
+            text: `**NEXT: Call \`orch_select\` NOW to present these to the user.**\n\n---\n\nGenerated ${state.candidateIdeas.length} project ideas:\n\n${ideaList}`,
           },
         ],
         details: { ideas: state.candidateIdeas },
@@ -845,7 +845,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\nNext: Call \`orch_plan\` with a structured plan.\n\n${instructions}`,
+            text: `**NEXT: Call \`orch_plan\` with a structured plan NOW.**\n\nGoal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n\n${instructions}`,
           },
         ],
         details: { selected: true, goal, constraints: state.constraints },
@@ -1275,12 +1275,13 @@ export default function (pi: ExtensionAPI) {
           task: `Reality checker (round ${round}).\n\n${realityCheckInstructions(st.plan!.goal, st.plan!.steps, st.stepResults)}\n\nDo NOT edit code. Just report findings.\n\ncd ${ctx.cwd}`,
         },
       ];
-      const peerJson = JSON.stringify({ agents: peerAgents }, null, 2);
+      // Spawn peer review agents inline (don't rely on agent to call parallel_subagents)
+      const combinedPeerOutput = await runHitMeAgents(peerAgents, ctx.cwd, ctx);
       return {
         content: [
           {
             type: "text",
-            text: `## 👥 Peer Review — Round ${round}\n\nSpawning 4 parallel reviewers:\n- **bugs**: root-cause analysis, security, reliability\n- **polish**: de-slopify, clarity\n- **ergonomics**: agent-friendliness\n- **reality-check**: are we on track?\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes.${callbackHint}`,
+            text: `## 👥 Peer Review — Round ${round}\n\n${combinedPeerOutput}\n\n---\n\n**NEXT: Review the findings above. Fix any issues, then call \`orch_review\` with stepIndex ${stepCount + 1} and verdict "pass".**`,
           },
         ],
         details: { iterating: true, round, peerReview: true },
