@@ -335,7 +335,7 @@ export default function (pi: ExtensionAPI) {
           effort: StringEnum(["low", "medium", "high"] as const),
           impact: StringEnum(["low", "medium", "high"] as const),
         }),
-        { description: "3-7 project ideas based on the repo profile" }
+        { description: "3-7 project ideas based on the repo profile", minItems: 3, maxItems: 7 }
       ),
     }),
 
