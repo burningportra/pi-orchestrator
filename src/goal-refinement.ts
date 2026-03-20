@@ -12,6 +12,9 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Editor, type EditorTheme, Key, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import { writeFileSync, mkdirSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import type { RepoProfile } from "./types.js";
 import { goalRefinementPrompt } from "./prompts.js";
 
@@ -435,9 +438,15 @@ export async function runGoalRefinement(
   };
 
   // 1. Generate questions via LLM
+  // Write prompt to temp file to avoid shell escaping issues and argument length limits
+  // (same pattern as deep-plan.ts)
   let questions: RefinementQuestion[];
   try {
     const prompt = goalRefinementPrompt(rawGoal, profile);
+    const promptDir = join(tmpdir(), `pi-goal-refinement-${Date.now()}`);
+    mkdirSync(promptDir, { recursive: true });
+    const promptFile = join(promptDir, "prompt.md");
+    writeFileSync(promptFile, prompt, "utf8");
 
     const result = await pi.exec(
       "pi",
@@ -447,7 +456,7 @@ export async function runGoalRefinement(
         "--no-skills",
         "--no-prompt-templates",
         "--tools", "",
-        prompt,
+        `@${promptFile}`,
       ],
       { timeout: 60000, cwd: ctx.cwd }
     );
