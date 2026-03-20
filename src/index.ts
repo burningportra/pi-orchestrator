@@ -343,6 +343,7 @@ export default function (pi: ExtensionAPI) {
         persistState();
 
         const instructions = plannerInstructions(goal, profile, constraints);
+
         return {
           content: [
             {
@@ -1003,6 +1004,187 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // ─── Guided Gates (post-implementation review sequence) ──────
+  // Extracted so both "all steps done" and sentinel re-entry use the same code.
+  // This runs the sequential gate flow: self-review → peer review → test → commit → ship.
+  async function runGuidedGates(
+    st: OrchestratorState,
+    ctx: ExtensionContext,
+    extraInfo: string
+  ): Promise<{ content: { type: "text"; text: string }[]; details: any }> {
+    const allArtifacts = [...new Set(st.plan!.steps.flatMap((s) => s.artifacts))];
+    const polish = polishInstructions(st.plan!.goal, allArtifacts);
+    const summaryText = summaryInstructions(st.plan!.goal, st.plan!.steps, st.stepResults);
+
+    st.iterationRound = (st.iterationRound ?? 0) + 1;
+    const round = st.iterationRound;
+    persistState();
+
+    // Sequential guided flow — resume from saved gate index
+    const gates = [
+      { emoji: "🔍", label: "Fresh self-review", desc: "read all new code with fresh eyes" },
+      { emoji: "👥", label: "Peer review", desc: "parallel agents review each other's work" },
+      { emoji: "🧪", label: "Test coverage", desc: "check unit tests + e2e, create tasks for gaps" },
+      { emoji: "📦", label: "Commit", desc: "logical groupings with detailed messages" },
+      { emoji: "🚀", label: "Ship it", desc: "commit, tag, release, deploy, monitor CI" },
+    ];
+
+    let chosen: string | undefined;
+    const startGate = st.currentGateIndex ?? 0;
+    for (let i = startGate; i < gates.length; i++) {
+      const gate = gates[i];
+      const pick = await ctx.ui.select(
+        `Round ${round} — ${gate.emoji} ${gate.label}`,
+        [
+          `${gate.emoji} ${gate.label} — ${gate.desc}`,
+          "⏭️  Skip",
+          "✅ Done — finish orchestration",
+        ]
+      );
+      if (!pick || pick.startsWith("✅")) {
+        chosen = "✅";
+        break;
+      }
+      if (pick.startsWith("⏭️")) {
+        st.currentGateIndex = i + 1;
+        persistState();
+        continue;
+      }
+      st.currentGateIndex = i + 1;
+      persistState();
+      chosen = pick;
+      break;
+    }
+
+    if (!chosen) chosen = "✅";
+
+    const stepCount = st.plan!.steps.length;
+    const callbackHint = `\n\nAfter completing this, call \`orch_review\` with stepIndex ${stepCount + 1} and verdict "pass" for the next gate.`;
+
+    if (chosen.startsWith("✅")) {
+      orchestratorActive = false;
+      st.currentGateIndex = 0;
+      setPhase("complete", ctx);
+      persistState();
+      return {
+        content: [
+          { type: "text", text: `${summaryText}${extraInfo}\n\nOrchestration complete after ${round} round(s).\n\n---\n## 🧠 Compound Memory\n\nDistill the key decisions, gotchas, patterns, and architectural choices from this orchestration. What would a future agent need to know about this repo? Write 3-7 bullet points and append them to \`.pi-orchestrator/memory.md\` using the write or bash tool. Format as a timestamped markdown section.` },
+        ],
+        details: { complete: true, rounds: round },
+      };
+    }
+
+    if (chosen.startsWith("🔍")) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}${callbackHint}`,
+          },
+        ],
+        details: { iterating: true, round, selfReview: true },
+      };
+    }
+
+    if (chosen.startsWith("👥")) {
+      const peerAgents = [
+        {
+          name: `peer-bugs-r${round}`,
+          task: `Peer reviewer (round ${round}). Review code written by your fellow agents. Check for issues, bugs, errors, inefficiencies, security problems, reliability issues. Diagnose root causes using first-principle analysis. Don't restrict to latest commits — cast a wider net and go super deep!\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nMake fixes directly.\n\ncd ${ctx.cwd}`,
+        },
+        {
+          name: `peer-polish-r${round}`,
+          task: `Polish reviewer (round ${round}). De-slopify the code. Remove AI slop, improve clarity, make it agent-friendly.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly.\n\ncd ${ctx.cwd}`,
+        },
+        {
+          name: `peer-ergonomics-r${round}`,
+          task: `Ergonomics reviewer (round ${round}). If you came in fresh with zero context, would you understand this code? Fix anything confusing.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nMake fixes directly.\n\ncd ${ctx.cwd}`,
+        },
+        {
+          name: `peer-reality-r${round}`,
+          task: `Reality checker (round ${round}).\n\n${realityCheckInstructions(st.plan!.goal, st.plan!.steps, st.stepResults)}\n\nDo NOT edit code. Just report findings.\n\ncd ${ctx.cwd}`,
+        },
+      ];
+      const peerJson = JSON.stringify({ agents: peerAgents }, null, 2);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `## 👥 Peer Review — Round ${round}\n\nSpawning 4 parallel reviewers:\n- **bugs**: root-cause analysis, security, reliability\n- **polish**: de-slopify, clarity\n- **ergonomics**: agent-friendliness\n- **reality-check**: are we on track?\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes.${callbackHint}`,
+          },
+        ],
+        details: { iterating: true, round, peerReview: true },
+      };
+    }
+
+    if (chosen.startsWith("🧪")) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `## 🧪 Test Coverage Check — Round ${round}\n\nDo we have full unit test coverage without using mocks or fake stuff? What about complete e2e integration test scripts with great, detailed logging?\n\nReview the current state:\n- Goal: ${st.plan!.goal}\n- Files: ${allArtifacts.join(", ")}\n\nIf test coverage is incomplete, create a comprehensive and granular set of tasks for all missing tests, with subtasks and dependency structure, with detailed comments so the whole thing is totally self-contained and self-documenting.\n\nFor unit tests: test real behavior, not mocked interfaces. For e2e: full integration scripts with detailed logging at each stage.${callbackHint}`,
+          },
+        ],
+        details: { iterating: true, round, testCoverage: true },
+      };
+    }
+
+    if (chosen.startsWith("📦")) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `## 📦 Commit — Round ${round}\n\nBased on your knowledge of the project, commit all changed files now in a series of logically connected groupings with super detailed commit messages for each. Take your time to do it right.\n\nRules:\n- Group by logical change, NOT by file\n- Each commit should be independently understandable\n- Use conventional commit format: type(scope): description\n- First line ≤ 72 chars, then blank line, then detailed body\n- Body explains WHY, not just WHAT\n- Don't edit the code at all\n- Don't commit obviously ephemeral files\n- Push after committing${callbackHint}`,
+          },
+        ],
+        details: { iterating: true, round, committing: true },
+      };
+    }
+
+    if (chosen.startsWith("🚀")) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `## 🚀 Ship It — Round ${round}\n\nDo all the GitHub stuff:\n1. **Commit** all remaining changes in logical groupings with detailed messages\n2. **Push** to remote\n3. **Create tag** with semantic version bump (based on changes: feat=minor, fix=patch)\n4. **Create GitHub release** with changelog from commits since last tag\n5. **Monitor CI** — check GitHub Actions status, wait for green\n6. **Compute checksums** if there are distributable artifacts\n7. **Bump version** in package.json if applicable\n\nDo each step and report status. If any step fails, stop and report why.${callbackHint}`,
+          },
+        ],
+        details: { iterating: true, round, shipping: true },
+      };
+    }
+
+    // "🔥 Hit me" — spawn 4 parallel review agents
+    const agentConfigs = [
+      {
+        name: `fresh-eyes-r${round}`,
+        task: `Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Give exact file:line fixes.\n\ncd ${ctx.cwd}`,
+      },
+      {
+        name: `polish-r${round}`,
+        task: `Polish/de-slopify reviewer round ${round}.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly — don't just report.\n\ncd ${ctx.cwd}`,
+      },
+      {
+        name: `ergonomics-r${round}`,
+        task: `Agent-ergonomics reviewer round ${round}. Make this maximally intuitive for coding agents.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything that fails that test.\n\ncd ${ctx.cwd}`,
+      },
+      {
+        name: `reality-check-r${round}`,
+        task: `Reality checker round ${round}.\n\n${realityCheckInstructions(st.plan!.goal, st.plan!.steps, st.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+      },
+    ];
+
+    const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+    return {
+      content: [
+        {
+          type: "text",
+          text: `## 🔥 Hit me — Round ${round}\n\nSpawning 4 parallel review agents: fresh-eyes, polish, ergonomics, reality-check.\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes.${callbackHint}`,
+        },
+      ],
+      details: { iterating: true, round, agents: agentConfigs.map((a) => a.name) },
+    };
+  }
+
   // ─── Tool: orch_review ───────────────────────────────────────
   pi.registerTool({
     name: "orch_review",
@@ -1035,182 +1217,7 @@ export default function (pi: ExtensionAPI) {
 
       // Sentinel: any orch_review while iterating = show next gate
       if (state.phase === "iterating" && (!step || params.stepIndex > state.plan.steps.length)) {
-        const allArtifacts = [...new Set(state.plan.steps.flatMap((s) => s.artifacts))];
-        const polish = polishInstructions(state.plan.goal, allArtifacts);
-        const summaryText = summaryInstructions(state.plan.goal, state.plan.steps, state.stepResults);
-
-        state.iterationRound = (state.iterationRound ?? 0) + 1;
-        const round = state.iterationRound;
-        persistState();
-
-        // Sequential guided flow — resume from saved gate index
-        const gates = [
-          { emoji: "🔍", label: "Fresh self-review", desc: "read all new code with fresh eyes" },
-          { emoji: "👥", label: "Peer review", desc: "parallel agents review each other's work" },
-          { emoji: "🧪", label: "Test coverage", desc: "check unit tests + e2e, create tasks for gaps" },
-          { emoji: "📦", label: "Commit", desc: "logical groupings with detailed messages" },
-          { emoji: "🚀", label: "Ship it", desc: "commit, tag, release, deploy, monitor CI" },
-        ];
-
-        let chosen: string | undefined;
-        const startGate = state.currentGateIndex ?? 0;
-        for (let i = startGate; i < gates.length; i++) {
-          const gate = gates[i];
-          const pick = await ctx.ui.select(
-            `Round ${round} — ${gate.emoji} ${gate.label}`,
-            [
-              `${gate.emoji} ${gate.label} — ${gate.desc}`,
-              "⏭️  Skip",
-              "✅ Done — finish orchestration",
-            ]
-          );
-          if (!pick || pick.startsWith("✅")) {
-            chosen = "✅";
-            break;
-          }
-          if (pick.startsWith("⏭️")) {
-            // Advance gate index so next re-entry starts from next gate
-            state.currentGateIndex = i + 1;
-            persistState();
-            continue;
-          }
-          // User picked this gate — advance index for next re-entry
-          state.currentGateIndex = i + 1;
-          persistState();
-          chosen = pick;
-          break;
-        }
-
-        // If we ran through all gates without picking, we're done
-        if (!chosen) chosen = "✅";
-
-        if (!chosen || chosen.startsWith("✅")) {
-          orchestratorActive = false;
-          state.currentGateIndex = 0;
-          setPhase("complete", ctx);
-          persistState();
-          return {
-            content: [
-              { type: "text", text: `${summaryText}\n\nOrchestration complete after ${round} round(s).\n\n---\n## 🧠 Compound Memory\n\nDistill the key decisions, gotchas, patterns, and architectural choices from this orchestration. What would a future agent need to know about this repo? Write 3-7 bullet points and append them to \`.pi-orchestrator/memory.md\` using the write or bash tool. Format as a timestamped markdown section.` },
-            ],
-            details: { complete: true, rounds: round },
-          };
-        }
-
-        if (chosen.startsWith("🔍")) {
-          // Fresh self-review — LLM reviews its own code
-          return {
-            content: [
-              {
-                type: "text",
-                text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}\n\nAfter fixing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next gate.`,
-              },
-            ],
-            details: { iterating: true, round, selfReview: true },
-          };
-        }
-
-        if (chosen.startsWith("👥")) {
-          // Peer review — 4 parallel agents with different review angles
-          const peerAgents = [
-            {
-              name: `peer-bugs-r${round}`,
-              task: `Peer reviewer (round ${round}). Review code written by your fellow agents. Check for issues, bugs, errors, inefficiencies, security problems, reliability issues. Diagnose root causes using first-principle analysis. Don't restrict to latest commits — cast a wider net and go super deep!\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nMake fixes directly.\n\ncd ${ctx.cwd}`,
-            },
-            {
-              name: `peer-polish-r${round}`,
-              task: `Polish reviewer (round ${round}). De-slopify the code. Remove AI slop, improve clarity, make it agent-friendly.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly.\n\ncd ${ctx.cwd}`,
-            },
-            {
-              name: `peer-ergonomics-r${round}`,
-              task: `Ergonomics reviewer (round ${round}). If you came in fresh with zero context, would you understand this code? Fix anything confusing.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nMake fixes directly.\n\ncd ${ctx.cwd}`,
-            },
-            {
-              name: `peer-reality-r${round}`,
-              task: `Reality checker (round ${round}).\n\n${realityCheckInstructions(state.plan.goal, state.plan.steps, state.stepResults)}\n\nDo NOT edit code. Just report findings.\n\ncd ${ctx.cwd}`,
-            },
-          ];
-          const peerJson = JSON.stringify({ agents: peerAgents }, null, 2);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `## 👥 Peer Review — Round ${round}\n\nSpawning 4 parallel reviewers:\n- **bugs**: root-cause analysis, security, reliability\n- **polish**: de-slopify, clarity\n- **ergonomics**: agent-friendliness\n- **reality-check**: are we on track?\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
-              },
-            ],
-            details: { iterating: true, round, peerReview: true },
-          };
-        }
-
-        if (chosen.startsWith("🧪")) {
-          // Test coverage check — assess gaps and create tasks
-          return {
-            content: [
-              {
-                type: "text",
-                text: `## 🧪 Test Coverage Check — Round ${round}\n\nDo we have full unit test coverage without using mocks or fake stuff? What about complete e2e integration test scripts with great, detailed logging?\n\nReview the current state:\n- Goal: ${state.plan.goal}\n- Files: ${allArtifacts.join(", ")}\n\nIf test coverage is incomplete, create a comprehensive and granular set of tasks for all missing tests, with subtasks and dependency structure, with detailed comments so the whole thing is totally self-contained and self-documenting.\n\nFor unit tests: test real behavior, not mocked interfaces. For e2e: full integration scripts with detailed logging at each stage.\n\nAfter assessing (and creating test tasks if needed), call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
-              },
-            ],
-            details: { iterating: true, round, testCoverage: true },
-          };
-        }
-
-        if (chosen.startsWith("📦")) {
-          // Commit with logical groupings
-          return {
-            content: [
-              {
-                type: "text",
-                text: `## 📦 Commit — Round ${round}\n\nBased on your knowledge of the project, commit all changed files now in a series of logically connected groupings with super detailed commit messages for each. Take your time to do it right.\n\nRules:\n- Group by logical change, NOT by file\n- Each commit should be independently understandable\n- Use conventional commit format: type(scope): description\n- First line ≤ 72 chars, then blank line, then detailed body\n- Body explains WHY, not just WHAT\n- Don't edit the code at all\n- Don't commit obviously ephemeral files\n- Push after committing\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
-              },
-            ],
-            details: { iterating: true, round, committing: true },
-          };
-        }
-
-        if (chosen.startsWith("🚀")) {
-          // Ship it — full GitHub workflow
-          return {
-            content: [
-              {
-                type: "text",
-                text: `## 🚀 Ship It — Round ${round}\n\nDo all the GitHub stuff:\n1. **Commit** all remaining changes in logical groupings with detailed messages\n2. **Push** to remote\n3. **Create tag** with semantic version bump (based on changes: feat=minor, fix=patch)\n4. **Create GitHub release** with changelog from commits since last tag\n5. **Monitor CI** — check GitHub Actions status, wait for green\n6. **Compute checksums** if there are distributable artifacts\n7. **Bump version** in package.json if applicable\n\nDo each step and report status. If any step fails, stop and report why.\n\nAfter shipping, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
-              },
-            ],
-            details: { iterating: true, round, shipping: true },
-          };
-        }
-
-        // "🔥 Hit me" — spawn 4 parallel review agents
-        const agentConfigs = [
-          {
-            name: `fresh-eyes-r${round}`,
-            task: `Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Give exact file:line fixes.\n\ncd ${ctx.cwd}`,
-          },
-          {
-            name: `polish-r${round}`,
-            task: `Polish/de-slopify reviewer round ${round}.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly — don't just report.\n\ncd ${ctx.cwd}`,
-          },
-          {
-            name: `ergonomics-r${round}`,
-            task: `Agent-ergonomics reviewer round ${round}. Make this maximally intuitive for coding agents.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything that fails that test.\n\ncd ${ctx.cwd}`,
-          },
-          {
-            name: `reality-check-r${round}`,
-            task: `Reality checker round ${round}.\n\n${realityCheckInstructions(state.plan.goal, state.plan.steps, state.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
-          },
-        ];
-
-        const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `## 🔥 Hit me — Round ${round}\n\nSpawning 4 parallel review agents: fresh-eyes, polish, ergonomics, reality-check.\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
-            },
-          ],
-          details: { iterating: true, round, agents: agentConfigs.map((a) => a.name) },
-        };
+        return await runGuidedGates(state, ctx, "");
       }
 
       if (!step) {
@@ -1303,19 +1310,20 @@ export default function (pi: ExtensionAPI) {
         }
 
         // Track review passes per step using dedicated counter
-        // (not derived from verdicts array — survives regardless of how state is serialized)
         const prevPassCount = state.reviewPassCounts[params.stepIndex] ?? 0;
         state.reviewPassCounts[params.stepIndex] = prevPassCount + 1;
         persistState();
 
         setPhase("reviewing", ctx);
 
-        // After first pass: ask user to hit-me or move on
-        // After hit-me round (prevPassCount > 0): auto-advance — agents already reviewed
+        // Only auto-advance if hit-me was previously triggered for this step.
+        // Without this check, an agent can bypass hit-me by calling orch_review
+        // twice — the second call would see prevPassCount > 0 and skip.
+        const hitMeWasTriggered = state.hitMeTriggered?.[params.stepIndex] ?? false;
         const allArtifactsForStep = step.artifacts;
         let hitMeChoice: string | undefined;
-        if (prevPassCount === 0) {
-          // First review pass — user decides
+        if (!hitMeWasTriggered) {
+          // No hit-me agents have run yet — user decides
           hitMeChoice = await ctx.ui.select(
             `✅ Step ${params.stepIndex} passed self-review.`,
             [
@@ -1326,10 +1334,18 @@ export default function (pi: ExtensionAPI) {
         } else {
           // Returning from a hit-me round — auto-advance
           hitMeChoice = "✅";
+          // Reset flag so hit-me can be triggered again if needed
+          state.hitMeTriggered[params.stepIndex] = false;
+          persistState();
           ctx.ui.notify(`✅ Step ${params.stepIndex} passed review (round ${prevPassCount}).`, "info");
         }
 
         if (hitMeChoice?.startsWith("🔥")) {
+          // Mark that hit-me was triggered so next orch_review auto-advances
+          if (!state.hitMeTriggered) state.hitMeTriggered = {};
+          state.hitMeTriggered[params.stepIndex] = true;
+          persistState();
+
           const round = prevPassCount;
           const stepDesc = step.description.slice(0, 60);
           const agentConfigs = [
@@ -1431,7 +1447,8 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
-        // All steps done — enter guided review gates
+        // All steps done — enter guided review gates directly
+        // (don't ask the agent to make another orch_review call — it may not follow through)
         {
           // Run sophia validate/review if available
           let sophiaReviewInfo = "";
@@ -1441,12 +1458,6 @@ export default function (pi: ExtensionAPI) {
             const revResult = await reviewCR(pi, ctx.cwd, sophiaCRResult.cr.id);
             sophiaReviewInfo = `\n\n**Sophia validation:** ${valResult.ok ? "✅ passed" : `⚠️ ${valResult.error}`}\n**Sophia review:** ${revResult.ok ? "✅ passed" : `⚠️ ${revResult.error}`}`;
           }
-
-          const summary = summaryInstructions(
-            state.plan.goal,
-            state.plan.steps,
-            state.stepResults
-          );
 
           // Clean up worktrees and tender
           if (worktreePool) {
@@ -1464,16 +1475,9 @@ export default function (pi: ExtensionAPI) {
           state.currentGateIndex = 0;
           persistState();
 
-          // Redirect to sentinel handler for unified guided gate flow
-          return {
-            content: [
-              {
-                type: "text",
-                text: `${summary}${sophiaReviewInfo}\n\n🎉 All ${state.plan.steps.length} steps completed! Now entering post-implementation review gates.\n\nCall \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" to start the guided review sequence.`,
-              },
-            ],
-            details: { review, iterating: true },
-          };
+          // Fall through directly into the guided gate flow
+          // (reuse the sentinel handler inline instead of asking agent to call back)
+          return await runGuidedGates(state, ctx, sophiaReviewInfo);
         }
       } else {
         // Failed — retry
