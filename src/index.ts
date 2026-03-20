@@ -1401,53 +1401,22 @@ export default function (pi: ExtensionAPI) {
       if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
           }
 
-          ctx.ui.notify("🔄 All steps done — post-implementation review", "info");
+          ctx.ui.notify("🔄 All steps done — entering review gates", "info");
           setPhase("iterating", ctx);
+          // Set iteration round to 0 so the sentinel handler starts at round 1
+          state.iterationRound = 0;
           persistState();
 
-          // Sequential post-implementation gates
-          // Gate 1: Fresh self-review (the implementing agent reviews its own work)
-          const selfReviewChoice = await ctx.ui.select(
-            `🎉 All ${state.plan.steps.length} steps completed!${sophiaReviewInfo}`,
-            [
-              "🔍 Fresh self-review — read over all new code with fresh eyes",
-              "⏭️  Skip to peer review",
-              "✅ Done — finish orchestration",
-            ]
-          );
-
-          if (!selfReviewChoice || selfReviewChoice.startsWith("✅")) {
-            orchestratorActive = false;
-            setPhase("complete", ctx);
-            persistState();
-            return {
-              content: [{ type: "text", text: `${summary}\n\nOrchestration complete.\n\n---\n## 🧠 Compound Memory\n\nDistill the key decisions, gotchas, patterns, and architectural choices from this orchestration. What would a future agent need to know? Write 3-7 bullet points and append them to \`.pi-orchestrator/memory.md\`.` }],
-              details: { review, complete: true },
-            };
-          }
-
-          if (selfReviewChoice.startsWith("🔍")) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `${summary}\n\n---\n## 🔍 Fresh Self-Review\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}\n\nAfter fixing everything, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" to proceed to peer review.`,
-                },
-              ],
-              details: { review, iterating: true, selfReview: true },
-            };
-          }
-
-          // User picked "skip to peer review" — trigger sentinel re-entry
-          // which will show the full gate menu including peer review
+          // Redirect to the sentinel handler which has the full guided gate sequence.
+          // This ensures first entry and re-entry use the same flow.
           return {
             content: [
               {
                 type: "text",
-                text: `${summary}\n\nSkipping self-review. Call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" to see the review options.`,
+                text: `${summary}${sophiaReviewInfo}\n\n🎉 All ${state.plan.steps.length} steps completed! Now entering post-implementation review gates.\n\nCall \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" to start the guided review sequence.`,
               },
             ],
-            details: { review, iterating: true, skippedSelfReview: true },
+            details: { review, iterating: true },
           };
         }
       } else {
