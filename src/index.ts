@@ -47,6 +47,7 @@ const PHASE_EMOJI: Record<OrchestratorPhase, string> = {
   awaiting_plan_approval: "📋",
   implementing: "🔨",
   reviewing: "🔍",
+  iterating: "🔄",
   complete: "✅",
 };
 
@@ -716,6 +717,27 @@ export default function (pi: ExtensionAPI) {
       }
 
       const step = state.plan.steps.find((s) => s.index === params.stepIndex);
+
+      // Sentinel: stepIndex beyond plan = return to iteration menu
+      if (!step && state.phase === "iterating") {
+        // Re-trigger the iteration menu by sending a follow-up
+        pi.sendUserMessage(
+          "Iteration action complete. The orchestrator will show the next action menu — just call `orch_review` for the last real step to re-enter the loop, or ask me what to do next.",
+          { deliverAs: "followUp" }
+        );
+
+        // Re-show the iteration state
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Iteration action complete.\n\nTo continue iterating, call \`orch_review\` again with stepIndex ${state.plan.steps.length} (the last step) and verdict "pass" to return to the action menu. Or tell the user what you found.`,
+            },
+          ],
+          details: { iterating: true, actionComplete: true },
+        };
+      }
+
       if (!step) {
         throw new Error(`Step ${params.stepIndex} not found in plan.`);
       }
@@ -904,19 +926,65 @@ export default function (pi: ExtensionAPI) {
             worktreePool = undefined;
           }
 
-          ctx.ui.notify("🔍 All steps done — cross-agent review phase", "info");
-          orchestratorActive = false;
-          setPhase("complete", ctx);
+          ctx.ui.notify("🔄 All steps done — entering iteration loop", "info");
+          setPhase("iterating", ctx);
           persistState();
 
+          // Interactive iteration loop — offer actions one at a time
+          const iterationActions = [
+            "🔍 Cross-agent review (spawn independent reviewer)",
+            "✨ Polish pass (de-slopify)",
+            "📝 Commit strategy (logical grouping)",
+            "🧩 Skill extraction check",
+            "🔄 Fresh eyes review (re-check everything)",
+            "💡 Discover more ideas for this repo",
+            "✅ Done — finish orchestration",
+          ];
+
+          const chosen = await ctx.ui.select(
+            `🎉 All ${state.plan.steps.length} steps completed!${sophiaReviewInfo}\n\nWhat next?`,
+            iterationActions
+          );
+
+          if (!chosen || chosen === "✅ Done — finish orchestration") {
+            orchestratorActive = false;
+            setPhase("complete", ctx);
+            persistState();
+            return {
+              content: [
+                { type: "text", text: `${summary}\n\nOrchestration complete.` },
+              ],
+              details: { review, complete: true },
+            };
+          }
+
+          // Map selection to action prompt
+          let actionPrompt: string;
+          if (chosen.startsWith("🔍")) {
+            actionPrompt = `## Cross-Agent Review\n\nSpawn a reviewer sub-agent to audit the full diff:\n\n${crossReview}\n\nAfter the review, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} to return to the iteration menu.`;
+          } else if (chosen.startsWith("✨")) {
+            actionPrompt = `${polish}\n\nAfter polishing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} to return to the iteration menu.`;
+          } else if (chosen.startsWith("📝")) {
+            actionPrompt = `${commits}\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} to return to the iteration menu.`;
+          } else if (chosen.startsWith("🧩")) {
+            actionPrompt = `${skillCheck}\n\nAfter checking, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} to return to the iteration menu.`;
+          } else if (chosen.startsWith("🔄")) {
+            actionPrompt = `## Fresh Eyes Review\n\nCheck over EVERYTHING again with fresh eyes looking for any blunders, mistakes, errors, oversights, omissions, problems, misconceptions, bugs. Make the code maximally intuitive and ergonomic for coding agents to use.\n\nReview all changed files:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}\n\nAfter reviewing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} to return to the iteration menu.`;
+          } else if (chosen.startsWith("💡")) {
+            // Loop back to discovery
+            setPhase("discovering", ctx);
+            persistState();
+            actionPrompt = `The user wants to discover more ideas. Call \`orch_discover\` to generate new project ideas based on the current repo state.`;
+          } else {
+            actionPrompt = summary;
+          }
+
+          // Stay active for iteration
           return {
             content: [
-              {
-                type: "text",
-                text: `🎉 All ${state.plan.steps.length} steps completed!${sophiaReviewInfo}\n\n---\n${summary}\n\n---\n## Cross-Agent Review\n\nSpawn a reviewer sub-agent to audit the full diff:\n\n${crossReview}\n\n---\n## Post-Completion Actions (offer to user)\n\n### 1. Polish Pass\n${polish}\n\n### 2. Commit Strategy\n${commits}\n\n### 3. Skill Extraction\n${skillCheck}`,
-              },
+              { type: "text", text: `${summary}\n\n---\n${actionPrompt}` },
             ],
-            details: { review, complete: true, crossReview: true },
+            details: { review, iterating: true, action: chosen },
           };
         }
       } else {
