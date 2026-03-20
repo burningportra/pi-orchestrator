@@ -279,14 +279,29 @@ export default function (pi: ExtensionAPI) {
       setPhase("discovering", ctx);
 
       const formatted = formatRepoProfile(profile);
+
+      // Ask discovery mode
+      const discoveryMode = await ctx.ui.select(
+        "Discovery mode:",
+        [
+          "📋 Standard — 3-7 practical improvement ideas",
+          "🚀 Creative — think of 100 ideas, only tell me your 10 BEST",
+        ]
+      );
+
+      const isCreative = discoveryMode?.startsWith("🚀");
+      const discoveryPrompt = isCreative
+        ? `\n\n---\n**🚀 Creative Discovery Mode**\n\nNow I want you to come up with your top 7 most brilliant ideas for adding extremely powerful and cool functionality that will make this system far more compelling, useful, intuitive, versatile, powerful, robust, and reliable for users. Be pragmatic — don't suggest features that are extremely hard to implement or not worth the complexity. But I don't want you to just think of 7 ideas: seriously think hard, come up with ONE HUNDRED ideas internally, then only tell me your 7 VERY BEST and most brilliant, clever, and radically innovative ideas.\n\nCall \`orch_discover\` with your top 7.`
+        : `\n\n---\nNext: Call \`orch_discover\` to generate project ideas based on this profile.`;
+
       return {
         content: [
           {
             type: "text",
-            text: `Repository profiled successfully.\n\n${formatted}\n\n---\nNext: Call \`orch_discover\` to generate project ideas based on this profile.`,
+            text: `Repository profiled successfully.\n\n${formatted}${discoveryPrompt}`,
           },
         ],
-        details: { profile },
+        details: { profile, creativeMode: isCreative },
       };
     },
 
