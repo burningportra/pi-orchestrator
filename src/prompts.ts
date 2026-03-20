@@ -172,9 +172,7 @@ REALLY carefully analyze each plan with an open mind. Be intellectually honest a
 - Ensures the plan covers: workflows, constraints, architecture, testing, and failure handling
 - Is detailed enough that a fresh agent can execute without guessing
 
-**Before finalizing**, do a creative brainstorm: internally generate 100 additional ideas for how to make this plan more powerful, innovative, and robust. Then pick only your 3-5 VERY BEST and most brilliant ideas and fold them into the plan. Be pragmatic — skip anything that isn't worth the complexity.
-
-Then call \`orch_plan\` with the final synthesized + creatively enhanced plan.`;
+Then call \`orch_plan\` with the synthesized plan.`;
 }
 
 // ─── Plan-to-Tasks Conversion Prompt ─────────────────────────
