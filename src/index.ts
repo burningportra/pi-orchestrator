@@ -951,7 +951,10 @@ export default function (pi: ExtensionAPI) {
           [
             "🔍 Fresh self-review — read all new code with fresh eyes",
             "👥 Peer review — parallel agents review each other's work",
-            "🔥 Hit me — spawn 4 parallel review agents (fresh-eyes/polish/ergonomics/reality-check)",
+            "🔥 Hit me — spawn 4 parallel review agents",
+            "🧪 Test coverage — check unit tests + e2e, create tasks for gaps",
+            "📦 Commit — logical groupings with detailed messages",
+            "🚀 Ship it — commit, tag, release, deploy, monitor CI",
             "✅ Done — finish orchestration",
           ]
         );
@@ -1002,6 +1005,45 @@ export default function (pi: ExtensionAPI) {
               },
             ],
             details: { iterating: true, round, peerReview: true },
+          };
+        }
+
+        if (chosen.startsWith("🧪")) {
+          // Test coverage check — assess gaps and create tasks
+          return {
+            content: [
+              {
+                type: "text",
+                text: `## 🧪 Test Coverage Check — Round ${round}\n\nDo we have full unit test coverage without using mocks or fake stuff? What about complete e2e integration test scripts with great, detailed logging?\n\nReview the current state:\n- Goal: ${state.plan.goal}\n- Files: ${allArtifacts.join(", ")}\n\nIf test coverage is incomplete, create a comprehensive and granular set of tasks for all missing tests, with subtasks and dependency structure, with detailed comments so the whole thing is totally self-contained and self-documenting.\n\nFor unit tests: test real behavior, not mocked interfaces. For e2e: full integration scripts with detailed logging at each stage.\n\nAfter assessing (and creating test tasks if needed), call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+              },
+            ],
+            details: { iterating: true, round, testCoverage: true },
+          };
+        }
+
+        if (chosen.startsWith("📦")) {
+          // Commit with logical groupings
+          return {
+            content: [
+              {
+                type: "text",
+                text: `## 📦 Commit — Round ${round}\n\nBased on your knowledge of the project, commit all changed files now in a series of logically connected groupings with super detailed commit messages for each. Take your time to do it right.\n\nRules:\n- Group by logical change, NOT by file\n- Each commit should be independently understandable\n- Use conventional commit format: type(scope): description\n- First line ≤ 72 chars, then blank line, then detailed body\n- Body explains WHY, not just WHAT\n- Don't edit the code at all\n- Don't commit obviously ephemeral files\n- Push after committing\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+              },
+            ],
+            details: { iterating: true, round, committing: true },
+          };
+        }
+
+        if (chosen.startsWith("🚀")) {
+          // Ship it — full GitHub workflow
+          return {
+            content: [
+              {
+                type: "text",
+                text: `## 🚀 Ship It — Round ${round}\n\nDo all the GitHub stuff:\n1. **Commit** all remaining changes in logical groupings with detailed messages\n2. **Push** to remote\n3. **Create tag** with semantic version bump (based on changes: feat=minor, fix=patch)\n4. **Create GitHub release** with changelog from commits since last tag\n5. **Monitor CI** — check GitHub Actions status, wait for green\n6. **Compute checksums** if there are distributable artifacts\n7. **Bump version** in package.json if applicable\n\nDo each step and report status. If any step fails, stop and report why.\n\nAfter shipping, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+              },
+            ],
+            details: { iterating: true, round, shipping: true },
           };
         }
 
