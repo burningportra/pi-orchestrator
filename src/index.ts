@@ -871,28 +871,50 @@ export default function (pi: ExtensionAPI) {
         state.reviewPassCounts[params.stepIndex] = prevPassCount + 1;
         persistState();
 
-        // First pass done — trigger adversarial review if configured
-        if (prevPassCount === 0 && state.maxReviewPasses > 1) {
-          const adversarial = adversarialReviewInstructions(
-            step,
-            params.summary
-          );
-          ctx.ui.notify(
-            `✅ Step ${params.stepIndex} self-review passed. Running adversarial review...`,
-            "info"
-          );
+        // After self-review passes, ask user: iterate or move on?
+        const allArtifactsForStep = step.artifacts;
+        const hitMeChoice = await ctx.ui.select(
+          `✅ Step ${params.stepIndex} passed self-review (round ${prevPassCount}).`,
+          [
+            "🔥 Hit me — spawn parallel review agents for this step",
+            "✅ Looks good — move on",
+          ]
+        );
+
+        if (hitMeChoice?.startsWith("🔥")) {
+          const round = prevPassCount;
+          const stepDesc = step.description.slice(0, 60);
+          const agentConfigs = [
+            {
+              name: `fresh-eyes-s${params.stepIndex}-r${round}`,
+              task: `Fresh-eyes reviewer for step ${params.stepIndex} (round ${round}). NEVER seen this code.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Give exact file:line fixes.\n\ncd ${ctx.cwd}`,
+            },
+            {
+              name: `polish-s${params.stepIndex}-r${round}`,
+              task: `Polish reviewer for step ${params.stepIndex} (round ${round}). De-slopify.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Make edits directly.\n\ncd ${ctx.cwd}`,
+            },
+            {
+              name: `ergonomics-s${params.stepIndex}-r${round}`,
+              task: `Ergonomics reviewer for step ${params.stepIndex} (round ${round}).\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
+            },
+          ];
+
+          const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+
+          ctx.ui.notify(`🔥 Hit me — round ${round} for step ${params.stepIndex}`, "info");
+
           return {
             content: [
               {
                 type: "text",
-                text: `✅ Step ${params.stepIndex} passed self-review (pass 1/${state.maxReviewPasses}).\n\nNow do an adversarial "fresh eyes" review and call \`orch_review\` again:\n\n${adversarial}`,
+                text: `## 🔥 Hit me — Step ${params.stepIndex}, Round ${round}\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings then call \`orch_review\` again for step ${params.stepIndex} with what was fixed.`,
               },
             ],
-            details: { review, reviewPass: 1, adversarial: true },
+            details: { review, hitMe: true, round, step: params.stepIndex },
           };
         }
 
-        // All review passes done — move to next step or complete
+        // User said "looks good" — move to next step or complete
         const nextStep = state.plan.steps.find(
           (s) => s.index === params.stepIndex + 1
         );
