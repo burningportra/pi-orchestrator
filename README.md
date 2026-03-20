@@ -1,5 +1,7 @@
 # pi-orchestrator
 
+[![CI](https://github.com/burningportra/pi-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/burningportra/pi-orchestrator/actions/workflows/ci.yml)
+
 A [pi](https://github.com/badlogic/pi-mono) extension that turns `/orchestrate` into a structured, multi-agent workflow. Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
 
 Type `/orchestrate` in any repo → it scans the codebase → proposes improvements → plans the work (optionally with 3 competing AI models) → implements steps in parallel git worktrees → reviews with parallel agents → repeats until you're satisfied.
