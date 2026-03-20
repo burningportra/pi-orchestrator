@@ -60,7 +60,7 @@ const PHASE_EMOJI: Record<OrchestratorPhase, string> = {
 
 export default function (pi: ExtensionAPI) {
   // Log version at startup so stale code is immediately obvious
-  const ORCHESTRATOR_VERSION = '0.4.1';
+  const ORCHESTRATOR_VERSION = '0.4.2';
   console.log(`[pi-orchestrator] v${ORCHESTRATOR_VERSION} loaded`);
 
   let state: OrchestratorState = createInitialState();
@@ -749,6 +749,25 @@ export default function (pi: ExtensionAPI) {
         const choiceIndex = options.indexOf(choice);
         const idea = state.candidateIdeas[choiceIndex];
         goal = `${idea.title}: ${idea.description}`;
+
+        // Offer to refine the system-provided idea
+        const refineChoice = await ctx.ui.select(
+          `🎯 Selected: ${idea.title}\n\nWould you like to refine this idea?`,
+          [
+            "▶️  Continue — use as-is",
+            "🎯 Refine — answer clarifying questions to sharpen the goal",
+          ]
+        );
+
+        if (refineChoice?.startsWith("🎯")) {
+          const refinement = await runGoalRefinement(goal, state.repoProfile!, pi, ctx);
+          goal = refinement.enrichedGoal;
+          refinementUsed = !refinement.skipped;
+
+          if (refinementUsed) {
+            state.constraints = extractConstraints(refinement.answers);
+          }
+        }
       }
 
       state.selectedGoal = goal;
