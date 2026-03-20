@@ -57,6 +57,10 @@ const PHASE_EMOJI: Record<OrchestratorPhase, string> = {
 };
 
 export default function (pi: ExtensionAPI) {
+  // Log version at startup so stale code is immediately obvious
+  const ORCHESTRATOR_VERSION = '0.4.1';
+  console.log(`[pi-orchestrator] v${ORCHESTRATOR_VERSION} loaded`);
+
   let state: OrchestratorState = createInitialState();
   let orchestratorActive = false;
 
@@ -478,6 +482,7 @@ export default function (pi: ExtensionAPI) {
 
     async execute(_toolCallId, _params, signal, onUpdate, ctx) {
       setPhase("profiling", ctx);
+      ctx.ui.notify(`pi-orchestrator v${ORCHESTRATOR_VERSION}`, 'info');
       onUpdate?.({
         content: [{ type: "text", text: "Scanning repository..." }],
         details: {},
@@ -793,16 +798,54 @@ export default function (pi: ExtensionAPI) {
           byProvider.set(m.provider, list);
         }
 
-        // Build selectable options: "provider/model-id (context, reasoning)"
-        const modelOptions = available
+        // Filter to top models per provider, deduplicate date-versioned aliases
+        const seen = new Set<string>();
+        const filtered = available
           .sort((a, b) => b.contextWindow - a.contextWindow)
-          .map((m) => {
-            const ctx_k = m.contextWindow >= 1000000
+          .filter((m) => {
+            // Skip date-versioned models (e.g., claude-sonnet-4-20250514) if a latest alias exists
+            const dateMatch = m.id.match(/-(\d{8})$/);
+            if (dateMatch) {
+              const baseId = m.id.replace(/-(\d{8})$/, "");
+              const hasLatest = available.some(
+                (o) =>
+                  o.provider === m.provider &&
+                  (o.id === baseId ||
+                    o.id === baseId + "-0" ||
+                    o.id.startsWith(baseId + "-latest"))
+              );
+              if (hasLatest) return false;
+            }
+            // Deduplicate by provider+id
+            const key = `${m.provider}/${m.id}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+
+        // Top 3 per provider
+        const perProvider = new Map<string, typeof filtered>();
+        for (const m of filtered) {
+          const list = perProvider.get(m.provider) ?? [];
+          if (list.length < 3) list.push(m);
+          perProvider.set(m.provider, list);
+        }
+        const topModels = [...perProvider.values()]
+          .flat()
+          .sort((a, b) => {
+            if (a.provider !== b.provider)
+              return a.provider.localeCompare(b.provider);
+            return b.contextWindow - a.contextWindow;
+          });
+
+        const modelOptions = topModels.map((m) => {
+          const ctx_k =
+            m.contextWindow >= 1000000
               ? `${(m.contextWindow / 1000000).toFixed(1)}M`
               : `${Math.round(m.contextWindow / 1000)}K`;
-            const r = m.reasoning ? "🧠" : "";
-            return `${m.provider}/${m.id} (${ctx_k}${r})`;
-          });
+          const r = m.reasoning ? " 🧠" : "";
+          return `${m.provider}/${m.id} (${ctx_k}${r})`;
+        });
 
         // Pick 3 models
         const labels = ["Alpha (correctness)", "Beta (robustness)", "Gamma (ergonomics)"];
