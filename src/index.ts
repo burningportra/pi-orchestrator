@@ -328,8 +328,8 @@ export default function (pi: ExtensionAPI) {
         if (worktreePool) {
           await worktreePool.cleanup();
           worktreePool = undefined;
-      if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
         }
+        if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
         orchestratorActive = false;
         setPhase("idle", ctx);
         persistState();
@@ -1095,6 +1095,15 @@ export default function (pi: ExtensionAPI) {
 
       state.plan = plan;
       state.currentStepIndex = 1;
+      // Reset implementation state — critical when orch_plan is called
+      // multiple times (polish loop or creative brainstorm re-entry)
+      state.stepResults = [];
+      state.reviewVerdicts = [];
+      state.reviewPassCounts = {};
+      state.hitMeTriggered = {};
+      state.hitMeCompleted = {};
+      state.iterationRound = 0;
+      state.currentGateIndex = 0;
       setPhase("awaiting_plan_approval", ctx);
       persistState();
 
@@ -1195,7 +1204,7 @@ export default function (pi: ExtensionAPI) {
         } catch {
           worktreeInfo = "\n\n⚠️ Worktree creation failed — falling back to sequential execution.";
           worktreePool = undefined;
-      if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
+          if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
         }
       }
 
@@ -1687,6 +1696,8 @@ export default function (pi: ExtensionAPI) {
             const targetBranch = branchResult.stdout.trim();
 
             // PRE-MERGE SCOPE GATE: revert any out-of-scope files before merging
+            // Uses `git show` to get the original file content from the base branch,
+            // which works correctly in worktrees on different branches.
             if (wtPath) {
               const diffResult = await pi.exec("git", ["diff", "--name-only", targetBranch], { timeout: 5000, cwd: wtPath });
               if (diffResult.stdout.trim()) {
@@ -1695,8 +1706,29 @@ export default function (pi: ExtensionAPI) {
                 const outOfScope = changedFiles.filter(f => !allowedFiles.has(f));
                 if (outOfScope.length > 0) {
                   ctx.ui.notify(`⚠️ Step ${params.stepIndex} touched out-of-scope files: ${outOfScope.join(", ")} — reverting`, "warning");
-                  await pi.exec("git", ["checkout", targetBranch, "--", ...outOfScope], { timeout: 5000, cwd: wtPath });
-                  await pi.exec("git", ["commit", "--amend", "--no-edit"], { timeout: 5000, cwd: wtPath });
+                  // Restore each out-of-scope file to its state on the target branch
+                  for (const file of outOfScope) {
+                    try {
+                      const showResult = await pi.exec("git", ["show", `${targetBranch}:${file}`], { timeout: 5000, cwd: wtPath });
+                      if (showResult.code === 0) {
+                        // File exists on target branch — restore it
+                        const { writeFileSync } = await import("fs");
+                        const { join } = await import("path");
+                        writeFileSync(join(wtPath, file), showResult.stdout);
+                      } else {
+                        // File doesn't exist on target branch — remove it
+                        await pi.exec("git", ["rm", "-f", file], { timeout: 5000, cwd: wtPath });
+                      }
+                    } catch {
+                      ctx.ui.notify(`⚠️ Could not revert out-of-scope file: ${file}`, "warning");
+                    }
+                  }
+                  // Stage reverted files and amend the last commit
+                  await pi.exec("git", ["add", ...outOfScope], { timeout: 5000, cwd: wtPath });
+                  const hasChanges = await pi.exec("git", ["diff", "--cached", "--quiet"], { timeout: 5000, cwd: wtPath });
+                  if (hasChanges.code !== 0) {
+                    await pi.exec("git", ["commit", "--amend", "--no-edit"], { timeout: 5000, cwd: wtPath });
+                  }
                 }
               }
             }
