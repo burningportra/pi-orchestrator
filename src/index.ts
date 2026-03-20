@@ -940,7 +940,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `Synthesize the 3 plans below, then call \`orch_plan\` with the result.\n\nGoal: "${goal}"${constraintLine}${modelInfo}\n\n---\n\n${planBlocks}\n\n---\n\n${synthesis}`,
+              text: `**NEXT: Synthesize the 3 plans below into one superior hybrid, then call \`orch_plan\` NOW.**\n\nGoal: "${goal}"${constraintLine}${modelInfo}\n\n---\n\n${planBlocks}\n\n---\n\n${synthesis}`,
             },
           ],
           details: { selected: true, goal, constraints: state.constraints, deepPlan: true, deepResults },
@@ -1074,7 +1074,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `## 🚀 Creative Brainstorm — 3 Parallel Agents\n\nResults from innovator, hardener, and simplifier:\n\n${brainstormResults.text}\n\n---\n\nAfter reviewing ALL ideas above:\n1. **List ALL ideas** from every brainstormer in this format:\n   \`[N] Title — What it does (Source: innovator/hardener/simplifier)\`\n2. **Ask the user** which numbers to include\n3. Fold ONLY user-selected ideas into the plan\n4. Call \`orch_plan\` again with the enhanced steps`,
+              text: `**NEXT: List all ideas below, ask the user which to include, fold them into the plan, and call \`orch_plan\` again NOW.**\n\n## 🚀 Creative Brainstorm — 3 Parallel Agents\n\nResults from innovator, hardener, and simplifier:\n\n${brainstormResults.text}\n\n---\n\nList ALL ideas from every brainstormer as:\n\`[N] Title — What it does (Source: innovator/hardener/simplifier)\`\nAsk the user which numbers to include, then fold ONLY those into the plan.`,
             },
           ],
           details: { approved: false, creativeBrainstorm: true },
@@ -1255,7 +1255,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `Plan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n---\nStarting Step 1:\n\n${implInstr}`,
+            text: `**NEXT: Implement Step 1 NOW, then call \`orch_review\` when done.**\n\nPlan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n---\n\n${implInstr}`,
           },
         ],
         details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr },
