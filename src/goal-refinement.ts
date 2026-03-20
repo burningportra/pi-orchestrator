@@ -448,6 +448,8 @@ export async function runGoalRefinement(
     const promptFile = join(promptDir, "prompt.md");
     writeFileSync(promptFile, prompt, "utf8");
 
+    ctx.ui.notify("🎯 Generating clarifying questions...", "info");
+
     const result = await pi.exec(
       "pi",
       [
@@ -455,13 +457,25 @@ export async function runGoalRefinement(
         "--no-extensions",
         "--no-skills",
         "--no-prompt-templates",
-        "--tools", "",
         `@${promptFile}`,
       ],
       { timeout: 60000, cwd: ctx.cwd }
     );
 
+    if (result.code !== 0) {
+      ctx.ui.notify(
+        `⚠️ Goal refinement failed (exit ${result.code}): ${result.stderr.slice(0, 200)}. Using raw goal.`,
+        "warning"
+      );
+      return fallback;
+    }
+
     const output = result.stdout.trim();
+    if (!output) {
+      ctx.ui.notify("⚠️ Goal refinement returned empty output. Using raw goal.", "warning");
+      return fallback;
+    }
+
     questions = parseQuestionsJSON(output);
   } catch (err) {
     ctx.ui.notify(
