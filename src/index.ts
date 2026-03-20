@@ -585,7 +585,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n## 🧠 Deep Planning — 3 Competing Plans${modelInfo}\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all 3 complete, **synthesize the best ideas from all plans** into one superior "best of all worlds" hybrid. Be intellectually honest about what each planner did better. Then **present the synthesized plan to the user** and ask: "🚀 Creative brainstorm — enhance this plan?" or "📋 Submit as-is". If creative, think of 100 additional ideas, fold your 3-5 BEST into the plan. Then call \`orch_plan\`.`,
+              text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n## 🧠 Deep Planning — 3 Competing Plans${modelInfo}\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all 3 complete, **synthesize the best ideas from all plans** into one superior "best of all worlds" hybrid. Be intellectually honest about what each planner did better. Then call \`orch_plan\` with the synthesized plan.`,
             },
           ],
           details: { selected: true, goal, constraints: state.constraints, deepPlan: true },
@@ -668,12 +668,28 @@ export default function (pi: ExtensionAPI) {
 
       setPhase("awaiting_plan_approval", ctx);
 
-      const approved = await ctx.ui.confirm(
+      const planChoice = await ctx.ui.select(
         `📝 Plan: ${plan.goal}`,
-        `${planText}\n\nApprove this plan?`
+        [
+          "✅ Approve this plan",
+          "🚀 Creative brainstorm — enhance before approving",
+          "❌ Reject",
+        ]
       );
 
-      if (!approved) {
+      if (planChoice?.startsWith("🚀")) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `## 🚀 Creative Brainstorm\n\nHere's the current plan:\n\n${planText}\n\n---\n\nNow think of ONE HUNDRED ways to make this plan more powerful, innovative, and robust. Then pick only your 3-5 VERY BEST and most brilliant ideas and fold them into the plan. Be pragmatic — skip anything that isn't worth the complexity.\n\nThen call \`orch_plan\` again with the creatively enhanced steps.`,
+            },
+          ],
+          details: { approved: false, creativeBrainstorm: true },
+        };
+      }
+
+      if (!planChoice || planChoice.startsWith("❌")) {
         orchestratorActive = false;
         setPhase("idle", ctx);
         persistState();
