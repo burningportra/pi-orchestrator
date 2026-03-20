@@ -335,10 +335,10 @@ export default function (pi: ExtensionAPI) {
         const goal = refinement.enrichedGoal;
         const constraints = refinement.skipped ? [] : extractConstraints(refinement.answers);
 
-        // Debug: log refinement outcome
+        // Debug: log refinement outcome AT THE TOP so truncation can't hide it
         const refinementDebug = refinement.skipped
-          ? `\n\n⚠️ **Goal refinement was skipped** — reason: ${refinement.skipReason ?? "unknown"}`
-          : `\n\n✅ **Goal refined** with ${refinement.answers.length} answers`;
+          ? `⚠️ **Goal refinement was skipped** — reason: ${refinement.skipReason ?? "unknown"}`
+          : `✅ **Goal refined** with ${refinement.answers.length} answers`;
 
         // Skip discovery entirely — go straight to planning
         state.selectedGoal = goal;
@@ -353,7 +353,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `Repository profiled successfully.\n\n${formatted}${memoryContext}${refinementDebug}\n\nGoal: "${goal}"\n\n---\nNext: Call \`orch_plan\` with a structured plan.\n\n${instructions}`,
+              text: `${refinementDebug}\n\nRepository profiled successfully.\n\n${formatted}${memoryContext}\n\nGoal: "${goal}"\n\n---\nNext: Call \`orch_plan\` with a structured plan.\n\n${instructions}`,
             },
           ],
           details: { profile, customGoal: goal },
