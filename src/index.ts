@@ -972,18 +972,37 @@ export default function (pi: ExtensionAPI) {
         const round = state.iterationRound;
         persistState();
 
-        const chosen = await ctx.ui.select(
-          `Round ${round}. What next?`,
-          [
-            "🔍 Fresh self-review — read all new code with fresh eyes",
-            "👥 Peer review — parallel agents review each other's work",
-            "🔥 Hit me — spawn 4 parallel review agents",
-            "🧪 Test coverage — check unit tests + e2e, create tasks for gaps",
-            "📦 Commit — logical groupings with detailed messages",
-            "🚀 Ship it — commit, tag, release, deploy, monitor CI",
-            "✅ Done — finish orchestration",
-          ]
-        );
+        // Sequential guided flow — each gate offers "do this" or "skip"
+        const gates = [
+          { emoji: "🔍", label: "Fresh self-review", desc: "read all new code with fresh eyes" },
+          { emoji: "👥", label: "Peer review", desc: "parallel agents review each other's work" },
+          { emoji: "🔥", label: "Hit me", desc: "spawn 4 parallel review agents" },
+          { emoji: "🧪", label: "Test coverage", desc: "check unit tests + e2e, create tasks for gaps" },
+          { emoji: "📦", label: "Commit", desc: "logical groupings with detailed messages" },
+          { emoji: "🚀", label: "Ship it", desc: "commit, tag, release, deploy, monitor CI" },
+        ];
+
+        let chosen: string | undefined;
+        for (const gate of gates) {
+          const pick = await ctx.ui.select(
+            `Round ${round} — ${gate.emoji} ${gate.label}`,
+            [
+              `${gate.emoji} ${gate.label} — ${gate.desc}`,
+              "⏭️  Skip",
+              "✅ Done — finish orchestration",
+            ]
+          );
+          if (!pick || pick.startsWith("✅")) {
+            chosen = "✅";
+            break;
+          }
+          if (pick.startsWith("⏭️")) continue;
+          chosen = pick;
+          break;
+        }
+
+        // If we ran through all gates without picking, we're done
+        if (!chosen) chosen = "✅";
 
         if (!chosen || chosen.startsWith("✅")) {
           orchestratorActive = false;
