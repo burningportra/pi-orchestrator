@@ -2,6 +2,9 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
+import { writeFileSync, mkdirSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import type {
   OrchestratorState,
   CandidateIdea,
@@ -56,6 +59,52 @@ const PHASE_EMOJI: Record<OrchestratorPhase, string> = {
 export default function (pi: ExtensionAPI) {
   let state: OrchestratorState = createInitialState();
   let orchestratorActive = false;
+
+  // Helper: spawn hit-me review agents inline via pi.exec (like deep-plan.ts)
+  async function runHitMeAgents(
+    agentConfigs: { name: string; task: string }[],
+    cwd: string,
+    ctx: ExtensionContext
+  ): Promise<string> {
+    const outputDir = join(tmpdir(), `pi-hit-me-${Date.now()}`);
+    mkdirSync(outputDir, { recursive: true });
+
+    ctx.ui.notify(`🔥 Spawning ${agentConfigs.length} review agents...`, "info");
+
+    const promises = agentConfigs.map(async (agent) => {
+      const taskFile = join(outputDir, `${agent.name}-task.md`);
+      writeFileSync(taskFile, agent.task, "utf8");
+
+      const args = [
+        "--print",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--tools", "read,bash,grep,find,ls,edit,write",
+        `@${taskFile}`,
+      ];
+
+      try {
+        const result = await pi.exec("pi", args, {
+          timeout: 120000,
+          cwd,
+        });
+        return { name: agent.name, output: result.stdout.trim(), ok: result.code === 0 };
+      } catch (err: any) {
+        return { name: agent.name, output: `ERROR: ${err.message ?? err}`, ok: false };
+      }
+    });
+
+    const results = await Promise.all(promises);
+
+    // Format combined output
+    const sections = results.map((r) => {
+      const status = r.ok ? "✅" : "⚠️";
+      return `### ${status} ${r.name}\n\n${r.output || "(no output)"}\n`;
+    });
+
+    return sections.join("\n---\n\n");
+  }
   let hasSophia = false;
   let sophiaCRResult: PlanToCRResult | undefined;
   let worktreePool: WorktreePool | undefined;
@@ -1046,7 +1095,7 @@ export default function (pi: ExtensionAPI) {
           const wtPath = worktreePool!.getPath(stepIdx);
           return {
             name: `step-${stepIdx}`,
-            task: `You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${step.description}\n\n### Acceptance Criteria\n${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${step.artifacts.join(", ")}\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step.\n\nWhen done implementing, STOP and do a fresh-eyes review: carefully read over ALL the new code you just wrote and any existing code you modified, looking super carefully for any obvious bugs, errors, problems, issues, or confusion. Fix anything you uncover.\n\nThen COMMIT your changes:\n\`\`\`bash\ncd ${wtPath ?? ctx.cwd}\ngit add -A && git commit -m "step ${stepIdx}: ${step.description.slice(0, 60)}"\n\`\`\`\n\nThen summarize what you did and what the fresh-eyes review found.`,
+            task: `You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${step.description}\n\n### Acceptance Criteria\n${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${step.artifacts.join(", ")}\n\n⚠️ SCOPE CONSTRAINT: You MUST NOT create or modify any files outside the list above. If you believe additional files need changes, note them in your summary but DO NOT modify them.\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step.\n\nWhen done implementing, STOP and do a fresh-eyes review: carefully read over ALL the new code you just wrote and any existing code you modified, looking super carefully for any obvious bugs, errors, problems, issues, or confusion. Fix anything you uncover.\n\nThen COMMIT your changes:\n\`\`\`bash\ncd ${wtPath ?? ctx.cwd}\ngit add ${step.artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "step ${stepIdx}: ${step.description.slice(0, 60)}"\n\`\`\`\n\nThen summarize what you did and what the fresh-eyes review found.`,
           };
         });
 
@@ -1294,12 +1343,15 @@ export default function (pi: ExtensionAPI) {
       },
     ];
 
-    const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+    ctx.ui.notify(`🔥 Hit me — spawning 4 review agents (round ${round})...`, "info");
+    const combinedOutput = await runHitMeAgents(agentConfigs, ctx.cwd, ctx);
+    ctx.ui.notify(`✅ All 4 review agents completed (round ${round}).`, "info");
+
     return {
       content: [
         {
           type: "text",
-          text: `## 🔥 Hit me — Round ${round}\n\nSpawning 4 parallel review agents: fresh-eyes, polish, ergonomics, reality-check.\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes.${callbackHint}`,
+          text: `## 🔥 Hit me — Round ${round} Results\n\n${combinedOutput}\n\n---\n\nReview the findings above, apply any fixes needed, then call \`orch_review\` again.${callbackHint}`,
         },
       ],
       details: { iterating: true, round, agents: agentConfigs.map((a) => a.name) },
@@ -1504,6 +1556,22 @@ export default function (pi: ExtensionAPI) {
             }
             const branchResult = await pi.exec("git", ["branch", "--show-current"], { timeout: 3000, cwd: ctx.cwd });
             const targetBranch = branchResult.stdout.trim();
+
+            // PRE-MERGE SCOPE GATE: revert any out-of-scope files before merging
+            if (wtPath) {
+              const diffResult = await pi.exec("git", ["diff", "--name-only", targetBranch], { timeout: 5000, cwd: wtPath });
+              if (diffResult.stdout.trim()) {
+                const changedFiles = diffResult.stdout.trim().split("\n");
+                const allowedFiles = new Set(step.artifacts);
+                const outOfScope = changedFiles.filter(f => !allowedFiles.has(f));
+                if (outOfScope.length > 0) {
+                  ctx.ui.notify(`⚠️ Step ${params.stepIndex} touched out-of-scope files: ${outOfScope.join(", ")} — reverting`, "warning");
+                  await pi.exec("git", ["checkout", targetBranch, "--", ...outOfScope], { timeout: 5000, cwd: wtPath });
+                  await pi.exec("git", ["commit", "--amend", "--no-edit"], { timeout: 5000, cwd: wtPath });
+                }
+              }
+            }
+
             const mergeResult = await mergeWorktreeChanges(
               pi, ctx.cwd, wtBranch, targetBranch, step.description
             );
@@ -1580,15 +1648,15 @@ export default function (pi: ExtensionAPI) {
             },
           ];
 
-          const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
-
-          ctx.ui.notify(`🔥 Hit me — round ${round} for step ${params.stepIndex}`, "info");
+          ctx.ui.notify(`🔥 Hit me — spawning 4 review agents (step ${params.stepIndex}, round ${round})...`, "info");
+          const combinedOutput = await runHitMeAgents(agentConfigs, ctx.cwd, ctx);
+          ctx.ui.notify(`✅ All 4 review agents completed (step ${params.stepIndex}, round ${round}).`, "info");
 
           return {
             content: [
               {
                 type: "text",
-                text: `## 🔥 Hit me — Step ${params.stepIndex}, Round ${round}\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings then call \`orch_review\` again for step ${params.stepIndex} with what was fixed.`,
+                text: `## 🔥 Hit me — Step ${params.stepIndex}, Round ${round} Results\n\n${combinedOutput}\n\n---\n\nReview the findings above, apply any fixes needed, then call \`orch_review\` again for step ${params.stepIndex} with what was fixed.`,
               },
             ],
             details: { review, hitMe: true, round, step: params.stepIndex },
