@@ -463,12 +463,60 @@ export default function (pi: ExtensionAPI) {
         : [];
       persistState();
 
+      // Ask: standard plan or deep plan (3 competing agents → synthesis)?
+      const planMode = await ctx.ui.select(
+        "Planning mode:",
+        [
+          "📋 Standard — single plan",
+          "🧠 Deep plan — 3 competing agents → best-of-all-worlds synthesis",
+        ]
+      );
+
+      const isDeepPlan = planMode?.startsWith("🧠");
+
       const instructions = plannerInstructions(
         goal,
         state.repoProfile!,
         state.constraints
       );
 
+      if (isDeepPlan) {
+        // Spawn 3 parallel agents to create competing plans
+        const profileSummary = formatRepoProfile(state.repoProfile!);
+        const planPrompt = `Create a detailed step-by-step plan (3-7 steps) for this goal.\n\n## Goal\n${goal}\n\n## Repo\n${profileSummary}\n\n## Constraints\n${state.constraints.length > 0 ? state.constraints.join(", ") : "None"}\n\nReturn your plan as a numbered list with: step description, acceptance criteria, and files to modify. Be specific and opinionated.`;
+
+        const agentConfigs = [
+          {
+            name: "planner-alpha",
+            task: `You are Planner Alpha. ${planPrompt}\n\nFocus on: correctness, minimal scope, and clean architecture.\n\ncd ${ctx.cwd}`,
+          },
+          {
+            name: "planner-beta",
+            task: `You are Planner Beta. ${planPrompt}\n\nFocus on: robustness, edge cases, and testing strategy.\n\ncd ${ctx.cwd}`,
+          },
+          {
+            name: "planner-gamma",
+            task: `You are Planner Gamma. ${planPrompt}\n\nFocus on: developer experience, ergonomics, and future extensibility.\n\ncd ${ctx.cwd}`,
+          },
+        ];
+
+        const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+
+        setPhase("planning", ctx);
+        persistState();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `User selected goal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n## 🧠 Deep Planning — 3 Competing Plans\n\nSpawning 3 parallel planning agents with different focuses:\n- **Alpha**: correctness, minimal scope, clean architecture\n- **Beta**: robustness, edge cases, testing\n- **Gamma**: DX, ergonomics, extensibility\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all 3 complete, **synthesize the best ideas from all plans** into one superior hybrid. Be intellectually honest about what each planner did better. Then call \`orch_plan\` with the synthesized plan.`,
+            },
+          ],
+          details: { selected: true, goal, constraints: state.constraints, deepPlan: true },
+        };
+      }
+
+      // Standard: single plan
       return {
         content: [
           {
