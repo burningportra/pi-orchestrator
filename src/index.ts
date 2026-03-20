@@ -977,7 +977,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}\n\nAfter fixing everything, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+                text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}\n\nAfter fixing everything, **commit**: commit all changed files in logically connected groupings with super detailed commit messages and push. Don't edit code during commit. Don't commit ephemeral files.\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
               },
             ],
             details: { iterating: true, round, selfReview: true },
@@ -1001,7 +1001,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `## 👥 Peer Review — Round ${round}\n\nSpawning 2 parallel peer reviewers to review code written by other agents:\n- **peer-reviewer-a**: bugs, security, reliability, root-cause analysis\n- **peer-reviewer-b**: architecture, naming, error handling, goal alignment\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter both complete, present findings then call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+                text: `## 👥 Peer Review — Round ${round}\n\nSpawning 2 parallel peer reviewers to review code written by other agents:\n- **peer-reviewer-a**: bugs, security, reliability, root-cause analysis\n- **peer-reviewer-b**: architecture, naming, error handling, goal alignment\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter both complete, present findings and apply fixes. Then **commit**: based on your knowledge of the project, commit all changed files in a series of logically connected groupings with super detailed commit messages for each and then push. Take your time to do it right. Don't edit the code at all. Don't commit obviously ephemeral files.\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
               },
             ],
             details: { iterating: true, round, peerReview: true },
@@ -1072,7 +1072,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `## 🔥 Hit me — Round ${round}\n\nSpawning 4 parallel review agents: fresh-eyes, polish, ergonomics, reality-check.\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings then call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
+              text: `## 🔥 Hit me — Round ${round}\n\nSpawning 4 parallel review agents: fresh-eyes, polish, ergonomics, reality-check.\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then **commit**: commit all changed files in logically connected groupings with super detailed commit messages and push. Don't edit code during commit. Don't commit ephemeral files.\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for the next option.`,
             },
           ],
           details: { iterating: true, round, agents: agentConfigs.map((a) => a.name) },
