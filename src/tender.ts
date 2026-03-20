@@ -1,0 +1,188 @@
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+// ─── Types ─────────────────────────────────────────────────────
+
+export type AgentHealth = "active" | "idle" | "stuck";
+
+export interface AgentStatus {
+  worktreePath: string;
+  stepIndex: number;
+  health: AgentHealth;
+  lastActivity: number; // timestamp ms
+  changedFiles: string[];
+}
+
+export interface TenderConfig {
+  /** Polling interval in ms (default 60_000 = 60s) */
+  pollInterval: number;
+  /** Agent is "stuck" after this many ms without changes (default 300_000 = 5 min) */
+  stuckThreshold: number;
+  /** Agent is "idle" after this many ms without changes (default 120_000 = 2 min) */
+  idleThreshold: number;
+}
+
+export interface ConflictAlert {
+  file: string;
+  worktrees: string[];
+  stepIndices: number[];
+}
+
+const DEFAULT_CONFIG: TenderConfig = {
+  pollInterval: 60_000,
+  stuckThreshold: 300_000,
+  idleThreshold: 120_000,
+};
+
+// ─── SwarmTender ───────────────────────────────────────────────
+
+export class SwarmTender {
+  private pi: ExtensionAPI;
+  private cwd: string;
+  private agents: Map<number, AgentStatus>; // stepIndex → status
+  private config: TenderConfig;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private onStuck?: (agent: AgentStatus) => void;
+  private onConflict?: (conflict: ConflictAlert) => void;
+  private onTick?: (statuses: AgentStatus[]) => void;
+
+  constructor(
+    pi: ExtensionAPI,
+    cwd: string,
+    worktrees: { path: string; stepIndex: number }[],
+    options?: {
+      config?: Partial<TenderConfig>;
+      onStuck?: (agent: AgentStatus) => void;
+      onConflict?: (conflict: ConflictAlert) => void;
+      onTick?: (statuses: AgentStatus[]) => void;
+    }
+  ) {
+    this.pi = pi;
+    this.cwd = cwd;
+    this.config = { ...DEFAULT_CONFIG, ...options?.config };
+    this.onStuck = options?.onStuck;
+    this.onConflict = options?.onConflict;
+    this.onTick = options?.onTick;
+
+    this.agents = new Map();
+    for (const wt of worktrees) {
+      this.agents.set(wt.stepIndex, {
+        worktreePath: wt.path,
+        stepIndex: wt.stepIndex,
+        health: "active",
+        lastActivity: Date.now(),
+        changedFiles: [],
+      });
+    }
+  }
+
+  /** Start polling. */
+  start(): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => this.poll(), this.config.pollInterval);
+    // Run first poll immediately
+    this.poll();
+  }
+
+  /** Stop polling. */
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  /** Get current status of all agents. */
+  getStatus(): AgentStatus[] {
+    return [...this.agents.values()];
+  }
+
+  /** Get summary string for widget display. */
+  getSummary(): string {
+    const statuses = this.getStatus();
+    const active = statuses.filter((s) => s.health === "active").length;
+    const idle = statuses.filter((s) => s.health === "idle").length;
+    const stuck = statuses.filter((s) => s.health === "stuck").length;
+    const parts: string[] = [];
+    if (active > 0) parts.push(`${active} active`);
+    if (idle > 0) parts.push(`${idle} idle`);
+    if (stuck > 0) parts.push(`${stuck} stuck`);
+    return parts.join(", ") || "no agents";
+  }
+
+  /** Single poll cycle — check all worktrees. */
+  private async poll(): Promise<void> {
+    const now = Date.now();
+    const allChangedFiles = new Map<string, number[]>(); // file → stepIndices
+
+    for (const [stepIndex, agent] of this.agents) {
+      try {
+        // Check git status for this worktree
+        const result = await this.pi.exec(
+          "git",
+          ["status", "--porcelain"],
+          { timeout: 5000, cwd: agent.worktreePath }
+        );
+
+        const files = result.code === 0
+          ? result.stdout.trim().split("\n").filter(Boolean).map((l) => l.slice(3))
+          : [];
+
+        // Check if files changed since last poll
+        const filesChanged = files.length !== agent.changedFiles.length ||
+          files.some((f, i) => f !== agent.changedFiles[i]);
+
+        if (filesChanged) {
+          agent.lastActivity = now;
+          agent.changedFiles = files;
+        }
+
+        // Classify health
+        const elapsed = now - agent.lastActivity;
+        const prevHealth = agent.health;
+
+        if (elapsed > this.config.stuckThreshold) {
+          agent.health = "stuck";
+          if (prevHealth !== "stuck") {
+            this.onStuck?.(agent);
+          }
+        } else if (elapsed > this.config.idleThreshold) {
+          agent.health = "idle";
+        } else {
+          agent.health = "active";
+        }
+
+        // Track files for conflict detection
+        for (const file of files) {
+          // Skip generated/ephemeral files
+          if (file.startsWith(".pi-orchestrator/")) continue;
+          const existing = allChangedFiles.get(file) ?? [];
+          existing.push(stepIndex);
+          allChangedFiles.set(file, existing);
+        }
+      } catch {
+        // Worktree might be gone (already cleaned up)
+        // Don't crash the tender
+      }
+    }
+
+    // Conflict detection: files modified in multiple worktrees
+    for (const [file, stepIndices] of allChangedFiles) {
+      if (stepIndices.length > 1) {
+        const worktrees = stepIndices.map(
+          (idx) => this.agents.get(idx)?.worktreePath ?? ""
+        ).filter(Boolean);
+        this.onConflict?.({ file, worktrees, stepIndices });
+      }
+    }
+
+    this.onTick?.(this.getStatus());
+  }
+
+  /** Remove an agent from monitoring (e.g., step completed). */
+  removeAgent(stepIndex: number): void {
+    this.agents.delete(stepIndex);
+    if (this.agents.size === 0) {
+      this.stop();
+    }
+  }
+}
