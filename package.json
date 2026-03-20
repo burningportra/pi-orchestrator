@@ -2,16 +2,23 @@
   "name": "pi-orchestrator",
   "version": "0.2.0",
   "description": "Repo-aware multi-agent meta-orchestrator plugin for pi",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "*",
-    "@sinclair/typebox": "^0.34.0",
     "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-tui": "*"
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "^0.34.0"
   },
   "devDependencies": {
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.0"
   }
 }
