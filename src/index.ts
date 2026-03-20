@@ -485,88 +485,69 @@ export default function (pi: ExtensionAPI) {
         const profileSummary = formatRepoProfile(state.repoProfile!);
         const planPrompt = `Create a detailed step-by-step plan (3-7 steps) for this goal.\n\n## Goal\n${goal}\n\n## Repo\n${profileSummary}\n\n## Constraints\n${state.constraints.length > 0 ? state.constraints.join(", ") : "None"}\n\n**IMPORTANT: Output your plan as plain text. Do NOT call any orch_ tools (orch_plan, orch_select, etc). Do NOT try to implement anything. Just write the plan and summarize it.**\n\nReturn your plan as a numbered list with: step description, acceptance criteria, and files to modify. Be specific and opinionated.`;
 
-        // Detect available models — prefer different providers for true diversity
+        // Let user pick 3 models from available ones
         const available = ctx.modelRegistry.getAvailable();
 
-        // Find best model for a provider group (by provider names, then by model id keywords)
-        const findModel = (
-          providers: string[],
-          idKeywords: string[]
-        ): string | undefined => {
-          // First: find models from preferred providers
-          const providerModels = available.filter((m) =>
-            providers.some((p) => m.provider === p)
+        // Group by provider, pick best per provider, sort by context window
+        const byProvider = new Map<string, typeof available>();
+        for (const m of available) {
+          const list = byProvider.get(m.provider) ?? [];
+          list.push(m);
+          byProvider.set(m.provider, list);
+        }
+
+        // Build selectable options: "provider/model-id (context, reasoning)"
+        const modelOptions = available
+          .sort((a, b) => b.contextWindow - a.contextWindow)
+          .map((m) => {
+            const ctx_k = m.contextWindow >= 1000000
+              ? `${(m.contextWindow / 1000000).toFixed(1)}M`
+              : `${Math.round(m.contextWindow / 1000)}K`;
+            const r = m.reasoning ? "🧠" : "";
+            return `${m.provider}/${m.id} (${ctx_k}${r})`;
+          });
+
+        // Pick 3 models
+        const labels = ["Alpha (correctness)", "Beta (robustness)", "Gamma (ergonomics)"];
+        const pickedModels: (string | undefined)[] = [];
+
+        for (const label of labels) {
+          const choice = await ctx.ui.select(
+            `Pick model for Planner ${label}:`,
+            modelOptions
           );
-          if (providerModels.length > 0) {
-            // Pick the model with the largest context window as a proxy for "latest/best"
-            // Among ties, prefer reasoning-capable models
-            const sorted = [...providerModels].sort((a, b) => {
-              if (b.contextWindow !== a.contextWindow) return b.contextWindow - a.contextWindow;
-              if (b.reasoning !== a.reasoning) return b.reasoning ? 1 : -1;
-              return 0;
-            });
-            // But if idKeywords are given, prefer keyword matches among top models
-            for (const kw of idKeywords) {
-              const match = sorted.find(
-                (m) => m.id.toLowerCase().includes(kw) || m.name.toLowerCase().includes(kw)
-              );
-              if (match) return `${match.provider}/${match.id}`;
-            }
-            // No keyword match — just take the best by context window
-            return `${sorted[0].provider}/${sorted[0].id}`;
+          if (choice) {
+            // Extract "provider/model-id" from "provider/model-id (context...)"
+            pickedModels.push(choice.split(" (")[0]);
+          } else {
+            pickedModels.push(undefined);
           }
-          // Fallback: search all models by keyword
-          for (const kw of idKeywords) {
-            const m = available.find(
-              (m) => m.id.toLowerCase().includes(kw) || m.name.toLowerCase().includes(kw)
-            );
-            if (m) return `${m.provider}/${m.id}`;
-          }
-          return undefined;
-        };
-
-        const geminiModel = findModel(
-          ["google-antigravity", "google", "google-gemini-cli", "google-vertex"],
-          ["gemini-2.5-pro", "gemini-pro", "gemini"]
-        );
-        const gptModel = findModel(
-          ["openai-codex", "openai", "azure-openai-responses"],
-          ["o3", "gpt-4.1", "o4-mini", "gpt-4o", "gpt-4"]
-        );
-        const claudeModel = findModel(
-          ["anthropic"],
-          ["claude-opus", "opus", "claude-sonnet", "sonnet"]
-        );
-
-        const models = [geminiModel, gptModel, claudeModel].filter(Boolean);
-        const hasMultipleProviders = models.length >= 2;
+        }
 
         type AgentConfig = { name: string; task: string; model?: string; tools?: string };
-        const plannerTools = "read,bash,grep,find,ls"; // read-only — no write/edit, no orch_ tools
+        const plannerTools = "read,bash,grep,find,ls"; // read-only — no orch_ tools
         const agentConfigs: AgentConfig[] = [
           {
             name: "planner-alpha",
             task: `You are Planner Alpha. ${planPrompt}\n\nFocus on: correctness, minimal scope, and clean architecture.\n\ncd ${ctx.cwd}`,
             tools: plannerTools,
-            ...(hasMultipleProviders && geminiModel ? { model: geminiModel } : {}),
+            ...(pickedModels[0] ? { model: pickedModels[0] } : {}),
           },
           {
             name: "planner-beta",
             task: `You are Planner Beta. ${planPrompt}\n\nFocus on: robustness, edge cases, and testing strategy.\n\ncd ${ctx.cwd}`,
             tools: plannerTools,
-            ...(hasMultipleProviders && gptModel ? { model: gptModel } : {}),
+            ...(pickedModels[1] ? { model: pickedModels[1] } : {}),
           },
           {
             name: "planner-gamma",
             task: `You are Planner Gamma. ${planPrompt}\n\nFocus on: developer experience, ergonomics, and future extensibility.\n\ncd ${ctx.cwd}`,
             tools: plannerTools,
-            ...(hasMultipleProviders && claudeModel ? { model: claudeModel } : {}),
+            ...(pickedModels[2] ? { model: pickedModels[2] } : {}),
           },
         ];
 
-        const modelInfo = hasMultipleProviders
-          ? `\n\nUsing different models for true diversity:\n${agentConfigs.map((a) => `- **${a.name}**: ${(a as any).model ?? "default"}`).join("\n")}`
-          : "\n\n(Single provider available — using same model with different focus prompts)";
+        const modelInfo = `\n\nModels selected:\n${agentConfigs.map((a) => `- **${a.name}**: ${a.model ?? "default"}`).join("\n")}`;
 
         const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
 
