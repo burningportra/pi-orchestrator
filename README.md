@@ -179,8 +179,10 @@ When [Sophia](https://github.com/sophialab/sophia) is initialized:
 - **Write**: completion prompts LLM to extract decisions/gotchas/patterns
 - **Truncation**: last 10KB on read to protect context window
 - **Format**: timestamped markdown sections
+- **View/Search/Prune**: `/memory` command for interactive access
+- **Agent access**: `orch_memory` tool for searching during implementation
 
-The system compounds knowledge — each run benefits from prior learnings.
+The system compounds knowledge — each run benefits from prior learnings. Use `/memory view` to browse entries, `/memory search <query>` to find specific learnings, and `/memory prune` to clean up outdated entries.
 
 ## Flywheel-Derived Prompts
 
@@ -203,6 +205,11 @@ The system compounds knowledge — each run benefits from prior learnings.
 | `/orchestrate [goal]` | Skip discovery, plan directly |
 | `/orchestrate-stop` | Cancel + cleanup worktrees |
 | `/orchestrate-status` | Show phase + progress |
+| `/memory` | View memory stats (entry count, size, date range) |
+| `/memory view` | Browse entries interactively |
+| `/memory search <query>` | Search entries by keyword |
+| `/memory prune` | Interactive entry deletion with confirmation |
+| `/memory add <text>` | Quick-add a memory entry |
 
 ## Tools (called by LLM)
 
@@ -213,6 +220,7 @@ The system compounds knowledge — each run benefits from prior learnings.
 | `orch_select` | User picks idea, constraints, planning mode, models |
 | `orch_plan` | Plan approval + brainstorm + sophia CR + polish + parallel launch |
 | `orch_review` | Per-step review gates + post-implementation guided sequence |
+| `orch_memory` | Search and read compound memory (stats, search, list) |
 
 ## Project Structure
 
@@ -221,6 +229,7 @@ src/
 ├── index.ts               # Extension: 5 tools, commands, state machine
 ├── goal-refinement.ts     # Goal refinement: questionnaire TUI + synthesis
 ├── goal-refinement.test.ts # Tests for goal refinement (30 tests)
+├── memory.test.ts         # Tests for memory operations (80 tests)
 ├── profiler.ts            # Repo scanning (find, git, grep) + detection
 ├── prompts.ts             # Flywheel-derived prompt templates
 ├── sophia.ts              # Sophia CLI wrapper + dependency analysis + merge
