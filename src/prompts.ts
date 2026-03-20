@@ -97,10 +97,11 @@ After all steps and reviews pass, the orchestrator offers:
 
 ## Rules
 - Follow the workflow in order. Do not skip steps.
+- **CRITICAL: When a tool result says "NEXT: Call \`tool_name\`", you MUST call that tool IMMEDIATELY in your next response. Do NOT stop to summarize, ask questions, or chat. Just call the tool.**
 - After each tool call, read the result carefully before proceeding.
 - When implementing steps, use the standard code tools (read, write, edit, bash) to make actual changes.
 - If a review fails, re-implement based on the revision instructions, then review again (max 3 retries per step).
-- Keep the user informed with brief status updates between tool calls.
+- Do NOT add commentary between orchestrator tool calls. The user sees the tool results directly.
 - If orch_select returns no selection, stop gracefully.
 - If orch_plan returns and the user rejects, stop gracefully.`;
 }
