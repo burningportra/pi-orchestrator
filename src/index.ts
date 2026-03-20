@@ -1136,7 +1136,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `**NEXT: Review the tasks below, revise them, and call \`orch_plan\` again with updated steps NOW.**\n\n## 🔍 Task Polishing${sophiaInfo}\n\n${taskList}\n\n---\n\nCheck over each task super carefully — are you sure it makes sense? Is it optimal? Could we change anything to make the system work better for users? It's a lot easier and faster to operate in "plan space" before we start implementing!`,
+                text: `**NEXT: Review the tasks below, revise them, and call \`orch_plan\` again with updated steps NOW.**\n\n## 🔍 Task Polishing${sophiaInfo}\n\n${taskList}\n\n---\n\nCheck over each task super carefully — are you sure it makes sense? Is it optimal? Could we change anything to make the system work better for users? If so, revise the task. It's a lot easier and faster to operate in "plan space" before we start implementing these things! Use /effort max.`,
               },
             ],
             details: { approved: true, plan, polishing: true, sophiaCR: sophiaCRResult?.cr },
