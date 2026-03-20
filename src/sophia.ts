@@ -504,7 +504,13 @@ export interface ParallelAnalysis {
 }
 
 /**
- * Analyze step dependencies based on shared artifacts.
+ * Group steps into parallel execution waves.
+ *
+ * Builds a dependency graph from two sources (merged additively):
+ * 1. Explicit `dependsOn` (with implicit-sequential-default from resolveDependencies)
+ * 2. Shared artifacts — if steps A and B both touch the same file and A appears
+ *    earlier in the plan, B depends on A (chained by plan order).
+ *
  * Returns groups of step indices that can run in parallel,
  * plus a flat merge order for applying results sequentially.
  */
@@ -536,7 +542,9 @@ export function analyzeParallelGroups(steps: PlanStep[]): ParallelAnalysis {
     }
   }
 
-  // Add artifact-based edges (additive — doesn't remove dependsOn edges)
+  // Add artifact-based edges (additive — doesn't remove dependsOn edges).
+  // When multiple steps touch the same file, chain them in plan order
+  // so later steps wait for earlier ones (prevents merge conflicts).
   for (const [_artifact, stepIndices] of artifactToSteps) {
     if (stepIndices.length > 1) {
       for (let i = 1; i < stepIndices.length; i++) {
@@ -561,8 +569,11 @@ export function analyzeParallelGroups(steps: PlanStep[]): ParallelAnalysis {
       }
     }
     if (group.length === 0) {
-      // Cycle or bug — just take the first remaining
-      group.push([...remaining][0]);
+      // Cycle detected (resolveDependencies warns separately) or artifact
+      // edges created one. Force progress by taking the lowest-index step.
+      const forced = Math.min(...remaining);
+      console.warn(`Dependency cycle: forcing step ${forced} to unblock`);
+      group.push(forced);
     }
     groups.push(group);
     for (const idx of group) {
