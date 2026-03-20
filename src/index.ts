@@ -718,23 +718,61 @@ export default function (pi: ExtensionAPI) {
 
       const step = state.plan.steps.find((s) => s.index === params.stepIndex);
 
-      // Sentinel: stepIndex beyond plan = return to iteration menu
-      if (!step && state.phase === "iterating") {
-        // Re-trigger the iteration menu by sending a follow-up
-        pi.sendUserMessage(
-          "Iteration action complete. The orchestrator will show the next action menu — just call `orch_review` for the last real step to re-enter the loop, or ask me what to do next.",
-          { deliverAs: "followUp" }
+      // Sentinel: any orch_review while iterating = re-show "hit me" menu
+      if (state.phase === "iterating" && (!step || params.stepIndex > state.plan.steps.length)) {
+        const allArtifacts = [...new Set(state.plan.steps.flatMap((s) => s.artifacts))];
+        const polish = polishInstructions(state.plan.goal, allArtifacts);
+        const summaryText = summaryInstructions(state.plan.goal, state.plan.steps, state.stepResults);
+
+        state.iterationRound = (state.iterationRound ?? 0) + 1;
+        const round = state.iterationRound;
+        persistState();
+
+        const chosen = await ctx.ui.select(
+          `Round ${round} complete. Go again?`,
+          [
+            "🔥 Hit me — spawn parallel review agents",
+            "✅ Done — finish orchestration",
+          ]
         );
 
-        // Re-show the iteration state
+        if (!chosen || chosen.startsWith("✅")) {
+          orchestratorActive = false;
+          setPhase("complete", ctx);
+          persistState();
+          return {
+            content: [
+              { type: "text", text: `${summaryText}\n\nOrchestration complete after ${round} round(s).` },
+            ],
+            details: { complete: true, rounds: round },
+          };
+        }
+
+        // Spawn parallel review agents
+        const agentConfigs = [
+          {
+            name: `fresh-eyes-r${round}`,
+            task: `Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Give exact file:line fixes.\n\ncd ${ctx.cwd}`,
+          },
+          {
+            name: `polish-r${round}`,
+            task: `Polish/de-slopify reviewer round ${round}.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly — don't just report.\n\ncd ${ctx.cwd}`,
+          },
+          {
+            name: `ergonomics-r${round}`,
+            task: `Agent-ergonomics reviewer round ${round}. Make this maximally intuitive for coding agents.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything that fails that test.\n\ncd ${ctx.cwd}`,
+          },
+        ];
+
+        const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
         return {
           content: [
             {
               type: "text",
-              text: `✅ Iteration action complete.\n\nTo continue iterating, call \`orch_review\` again with stepIndex ${state.plan.steps.length} (the last step) and verdict "pass" to return to the action menu. Or tell the user what you found.`,
+              text: `## 🔥 Hit me — Round ${round}\n\nSpawning 3 parallel review agents: fresh-eyes, polish, ergonomics.\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings then call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for another round.`,
             },
           ],
-          details: { iterating: true, actionComplete: true },
+          details: { iterating: true, round, agents: agentConfigs.map((a) => a.name) },
         };
       }
 
@@ -926,27 +964,20 @@ export default function (pi: ExtensionAPI) {
             worktreePool = undefined;
           }
 
-          ctx.ui.notify("🔄 All steps done — entering iteration loop", "info");
+          ctx.ui.notify("🔄 All steps done — ready to iterate", "info");
           setPhase("iterating", ctx);
           persistState();
 
-          // Interactive iteration loop — offer actions one at a time
-          const iterationActions = [
-            "🔍 Cross-agent review (spawn independent reviewer)",
-            "✨ Polish pass (de-slopify)",
-            "📝 Commit strategy (logical grouping)",
-            "🧩 Skill extraction check",
-            "🔄 Fresh eyes review (re-check everything)",
-            "💡 Discover more ideas for this repo",
-            "✅ Done — finish orchestration",
-          ];
-
+          // First entry into iteration — same "hit me" pattern
           const chosen = await ctx.ui.select(
-            `🎉 All ${state.plan.steps.length} steps completed!${sophiaReviewInfo}\n\nWhat next?`,
-            iterationActions
+            `🎉 All ${state.plan.steps.length} steps completed!${sophiaReviewInfo}`,
+            [
+              "🔥 Hit me — spawn parallel review agents",
+              "✅ Done — finish orchestration",
+            ]
           );
 
-          if (!chosen || chosen === "✅ Done — finish orchestration") {
+          if (!chosen || chosen.startsWith("✅")) {
             orchestratorActive = false;
             setPhase("complete", ctx);
             persistState();
@@ -958,33 +989,36 @@ export default function (pi: ExtensionAPI) {
             };
           }
 
-          // Map selection to action prompt
-          let actionPrompt: string;
-          if (chosen.startsWith("🔍")) {
-            actionPrompt = `## Cross-Agent Review\n\nSpawn a reviewer sub-agent to audit the full diff:\n\n${crossReview}\n\nAfter the review, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} to return to the iteration menu.`;
-          } else if (chosen.startsWith("✨")) {
-            actionPrompt = `${polish}\n\nAfter polishing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} to return to the iteration menu.`;
-          } else if (chosen.startsWith("📝")) {
-            actionPrompt = `${commits}\n\nAfter committing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} to return to the iteration menu.`;
-          } else if (chosen.startsWith("🧩")) {
-            actionPrompt = `${skillCheck}\n\nAfter checking, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} to return to the iteration menu.`;
-          } else if (chosen.startsWith("🔄")) {
-            actionPrompt = `## Fresh Eyes Review\n\nCheck over EVERYTHING again with fresh eyes looking for any blunders, mistakes, errors, oversights, omissions, problems, misconceptions, bugs. Make the code maximally intuitive and ergonomic for coding agents to use.\n\nReview all changed files:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}\n\nAfter reviewing, call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} to return to the iteration menu.`;
-          } else if (chosen.startsWith("💡")) {
-            // Loop back to discovery
-            setPhase("discovering", ctx);
-            persistState();
-            actionPrompt = `The user wants to discover more ideas. Call \`orch_discover\` to generate new project ideas based on the current repo state.`;
-          } else {
-            actionPrompt = summary;
-          }
+          // "Hit me" — spawn parallel review agents
+          state.iterationRound = (state.iterationRound ?? 0) + 1;
+          const round = state.iterationRound;
+          persistState();
 
-          // Stay active for iteration
+          const agentConfigs = [
+            {
+              name: `fresh-eyes-r${round}`,
+              task: `Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Give exact file:line fixes.\n\ncd ${ctx.cwd}`,
+            },
+            {
+              name: `polish-r${round}`,
+              task: `Polish/de-slopify reviewer round ${round}.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly — don't just report.\n\ncd ${ctx.cwd}`,
+            },
+            {
+              name: `ergonomics-r${round}`,
+              task: `Agent-ergonomics reviewer round ${round}. Make this maximally intuitive for coding agents.\n\nGoal: ${state.plan.goal}\nFiles: ${allArtifacts.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything that fails that test.\n\ncd ${ctx.cwd}`,
+            },
+          ];
+
+          const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+
           return {
             content: [
-              { type: "text", text: `${summary}\n\n---\n${actionPrompt}` },
+              {
+                type: "text",
+                text: `${summary}\n\n---\n## 🔥 Hit me — Round ${round}\n\nSpawning 3 parallel review agents: **fresh-eyes**, **polish**, **ergonomics**.\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all complete, present findings then call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} and verdict "pass" for another round.`,
+              },
             ],
-            details: { review, iterating: true, action: chosen },
+            details: { review, iterating: true, round, agents: agentConfigs.map((a) => a.name) },
           };
         }
       } else {
