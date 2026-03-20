@@ -723,7 +723,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `## 🚀 Creative Brainstorm — 3 Parallel Agents\n\nSpawning 3 brainstormers with different angles:\n- **innovator**: novel features nobody has thought of\n- **hardener**: robustness, failure modes, safety\n- **simplifier**: reduce complexity, find shortcuts\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${brainstormJson}\n\`\`\`\n\nAfter all 3 complete, synthesize the best ideas from all brainstormers. Fold the top 3-5 enhancements into the plan and call \`orch_plan\` again with the creatively enhanced steps.`,
+              text: `## 🚀 Creative Brainstorm — 3 Parallel Agents\n\nSpawning 3 brainstormers with different angles:\n- **innovator**: novel features nobody has thought of\n- **hardener**: robustness, failure modes, safety\n- **simplifier**: reduce complexity, find shortcuts\n\n**Call \`parallel_subagents\` NOW:**\n\n\`\`\`json\n${brainstormJson}\n\`\`\`\n\nAfter all 3 complete:\n1. **List ALL ideas** from every brainstormer as a numbered list\n2. **Present them to the user** and ask which ones to include (the user will pick from the list)\n3. Fold ONLY the user-selected ideas into the plan\n4. Call \`orch_plan\` again with the enhanced steps`,
             },
           ],
           details: { approved: false, creativeBrainstorm: true },
