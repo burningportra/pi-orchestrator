@@ -575,7 +575,11 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        plansText += `## Synthesis Instructions\n\nNow **synthesize the best ideas from all plans** into one superior "best of all worlds" hybrid. Be intellectually honest about what each planner did better. Blend the strongest ideas. Then call \`orch_plan\` with the synthesized plan.`;
+        const { synthesisInstructions } = await import("./prompts.js");
+        const synthPrompt = synthesisInstructions(
+          succeeded.map((r) => ({ name: r.name, model: r.model, plan: r.plan }))
+        );
+        plansText += synthPrompt;
 
         return {
           content: [
