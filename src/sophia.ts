@@ -330,7 +330,9 @@ export async function createCRFromPlan(
   ];
   await setCRContract(pi, cwd, cr.id, {
     why: goal,
-    scope: allArtifacts.slice(0, 20), // sophia may have arg limits
+    scope: allArtifacts.length > 20
+      ? (console.warn(`[sophia] CR scope truncated: ${allArtifacts.length} artifacts → 20 (sophia arg limit)`), allArtifacts.slice(0, 20))
+      : allArtifacts,
     invariants: constraints,
     testPlan: "All acceptance criteria met per step",
     rollbackPlan: "git revert CR merge commit",
@@ -338,6 +340,7 @@ export async function createCRFromPlan(
 
   // Create tasks with contracts
   const taskIds = new Map<number, number>();
+  const warnings: string[] = [];
   for (const step of steps) {
     const taskResult = await addTask(
       pi,
@@ -348,12 +351,24 @@ export async function createCRFromPlan(
     if (taskResult.ok && taskResult.data) {
       taskIds.set(step.index, taskResult.data.id);
 
-      await setTaskContract(pi, cwd, cr.id, taskResult.data.id, {
+      const contractResult = await setTaskContract(pi, cwd, cr.id, taskResult.data.id, {
         intent: step.description,
         acceptance: step.acceptanceCriteria,
         scope: step.artifacts,
       });
+      if (!contractResult.ok) {
+        warnings.push(`Step ${step.index}: task created but contract failed: ${contractResult.error}`);
+      }
+    } else {
+      warnings.push(`Step ${step.index}: task creation failed: ${taskResult.error}`);
     }
+  }
+
+  if (taskIds.size === 0) {
+    return { ok: false, error: `CR created but all ${steps.length} tasks failed: ${warnings.join("; ")}` };
+  }
+  if (warnings.length > 0) {
+    console.warn(`[sophia] CR #${cr.id} partial: ${warnings.join("; ")}`);
   }
 
   return { ok: true, data: { cr, taskIds } };
