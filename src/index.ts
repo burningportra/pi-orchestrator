@@ -483,7 +483,7 @@ export default function (pi: ExtensionAPI) {
       if (isDeepPlan) {
         // Spawn 3 parallel agents to create competing plans
         const profileSummary = formatRepoProfile(state.repoProfile!);
-        const planPrompt = `Create a detailed step-by-step plan (3-7 steps) for this goal.\n\n## Goal\n${goal}\n\n## Repo\n${profileSummary}\n\n## Constraints\n${state.constraints.length > 0 ? state.constraints.join(", ") : "None"}\n\nReturn your plan as a numbered list with: step description, acceptance criteria, and files to modify. Be specific and opinionated.`;
+        const planPrompt = `Create a detailed step-by-step plan (3-7 steps) for this goal.\n\n## Goal\n${goal}\n\n## Repo\n${profileSummary}\n\n## Constraints\n${state.constraints.length > 0 ? state.constraints.join(", ") : "None"}\n\n**IMPORTANT: Output your plan as plain text. Do NOT call any orch_ tools (orch_plan, orch_select, etc). Do NOT try to implement anything. Just write the plan and summarize it.**\n\nReturn your plan as a numbered list with: step description, acceptance criteria, and files to modify. Be specific and opinionated.`;
 
         // Detect available models — prefer different providers for true diversity
         const available = ctx.modelRegistry.getAvailable();
@@ -541,21 +541,25 @@ export default function (pi: ExtensionAPI) {
         const models = [geminiModel, gptModel, claudeModel].filter(Boolean);
         const hasMultipleProviders = models.length >= 2;
 
-        type AgentConfig = { name: string; task: string; model?: string };
+        type AgentConfig = { name: string; task: string; model?: string; tools?: string };
+        const plannerTools = "read,bash,grep,find,ls"; // read-only — no write/edit, no orch_ tools
         const agentConfigs: AgentConfig[] = [
           {
             name: "planner-alpha",
             task: `You are Planner Alpha. ${planPrompt}\n\nFocus on: correctness, minimal scope, and clean architecture.\n\ncd ${ctx.cwd}`,
+            tools: plannerTools,
             ...(hasMultipleProviders && geminiModel ? { model: geminiModel } : {}),
           },
           {
             name: "planner-beta",
             task: `You are Planner Beta. ${planPrompt}\n\nFocus on: robustness, edge cases, and testing strategy.\n\ncd ${ctx.cwd}`,
+            tools: plannerTools,
             ...(hasMultipleProviders && gptModel ? { model: gptModel } : {}),
           },
           {
             name: "planner-gamma",
             task: `You are Planner Gamma. ${planPrompt}\n\nFocus on: developer experience, ergonomics, and future extensibility.\n\ncd ${ctx.cwd}`,
+            tools: plannerTools,
             ...(hasMultipleProviders && claudeModel ? { model: claudeModel } : {}),
           },
         ];
