@@ -1020,499 +1020,205 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ─── Tool: orch_plan ─────────────────────────────────────────
+  // ─── Tool: orch_approve_beads ─────────────────────────────────
+  // Replaces orch_plan. Reads beads from br CLI, shows approval UI,
+  // offers Phase 6 refinement, and launches execution on approval.
   pi.registerTool({
-    name: "orch_plan",
-    label: "Create Plan",
+    name: "orch_approve_beads",
+    label: "Approve Beads",
     description:
-      "Submit a structured plan for the selected goal. The plan will be shown to the user for approval. Each step needs: index, description, acceptanceCriteria (string[]), artifacts (string[]).",
-    promptSnippet: "Submit a step-by-step plan for user approval",
-    parameters: Type.Object({
-      goal: Type.String({ description: "restated goal" }),
-      steps: Type.Array(
-        Type.Object({
-          index: Type.Number({ description: "step number (1-based)" }),
-          description: Type.String({ description: "what to do in this step" }),
-          acceptanceCriteria: Type.Array(Type.String(), {
-            description: "criteria to verify this step is done",
-          }),
-          artifacts: Type.Array(Type.String(), {
-            description: "files to create or modify",
-          }),
-          dependsOn: Type.Optional(Type.Array(Type.Number(), {
-            description: "step indices this step depends on. Omit for sequential (depends on previous). Use [] for independent (can parallelize). Use [1,3] for explicit deps.",
-          })),
-        }),
-        { description: "3-7 ordered steps" }
-      ),
-    }),
+      "Read beads created via br CLI, present them for user approval. Offers refinement passes (Phase 6) before execution. Call after the LLM has created beads with br create.",
+    promptSnippet: "Present beads for user approval before execution",
+    parameters: Type.Object({}),
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       if (!state.selectedGoal) {
         throw new Error("No goal selected. Call orch_select first.");
       }
 
-      const plan: Plan = {
-        goal: params.goal,
-        constraints: state.constraints,
-        steps: params.steps as PlanStep[],
-      };
+      const { readBeads, readyBeads, extractArtifacts, validateBeads, syncBeads, updateBeadStatus } = await import("./beads.js");
+      const { beadRefinementPrompt } = await import("./prompts.js");
 
-      // Present plan for approval
-      const planText = plan.steps
-        .map(
-          (s) => {
-            const criteria = s.acceptanceCriteria.join("\n   ✓ ");
-            const files = s.artifacts.join(", ");
-            let depLine = "";
-            if (s.dependsOn !== undefined) {
-              depLine = s.dependsOn.length === 0
-                ? "\n   ⚡ independent"
-                : `\n   🔗 depends on: ${s.dependsOn.join(", ")}`;
-            }
-            return `${s.index}. ${s.description}\n   ✓ ${criteria}\n   📄 ${files}${depLine}`;
-          }
-        )
-        .join("\n\n");
+      // Read all beads from br CLI
+      let beads = await readBeads(pi, ctx.cwd);
+      // Filter to open beads only (ignore closed beads from prior sessions)
+      beads = beads.filter((b) => b.status === "open" || b.status === "in_progress");
 
-      setPhase("awaiting_plan_approval", ctx);
-
-      // Show the full plan first, then ask what to do
-      const planChoice = await ctx.ui.select(
-        `📝 Plan: ${plan.goal}\n\n${planText}`,
-        [
-          "✅ Approve this plan",
-          "🧠 Deep plan — 3 competing LLMs → best-of-all-worlds synthesis",
-          "🚀 Creative brainstorm — enhance before approving",
-          "❌ Reject",
-        ]
-      );
-
-      if (planChoice?.startsWith("🧠")) {
-        // Deep plan — spawn 3 competing agents then synthesize
-        const profileSummary = state.repoProfile ? formatRepoProfile(state.repoProfile, state.scanResult) : "";
-        const planPrompt = `Create a detailed step-by-step plan (3-7 steps) for this goal.\n\n## Goal\n${plan.goal}\n\n## Repo\n${profileSummary}\n\n## Constraints\n${plan.constraints.length > 0 ? plan.constraints.join(", ") : "None"}\n\n## Current Plan (for reference — you may improve on it)\n${planText}\n\n**IMPORTANT: Output your plan as plain text. Do NOT call any orch_ tools. Do NOT try to implement anything. Just write the plan.**\n\nReturn your plan as a numbered list with: step description, acceptance criteria, and files to modify. Be specific and opinionated.`;
-
-        const available = ctx.modelRegistry.getAvailable();
-        const seen = new Set<string>();
-        const filtered = available
-          .sort((a, b) => b.contextWindow - a.contextWindow)
-          .filter((m) => {
-            const dateMatch = m.id.match(/-(\d{8})$/);
-            if (dateMatch) {
-              const baseId = m.id.replace(/-(\d{8})$/, "");
-              const hasLatest = available.some(
-                (o) =>
-                  o.provider === m.provider &&
-                  (o.id === baseId ||
-                    o.id === baseId + "-0" ||
-                    o.id.startsWith(baseId + "-latest"))
-              );
-              if (hasLatest) return false;
-            }
-            const key = `${m.provider}/${m.id}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-
-        const perProvider = new Map<string, typeof filtered>();
-        for (const m of filtered) {
-          const list = perProvider.get(m.provider) ?? [];
-          if (list.length < 3) list.push(m);
-          perProvider.set(m.provider, list);
-        }
-        const topModels = [...perProvider.values()]
-          .flat()
-          .sort((a, b) => {
-            if (a.provider !== b.provider)
-              return a.provider.localeCompare(b.provider);
-            return b.contextWindow - a.contextWindow;
-          });
-
-        const modelOptions = topModels.map((m) => {
-          const ctx_k =
-            m.contextWindow >= 1000000
-              ? `${(m.contextWindow / 1000000).toFixed(1)}M`
-              : `${Math.round(m.contextWindow / 1000)}K`;
-          const r = m.reasoning ? " 🧠" : "";
-          return `${m.provider}/${m.id} (${ctx_k}${r})`;
-        });
-
-        const labels = ["Alpha (correctness)", "Beta (robustness)", "Gamma (ergonomics)"];
-        const pickedModels: (string | undefined)[] = [];
-        for (const label of labels) {
-          const choice = await ctx.ui.select(
-            `Pick model for Planner ${label}:`,
-            modelOptions
-          );
-          pickedModels.push(choice ? choice.split(" (")[0] : undefined);
-        }
-
-        const agentConfigs = [
-          {
-            name: "planner-alpha",
-            task: `You are Planner Alpha. ${planPrompt}\n\nFocus on: correctness, minimal scope, and clean architecture.\n\ncd ${ctx.cwd}`,
-            ...(pickedModels[0] ? { model: pickedModels[0] } : {}),
-          },
-          {
-            name: "planner-beta",
-            task: `You are Planner Beta. ${planPrompt}\n\nFocus on: robustness, edge cases, and testing strategy.\n\ncd ${ctx.cwd}`,
-            ...(pickedModels[1] ? { model: pickedModels[1] } : {}),
-          },
-          {
-            name: "planner-gamma",
-            task: `You are Planner Gamma. ${planPrompt}\n\nFocus on: developer experience, ergonomics, and future extensibility.\n\ncd ${ctx.cwd}`,
-            ...(pickedModels[2] ? { model: pickedModels[2] } : {}),
-          },
-        ];
-
-        const modelInfo = `\n\nModels selected:\n${agentConfigs.map((a) => `- **${a.name}**: ${a.model ?? "default"}`).join("\n")}`;
-
-        ctx.ui.notify(`🧠 Spawning 3 competing planners...`, "info");
-        const deepResults = await runDeepPlanAgents(pi, ctx.cwd, agentConfigs);
-        ctx.ui.notify(`All 3 planners completed.`, "info");
-
-        const successCount = deepResults.filter((r) => r.exitCode === 0 && r.plan).length;
-        if (successCount === 0) {
-          const errors = deepResults.map((r) => `- ${r.name}: ${r.error || "(no output)"}`).join("\n");
-          throw new Error(`All 3 planners failed. Cannot synthesize.\n${errors}`);
-        }
-
-        const planBlocks = deepResults.map((r) => {
-          const status = r.exitCode === 0 ? "✅" : "⚠️";
-          return `### ${status} ${r.name} (${r.model}, ${r.elapsed}s)\n\n${r.plan || r.error || "(no output)"}`;
-        }).join("\n\n---\n\n");
-
-        const synthesis = synthesisInstructions(deepResults.map((r) => ({
-          name: r.name, model: r.model, plan: r.plan,
-        })));
-
+      if (beads.length === 0) {
         return {
-          content: [
-            {
-              type: "text",
-              text: `**NEXT: Synthesize the 3 plans below into one superior hybrid, then call \`orch_plan\` again NOW.**\n\nGoal: "${plan.goal}"${modelInfo}\n\n---\n\n${planBlocks}\n\n---\n\n${synthesis}`,
-            },
-          ],
-          details: { approved: false, deepPlan: true, deepResults },
-        };
-      }
-
-      if (planChoice?.startsWith("🚀")) {
-        const brainstormTask = `You are a creative brainstormer. Here is a plan that needs enhancement:\n\n${planText}\n\nGoal: ${plan.goal}\n\nThink of ONE HUNDRED ways to make this plan more powerful, innovative, and robust. Then pick only your 3-5 VERY BEST ideas. Each idea must be:\n- **Positive expected value**: the benefit clearly outweighs the implementation cost and complexity burden\n- **Pragmatic**: can be implemented without heroic effort\n- **Concrete**: specific enough to act on, not vague hand-waving\n\nFor each idea, output:\n1. **Title** — short name\n2. **What it does** — one sentence\n3. **Why it's +EV** — why the payoff justifies the cost\n\nDo NOT rewrite the plan. Do NOT call any tools.`;
-
-        const brainstormAgents = [
-          {
-            name: "brainstorm-innovator",
-            task: `${brainstormTask}\n\nFocus on: novel features and capabilities nobody has thought of.`,
-            tools: "read,bash,grep,find,ls",
-          },
-          {
-            name: "brainstorm-hardener",
-            task: `${brainstormTask}\n\nFocus on: robustness, failure modes, edge cases, and safety.`,
-            tools: "read,bash,grep,find,ls",
-          },
-          {
-            name: "brainstorm-simplifier",
-            task: `${brainstormTask}\n\nFocus on: removing complexity, merging steps, finding shortcuts that achieve the same outcome with less work.`,
-            tools: "read,bash,grep,find,ls",
-          },
-        ];
-
-        // Spawn brainstorm agents inline (don't rely on agent to call parallel_subagents)
-        ctx.ui.notify(`🚀 Spawning 3 brainstorm agents...`, "info");
-        const brainstormResults = await runHitMeAgents(brainstormAgents, ctx.cwd, ctx);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `**NEXT: List all ideas below, ask the user which to include, fold them into the plan, and call \`orch_plan\` again NOW.**\n\n## 🚀 Creative Brainstorm — 3 Parallel Agents\n\nResults from innovator, hardener, and simplifier:\n\n${brainstormResults.text}\n\n---\n\nList ALL ideas from every brainstormer as:\n\`[N] Title — What it does (Source: innovator/hardener/simplifier)\`\nAsk the user which numbers to include, then fold ONLY those into the plan.`,
-            },
-          ],
-          details: { approved: false, creativeBrainstorm: true },
-        };
-      }
-
-      if (!planChoice || planChoice.startsWith("❌")) {
-        orchestratorActive = false;
-        setPhase("idle", ctx);
-        persistState();
-        return {
-          content: [
-            { type: "text", text: "User rejected the plan. Orchestration stopped." },
-          ],
+          content: [{ type: "text", text: "No open beads found. Create beads with `br create` first, then call `orch_approve_beads`." }],
           details: { approved: false },
         };
       }
 
-      state.plan = plan;
-      state.currentStepIndex = 1;
-      // Reset implementation state — critical when orch_plan is called
-      // multiple times (polish loop or creative brainstorm re-entry)
-      state.stepResults = [];
-      state.reviewVerdicts = [];
-      state.reviewPassCounts = {};
-      state.hitMeTriggered = {};
-      state.hitMeCompleted = {};
-      state.iterationRound = 0;
-      state.currentGateIndex = 0;
-      setPhase("awaiting_plan_approval", ctx);
+      // Store bead IDs in state
+      state.activeBeadIds = beads.map((b) => b.id);
+      setPhase("awaiting_bead_approval", ctx);
       persistState();
 
-      // Polish beads in plan space BEFORE creating beads/sophia tasks
-      // This way, if the user sends back for revision and the LLM calls
-      // orch_plan again, we haven't created orphaned beads/CRs yet.
+      // Validate — check for cycles
+      const validation = await validateBeads(pi, ctx.cwd);
+
+      // Format bead list for display
+      const beadListText = beads.map((b) => {
+        const files = extractArtifacts(b);
+        return `**${b.id}: ${b.title}**\n   ${b.description.split("\n").slice(0, 3).join("\n   ")}\n   📄 ${files.length > 0 ? files.join(", ") : "(no files specified)"}`;
+      }).join("\n\n");
+
+      const validationWarning = !validation.ok
+        ? `\n\n⚠️ Validation issues: ${validation.cycles ? "dependency cycles detected" : ""} ${validation.orphaned.length > 0 ? `orphaned: ${validation.orphaned.join(", ")}` : ""}`
+        : "";
+
+      // Interactive approval/refinement loop
       let polishing = true;
       while (polishing) {
-        const beadList = plan.steps
-          .map((s) => `**Bead ${s.index}: ${s.description}**\n   ✓ ${s.acceptanceCriteria.join("\n   ✓ ")}\n   📄 ${s.artifacts.join(", ")}${s.dependsOn !== undefined ? (s.dependsOn.length === 0 ? "\n   ⚡ independent" : `\n   🔗 depends on: ${s.dependsOn.join(", ")}`) : ""}`)
-          .join("\n\n");
-
-        const polishChoice = await ctx.ui.select(
-          `${plan.steps.length} beads ready.\n\n${beadList}`,
+        const choice = await ctx.ui.select(
+          `${beads.length} beads ready for: ${state.selectedGoal}\n\n${beadListText}${validationWarning}`,
           [
             "▶️  Start implementing",
-            "🔍 Polish — send beads back for LLM review",
-            "❌ Reject plan",
+            "🔍 Refine — send beads back for LLM review (Phase 6)",
+            "❌ Reject",
           ]
         );
 
-        if (polishChoice?.startsWith("🔍")) {
-          // Return to LLM for revision — it will call orch_plan again
-          // No beads/sophia CR created yet, so no orphans
+        if (choice?.startsWith("🔍")) {
+          setPhase("refining_beads", ctx);
+          persistState();
           return {
             content: [
               {
                 type: "text",
-                text: `**NEXT: Review the beads below, revise them, and call \`orch_plan\` again with updated steps NOW.**\n\n## 🔍 Bead Polishing\n\n${beadList}\n\n---\n\nCheck over each bead super carefully — are you sure it makes sense? Is it optimal? Could we change anything to make the system work better for users? If so, revise the bead. It's a lot easier and faster to operate in "plan space" before we start implementing these things! Use /effort max.`,
+                text: `**NEXT: Review and refine the beads using br CLI, then call \`orch_approve_beads\` again.**\n\n${beadRefinementPrompt()}\n\n---\n\nCurrent beads:\n\n${beadListText}`,
               },
             ],
-            details: { approved: true, plan, polishing: true },
+            details: { approved: false, refining: true, beadCount: beads.length },
           };
         }
 
-        if (!polishChoice || polishChoice.startsWith("❌")) {
+        if (!choice || choice.startsWith("❌")) {
           orchestratorActive = false;
           setPhase("idle", ctx);
           persistState();
           return {
-            content: [{ type: "text", text: "Plan rejected. Orchestration stopped." }],
+            content: [{ type: "text", text: "Beads rejected. Orchestration stopped." }],
             details: { approved: false },
           };
         }
 
-        // "▶️ Start implementing" — break out of polish loop
+        // "▶️ Start implementing" — break out of loop
         polishing = false;
       }
 
-      // Now that polishing is done and user committed to implementing,
-      // create beads for each plan step (if beads backend is active)
-      let beadsInfo = "";
-      if (state.coordinationBackend?.beads) {
-        try {
-          const { readBeads } = await import("./beads.js");
-          const beads = await readBeads(pi, ctx.cwd);
-          if (beads.length > 0) {
-            beadsInfo = `\n\n**Beads found:** ${beads.length} beads tracked.`;
-          }
-        } catch {
-          // Non-fatal: beads creation failed silently
-        }
-      }
-
-      // create Sophia CR with the FINAL plan steps
-      let sophiaInfo = "";
-      if (hasSophia) {
-        const available = await isSophiaAvailable(pi, ctx.cwd);
-        const initialized = available && await isSophiaInitialized(pi, ctx.cwd);
-        if (initialized) {
-          const crResult = await createCRFromPlan(
-            pi, ctx.cwd, plan.goal, plan.steps, plan.constraints
-          );
-          if (crResult.ok && crResult.data) {
-            sophiaCRResult = crResult.data;
-            sophiaInfo = `\n\n**Sophia CR #${crResult.data.cr.id}** created on branch \`${crResult.data.cr.branch}\` with ${crResult.data.taskIds.size} tasks.`;
-          } else {
-            sophiaInfo = `\n\n⚠️ Sophia CR creation failed: ${crResult.error}`;
-          }
-        }
-      }
-
+      // ── Approved — launch execution ──────────────────────────
+      // Reset bead-centric implementation state
+      state.beadResults = {};
+      state.beadReviews = {};
+      state.beadReviewPassCounts = {};
+      state.beadHitMeTriggered = {};
+      state.beadHitMeCompleted = {};
+      state.iterationRound = 0;
+      state.currentGateIndex = 0;
       setPhase("implementing", ctx);
+      await syncBeads(pi, ctx.cwd);
       persistState();
 
-      // Analyze parallel groups
-      const analysis = analyzeParallelGroups(plan.steps);
-      parallelAnalysis = analysis;
-      const { groups, mergeOrder } = analysis;
-      const hasParallel = groups.some((g) => g.length > 1);
-
-      // Determine isolation strategy for each parallel group:
-      // - beads+agentmail with disjoint artifacts → same-dir + file reservations (cheaper)
-      // - overlapping artifacts OR no agent-mail → git worktrees (safe isolation)
-      const useBeadsAgentMail = state.coordinationStrategy === "beads+agentmail";
-      sameDirGroups = new Set<number>();
-      let worktreeInfo = "";
-
-      if (hasParallel) {
-        // Classify each parallel group
-        const parallelGroups = groups.filter((g) => g.length > 1);
-        const needsWorktreeSteps: number[] = [];
-
-        for (let gi = 0; gi < groups.length; gi++) {
-          const g = groups[gi];
-          if (g.length <= 1) continue;
-          if (useBeadsAgentMail && groupArtifactsAreDisjoint(g, plan.steps)) {
-            sameDirGroups.add(gi);
-          } else {
-            needsWorktreeSteps.push(...g);
-          }
-        }
-
-        // Only create worktrees for groups that actually need them
-        if (needsWorktreeSteps.length > 0) {
-          try {
-            const branchResult = await pi.exec("git", ["branch", "--show-current"], { timeout: 3000, cwd: ctx.cwd });
-            const currentBranch = branchResult.stdout.trim() || "main";
-            worktreePool = new WorktreePool(pi, ctx.cwd, currentBranch);
-
-            const createdPaths: string[] = [];
-            for (const stepIdx of needsWorktreeSteps) {
-              const result = await worktreePool.acquire(stepIdx);
-              if (result.ok && result.data) {
-                createdPaths.push(`  Step ${stepIdx}: \`${result.data}\``);
-              }
-            }
-            if (createdPaths.length > 0) {
-              worktreeInfo = `\n\n**Worktrees created** (overlapping artifacts):\n${createdPaths.join("\n")}`;
-            }
-          } catch {
-            worktreeInfo = "\n\n⚠️ Worktree creation failed — falling back to sequential execution.";
-            worktreePool = undefined;
-            if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
-          }
-        }
-
-        if (sameDirGroups.size > 0) {
-          const sameDirGroupNums = [...sameDirGroups].map((gi) => `Group ${gi + 1}`).join(", ");
-          worktreeInfo += `\n\n**Same-dir mode** (disjoint artifacts + agent-mail reservations): ${sameDirGroupNums}`;
-        }
+      // Get first batch of ready beads (unblocked by dependencies)
+      const ready = await readyBeads(pi, ctx.cwd);
+      if (ready.length === 0) {
+        return {
+          content: [{ type: "text", text: "⚠️ No ready beads (all blocked by dependencies). Check `br dep cycles` and `br ready`." }],
+          details: { approved: true, beadCount: beads.length, readyCount: 0 },
+        };
       }
 
-      const parallelInfo = hasParallel
-        ? `\n\n**Parallel execution plan:**\n${groups.map((g, i) => {
-            if (g.length <= 1) return `  Group ${i + 1}: Step ${g.join(", ")}`;
-            const mode = sameDirGroups.has(i) ? "same-dir + reservations" : "worktrees";
-            return `  Group ${i + 1}: Steps ${g.join(", ")} (parallel via ${mode})`;
-          }).join("\n")}\n  Merge order: ${mergeOrder.join(" → ")}${worktreeInfo}`
-        : "";
+      // Determine if we can run in parallel
+      const hasParallel = ready.length > 1;
 
-      const firstGroup = groups[0];
-      const firstGroupIdx = 0;
-      const firstGroupIsParallel = firstGroup.length > 1 &&
-        (sameDirGroups.has(firstGroupIdx) || worktreePool);
+      if (hasParallel) {
+        // Check artifact overlap for same-dir vs worktree decision
+        const allArtifactSets = ready.map((b) => new Set(extractArtifacts(b)));
+        const allDisjoint = allArtifactSets.every((setA, i) =>
+          allArtifactSets.every((setB, j) =>
+            i === j || [...setA].every((f) => !setB.has(f))
+          )
+        );
+        const canSameDir = allDisjoint && state.coordinationBackend?.agentMail;
 
-      if (firstGroupIsParallel) {
-        const isSameDir = sameDirGroups.has(firstGroupIdx);
-
-        // Build explicit parallel_subagents call for the first group
-        const agentConfigs = firstGroup.map((stepIdx) => {
-          const step = plan.steps.find((s) => s.index === stepIdx)!;
-          const wtPath = isSameDir ? undefined : worktreePool?.getPath(stepIdx);
-          const workDir = wtPath ?? ctx.cwd;
-          const agentName = `step-${stepIdx}`;
-          const threadId = state.beadIds?.[stepIdx] ?? `step-${stepIdx}`;
+        // Build parallel agent configs
+        const agentConfigs = ready.map((bead) => {
+          const artifacts = extractArtifacts(bead);
+          const agentName = `bead-${bead.id}`;
           const preamble = state.coordinationBackend?.agentMail
-            ? agentMailTaskPreamble(ctx.cwd, agentName, step.description, step.artifacts, threadId)
+            ? agentMailTaskPreamble(ctx.cwd, agentName, bead.title, artifacts, bead.id)
             : "";
           return {
             name: agentName,
-            task: `${preamble}You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${step.description}\n\n### Acceptance Criteria\n${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${step.artifacts.join(", ")}\n\n⚠️ SCOPE CONSTRAINT: You MUST NOT create or modify any files outside the list above. If you believe additional files need changes, note them in your summary but DO NOT modify them.\n\n### Working Directory\ncd to: ${workDir}\n${isSameDir ? "\n🤝 **Same-dir mode**: Other agents are working in this directory too. Your file reservations via agent-mail protect your files. Do NOT touch files outside your artifact list.\n" : ""}\nImplement the step.\n\nWhen done implementing, STOP and do a fresh-eyes review: carefully read over ALL the new code you just wrote and any existing code you modified, looking super carefully for any obvious bugs, errors, problems, issues, or confusion. Fix anything you uncover.\n\nThen COMMIT your changes:\n\`\`\`bash\ncd ${workDir}\ngit add ${step.artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "step ${stepIdx}: ${step.description.slice(0, 60)}"\n\`\`\`\n\nThen summarize what you did and what the fresh-eyes review found.`,
+            task: `${preamble}You are implementing bead ${bead.id}.\n\n## ${bead.title}\n\n${bead.description}\n\n⚠️ SCOPE CONSTRAINT: Only modify files listed in the bead. If additional files need changes, note them in your summary but DO NOT modify them.\n\n${canSameDir ? "🤝 **Same-dir mode**: Other agents are working in this directory. Your file reservations protect your files.\n\n" : ""}Implement the bead. When done, do a fresh-eyes review of all changes. Then COMMIT:\n\`\`\`bash\ngit add ${artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "bead ${bead.id}: ${bead.title.slice(0, 60)}"\n\`\`\`\n\nSummarize what you did and what the fresh-eyes review found.\n\ncd ${ctx.cwd}`,
           };
         });
 
-        const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
-
-        // Start swarm tender to monitor parallel agents (only for worktree groups)
-        if (worktreePool && !isSameDir) {
-          const { SwarmTender } = await import("./tender.js");
-          const worktreeInfos = firstGroup
-            .map((idx) => ({ path: worktreePool!.getPath(idx)!, stepIndex: idx }))
-            .filter((w) => w.path);
-          if (worktreeInfos.length > 0) {
-            swarmTender = new SwarmTender(pi, ctx.cwd, worktreeInfos, {
-              onStuck: (agent) => {
-                ctx.ui.notify(`⚠️ Step ${agent.stepIndex} agent appears stuck (no activity for 5 min)`, "warning");
-              },
-              onConflict: (conflict) => {
-                ctx.ui.notify(`⚠️ Conflict: ${conflict.file} modified in steps ${conflict.stepIndices.join(", ")}`, "warning");
-              },
-            });
-            swarmTender.start();
-          }
+        // Mark all as in_progress
+        for (const bead of ready) {
+          await updateBeadStatus(pi, ctx.cwd, bead.id, "in_progress");
         }
+        await syncBeads(pi, ctx.cwd);
 
-        const modeLabel = isSameDir
+        state.currentBeadId = ready[0].id;
+        persistState();
+
+        const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+        const modeLabel = canSameDir
           ? "🤝 Same-dir mode — agents coordinate via agent-mail file reservations."
-          : "🔄 Swarm tender active — monitoring agent health every 60s.";
+          : "🔄 Parallel execution via sub-agents.";
 
         return {
           content: [
             {
               type: "text",
-              text: `**NEXT: Call \`parallel_subagents\` NOW to launch Group 1 (Steps ${firstGroup.join(", ")}).**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each step with the sub-agent's summary.\n\n---\n\nPlan approved! ${plan.steps.length} steps to execute.${beadsInfo}${sophiaInfo}${parallelInfo}\n\n${modeLabel}`,
+              text: `**NEXT: Call \`parallel_subagents\` NOW to launch ${ready.length} parallel beads.**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each bead with the sub-agent's summary.\n\n---\n\nBeads approved! ${beads.length} total, ${ready.length} ready now.\n\n${modeLabel}`,
             },
           ],
-          details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr, launchingParallel: true, sameDirMode: isSameDir },
+          details: { approved: true, beadCount: beads.length, readyCount: ready.length, parallel: true },
         };
       }
 
-      // Sequential: start with step 1
-      const firstStep = plan.steps[0];
-
-      // Mark first step's bead as in_progress
-      const firstBeadId = state.beadIds?.[firstStep.index];
-      if (firstBeadId) {
-        const { updateBeadStatus } = await import("./beads.js");
-        await updateBeadStatus(pi, ctx.cwd, firstBeadId, "in_progress");
-      }
+      // Sequential: start with first ready bead
+      const firstBead = ready[0];
+      await updateBeadStatus(pi, ctx.cwd, firstBead.id, "in_progress");
+      await syncBeads(pi, ctx.cwd);
+      state.currentBeadId = firstBead.id;
+      persistState();
 
       const implInstr = implementerInstructions(
-        firstStep,
+        firstBead,
         state.repoProfile!,
-        state.stepResults
+        Object.values(state.beadResults ?? {})
       );
 
       return {
         content: [
           {
             type: "text",
-            text: `**NEXT: Implement Step 1 NOW, then call \`orch_review\` when done.**\n\nPlan approved! ${plan.steps.length} steps to execute.${beadsInfo}${sophiaInfo}${parallelInfo}\n\n---\n\n${implInstr}`,
+            text: `**NEXT: Implement bead ${firstBead.id} NOW, then call \`orch_review\` when done.**\n\nBeads approved! ${beads.length} total, starting with ${firstBead.id}.\n\n---\n\n${implInstr}`,
           },
         ],
-        details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr },
+        details: { approved: true, beadCount: beads.length, readyCount: ready.length, firstBead: firstBead.id },
       };
     },
 
-    renderCall(args, theme) {
+    renderCall(_args, theme) {
       return new Text(
-        theme.fg("toolTitle", theme.bold("orch_plan ")) +
-          theme.fg("dim", `${(args as any).steps?.length ?? "?"} steps`),
+        theme.fg("toolTitle", theme.bold("orch_approve_beads ")) +
+          theme.fg("dim", "reviewing beads..."),
         0, 0
       );
     },
 
     renderResult(result, { expanded }, theme) {
       const d = result.details as any;
-      if (!d?.approved) return new Text(theme.fg("warning", "📝 Plan rejected"), 0, 0);
-      let text = theme.fg("success", `📝 Plan approved — ${d.plan?.steps?.length} steps`);
-      if (expanded && d?.plan?.steps) {
-        for (const s of d.plan.steps) {
-          text += `\n  ${s.index}. ${s.description}`;
-        }
-      }
+      if (!d?.approved) return new Text(theme.fg("warning", "📝 Beads rejected"), 0, 0);
+      let text = theme.fg("success", `📝 Beads approved — ${d.beadCount} beads, ${d.readyCount} ready`);
+      if (d.parallel) text += theme.fg("dim", " (parallel)");
       return new Text(text, 0, 0);
     },
   });
