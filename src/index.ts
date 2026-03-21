@@ -530,6 +530,12 @@ export default function (pi: ExtensionAPI) {
         ? "🔬 Scan: ccc"
         : `📊 Scan: built-in${scanResult.fallback ? ` (fallback from ${scanResult.fallback.from})` : ""}`;
 
+      // Ensure AGENTS.md has agent-mail section when agent-mail is available
+      if (coordBackend.agentMail) {
+        const { ensureAgentMailSection } = await import("./agents-md.js");
+        await ensureAgentMailSection(ctx.cwd);
+      }
+
       // Coordination backend summary
       const coordParts: string[] = [];
       if (coordBackend.beads) coordParts.push("beads");
