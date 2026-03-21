@@ -86,6 +86,12 @@ export function agentMailTaskPreamble(
 You are coordinating with other parallel agents via agent-mail (HTTP at ${AGENT_MAIL_URL}).
 Run these bash commands. **This is required, not optional.**
 
+**⚠️ CRITICAL: Use EXACT field names below. Common mistakes that will cause errors:**
+- Use \`sender_name\` NOT \`sender\`
+- Use \`body_md\` NOT \`body\`
+- Use \`project_key\` NOT \`project\`
+- For broadcast: use \`"to": [], "broadcast": true\` NOT \`"to": ["all"]\`
+
 **1. Bootstrap session + reserve files (run FIRST, before any work):**
 \`\`\`bash
 ${startSessionCmd}
@@ -100,20 +106,20 @@ export MY_AGENT_NAME="<name from response>"
 **2. Announce start** (use your actual agent name):
 \`\`\`bash
 ${amRpcCmd("send_message", {
-    project_key: cwd, sender_name: "YOUR_AGENT_NAME", to: ["all"],
+    project_key: cwd, sender_name: "YOUR_AGENT_NAME", to: [],
     subject: `[${threadId}] Starting: ${safeDesc.slice(0, 60)}`,
     body_md: `Working on: ${safeDesc}\\nFiles: ${artifacts.join(", ")}`,
-    thread_id: threadId,
+    thread_id: threadId, broadcast: true,
   })}
 \`\`\`
 
 **3. When DONE — send summary + release** (replace YOUR_AGENT_NAME and YOUR_SUMMARY):
 \`\`\`bash
 ${amRpcCmd("send_message", {
-    project_key: cwd, sender_name: "YOUR_AGENT_NAME", to: ["all"],
+    project_key: cwd, sender_name: "YOUR_AGENT_NAME", to: [],
     subject: `[${threadId}] Done`,
     body_md: "YOUR_SUMMARY_HERE",
-    thread_id: threadId,
+    thread_id: threadId, broadcast: true,
   })}
 ${amRpcCmd("release_file_reservations", {
     project_key: cwd, agent_name: "YOUR_AGENT_NAME",
