@@ -8,10 +8,6 @@ import { tmpdir } from "os";
 import type {
   OrchestratorState,
   CandidateIdea,
-  Plan,
-  PlanStep,
-  StepResult,
-  ReviewVerdict,
   OrchestratorPhase,
   ScanResult,
 } from "./types.js";
@@ -37,7 +33,6 @@ import { runGoalRefinement, extractConstraints } from "./goal-refinement.js";
 import {
   isSophiaAvailable,
   isSophiaInitialized,
-  createCRFromPlan,
   mergeWorktreeChanges,
   type PlanToCRResult,
 } from "./sophia.js";
@@ -156,7 +151,6 @@ export default function (pi: ExtensionAPI) {
   const ensureAgentMailProject = (cwd: string) =>
     _ensureAgentMailProject(pi.exec.bind(pi) as ExecFn, cwd);
 
-  let hasSophia = false;
   let sophiaCRResult: PlanToCRResult | undefined;
   let worktreePool: WorktreePool | undefined;
   let swarmTender: import("./tender.js").SwarmTender | undefined;
@@ -194,12 +188,6 @@ export default function (pi: ExtensionAPI) {
       const done = Object.values(state.beadResults ?? {}).filter(r => r.status === "success").length;
       const total = state.activeBeadIds.length;
       lines.push(`📊 Progress: ${done}/${total} beads done`);
-    } else if (state.plan) {
-      // Legacy fallback
-      const done = state.stepResults.length;
-      const total = state.plan.steps.length;
-      const passed = state.reviewVerdicts.filter((r) => r.passed).length;
-      lines.push(`📊 Progress: ${done}/${total} steps (${passed} passed)`);
     }
     if (swarmTender) {
       lines.push(`🐝 Tender: ${swarmTender.getSummary()}`);
@@ -211,7 +199,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     if (!orchestratorActive) return;
     return {
-      systemPrompt: event.systemPrompt + "\n\n" + orchestratorSystemPrompt(hasSophia, state.coordinationBackend),
+      systemPrompt: event.systemPrompt + "\n\n" + orchestratorSystemPrompt(state.coordinationBackend?.sophia ?? false, state.coordinationBackend),
     };
   });
 
@@ -250,22 +238,15 @@ export default function (pi: ExtensionAPI) {
           const freshBackend = await detectCoordinationBackend(pi, ctx.cwd);
           state.coordinationBackend = freshBackend;
           state.coordinationStrategy = selectStrategy(freshBackend);
-          hasSophia = freshBackend.sophia;
-          state.hasSophia = hasSophia;
         } else {
-          // Legacy state without coordination backend — use hasSophia flag
-          hasSophia = state.hasSophia ?? false;
-          if (hasSophia) {
-            const stillAvailable = await isSophiaAvailable(pi, ctx.cwd);
-            if (!stillAvailable) {
-              hasSophia = false;
-              state.hasSophia = false;
-            }
-          }
+          // Legacy state without coordination backend — detect fresh
+          const freshBackend = await detectCoordinationBackend(pi, ctx.cwd);
+          state.coordinationBackend = freshBackend;
+          state.coordinationStrategy = selectStrategy(freshBackend);
         }
         if (state.sophiaCRId && state.sophiaTaskIds) {
           // Try to rebuild full CR state from sophia if available
-          if (hasSophia) {
+          if (state.coordinationBackend?.sophia) {
             const { getCRStatus } = await import("./sophia.js");
             const crStatus = await getCRStatus(pi, ctx.cwd, state.sophiaCRId);
             if (crStatus.ok && crStatus.data) {
@@ -324,7 +305,6 @@ export default function (pi: ExtensionAPI) {
   function persistState() {
     // Sync ephemeral state into persisted state
     state.worktreePoolState = worktreePool?.getState();
-    state.hasSophia = hasSophia;
     if (sophiaCRResult) {
       state.sophiaCRId = sophiaCRResult.cr.id;
       state.sophiaCRBranch = sophiaCRResult.cr.branch;
@@ -549,7 +529,6 @@ export default function (pi: ExtensionAPI) {
       const coordStrategy = selectStrategy(coordBackend);
       state.coordinationBackend = coordBackend;
       state.coordinationStrategy = coordStrategy;
-      hasSophia = coordBackend.sophia;
       persistState();
 
       setPhase("discovering", ctx);

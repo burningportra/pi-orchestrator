@@ -18,19 +18,20 @@ You: /orchestrate
 → Scans your repo (ccc codebase analysis first, profile/commits/history second)
 → Proposes 3–7 improvements ranked by impact
 → You pick one (or type your own goal)
-→ Creates a step-by-step plan
-→ Implements each step with self-review
-→ You approve, request changes, or run parallel reviews
+→ LLM creates beads (tasks) via br CLI with dependencies
+→ You approve beads (with optional refinement passes)
+→ Implements ready beads in dependency order
+→ Reviews each bead, iterates until passing
 → Done. Learnings saved for next time.
 ```
 
 ## Key features
 
 - **Multi-model planning** — Have 3 different AI models compete on your plan, then synthesize the best parts
-- **Parallel execution** — Independent steps run simultaneously in git worktrees
+- **Bead-based execution** — Tasks created as beads with dependency tracking via br CLI
 - **4-agent review** — Fresh-eyes, polish, ergonomics, and reality-check reviewers run in parallel
 - **Compound memory** — Each run learns from previous runs in the same repo
-- **Sophia integration** — Optional change request tracking with contracts and validation
+- **Coordination backends** — Beads (br CLI), Sophia, and agent-mail for multi-agent coordination
 
 ## Prerequisites
 

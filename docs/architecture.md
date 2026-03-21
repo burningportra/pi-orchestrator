@@ -2,7 +2,7 @@
 
 ## Overview
 
-pi-orchestrator turns `/orchestrate` into a structured, multi-agent workflow. It scans the codebase, proposes improvements, plans the work, executes steps in git worktrees when parallelism is possible, reviews the results, and iterates until the user is satisfied.
+pi-orchestrator turns `/orchestrate` into a structured, multi-agent workflow. It scans the codebase, proposes improvements, creates beads (tasks) via the `br` CLI with dependency tracking, executes ready beads in order, reviews the results, and iterates until the user is satisfied.
 
 Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
 
@@ -26,24 +26,24 @@ Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
   │                           │ Claude plan       │
   │                           └──────────────────┘
   │
-  ├─► orch_plan        — Plan approval:
-  │     │   ✅ Approve / 🚀 Creative brainstorm (3 agents) / ❌ Reject
-  │     │
-  │     ├─► Sophia CR + tasks created
-  │     ├─► 🔍 Polish tasks in plan space / ▶️ Start implementing
-  │     ├─► dependsOn analysis → parallel groups detected
-  │     ├─► Worktrees created for parallel steps
-  │     └─► 🐝 Swarm tender starts monitoring
+  ├─► LLM creates beads via `br create` + `br dep add`
   │
-  │   ┌─── Per-Step Loop ──────────────────────────────────────┐
+  ├─► orch_approve_beads — Bead approval:
+  │     │   ✅ Approve / 🔍 Refine / ❌ Reject
+  │     │
+  │     ├─► Reads beads from `br list --json`
+  │     ├─► Optional refinement passes (polish in bead space)
+  │     └─► On approve: finds ready beads via `br ready`
+  │
+  │   ┌─── Per-Bead Loop ─────────────────────────────────────┐
+  │   │  Pick next ready bead (`br ready`)                      │
   │   │  Implement (with fresh-eyes self-review before commit)  │
   │   │                                                         │
-  │   │  orch_review — per-step gate:                          │
+  │   │  orch_review — per-bead gate:                          │
   │   │    🔥 Hit me → 4 parallel review agents                │
-  │   │    ✅ Looks good → advance                             │
+  │   │    ✅ Looks good → mark bead done, advance             │
   │   │                                                         │
-  │   │  Auto-commit fallback for forgetful sub-agents          │
-  │   │  Worktree merge-back on pass                           │
+  │   │  `br done <id>` on pass → unlocks dependent beads      │
   │   │  ⏭️ Skip to completion if work done early              │
   │   └────────────────────────────────────────────────────────┘
   │
@@ -101,60 +101,56 @@ Each idea includes a `rationale` (why it beat other candidates, citing repo evid
 
 Full ideation results are persisted as a session artifact (`discovery/ideas-<timestamp>.md`) for later reference or follow-up orchestration runs.
 
-### 2. Planning
+### 2. Planning (Bead Creation)
 
-#### Standard Planning
+After the user selects a goal, the LLM creates **beads** (tasks) using the `br` CLI:
 
-A single LLM generates a step-by-step plan for the selected goal.
+```bash
+br create "Implement auth module" --type task --priority 3
+br create "Add tests for auth" --type task --priority 2
+br dep add <test-bead-id> <auth-bead-id>   # tests depend on auth
+```
+
+Each bead has: title, description, type, priority, labels, and optional dependencies.
 
 #### Deep Planning (Multi-Model Synthesis)
 
 When you select "🧠 Deep plan":
 
 1. **Pick 3 models** from available providers (sorted by context window)
-2. **3 parallel agents** each create a plan with a different focus:
-   - Correctness
-   - Robustness
-   - Ergonomics
-3. **Synthesis**: an LLM blends "best of all worlds" into a hybrid plan
-4. **🚀 Creative brainstorm** (optional): 3 parallel brainstorm agents (innovator / hardener / simplifier) each think of 100 ideas, output their top 3–5 with +EV justification. The user picks which to include.
+2. **3 parallel agents** each create beads with a different focus: correctness, robustness, ergonomics
+3. **Synthesis**: an LLM blends "best of all worlds" into a unified bead set
 
 Agents get read-only tools and cannot call `orch_*` tools.
 
-#### Plan Approval & Task Polishing
+#### Bead Approval (`orch_approve_beads`)
 
-Plan approval is a 3-option select showing the full plan text:
+The `orch_approve_beads` tool reads beads from `br list --json` and presents them for approval:
 
-- **✅ Approve** → keep the plan and move to the pre-implementation polish loop
-- **🚀 Creative brainstorm** → 3 parallel agents enhance the plan
+- **✅ Approve** → find ready beads and begin execution
+- **🔍 Refine** → polish beads in bead space, then re-approve
 - **❌ Reject** → stop
 
-After approval, the user gets one more gate before execution:
+Refinement passes let you iterate on bead descriptions, dependencies, and priorities before committing to execution.
 
-- **🔍 Polish** — review tasks in plan space and send them back for revision
-- **▶️ Start implementing** — commit to execution
+#### Bead Dependencies
 
-Only after the user chooses **Start implementing** does the orchestrator create Sophia tasks / CR state. That avoids orphaned Sophia artifacts if the plan gets revised in polish mode.
-
-#### Step Dependencies (dependsOn)
-
-Steps declare dependencies for parallel scheduling:
-
-| `dependsOn` | Meaning |
-|-------------|---------|
-| omitted | Sequential — depends on previous step (default) |
-| `[]` | Independent — can run in parallel |
-| `[1, 3]` | Explicit — depends on steps 1 and 3 |
-
-`resolveDependencies()` normalizes all modes, filters self-refs and invalid indices, and detects cycles with exact path reporting. Dependencies are merged additively with artifact-based deps.
-
-The planner prompt includes a self-check: *"if your description says after/once/then, you probably need dependsOn."*
+Dependencies are managed via `br dep add <child> <parent>`. The `br ready` command returns beads whose dependencies are all satisfied. Cycle detection is handled by the br CLI.
 
 ### 3. Implementation
 
+#### Bead-Based Execution
+
+The orchestrator executes beads in dependency order:
+
+1. **`br ready`** returns beads whose dependencies are satisfied
+2. The LLM implements the next ready bead
+3. On completion, **`br done <id>`** marks the bead complete and unlocks dependents
+4. The loop continues until all beads are done
+
 #### Parallel Execution & Worktrees
 
-When steps have no shared dependencies, they run in parallel:
+When multiple beads are ready simultaneously, they can run in parallel:
 
 1. **`WorktreePool`** creates isolated git worktrees (`git worktree add`)
 2. **`parallel_subagents`** spawns agents in separate terminal panes
@@ -179,12 +175,12 @@ Starts on parallel launch, stops on completion.
 
 ### 4. Review
 
-#### Per-Step Review
+#### Per-Bead Review
 
-After each step's self-review passes:
+After each bead's self-review passes:
 
 - **🔥 Hit me** — 4 parallel review agents (fresh-eyes / polish / ergonomics / reality-check)
-- **✅ Looks good** — advance to next step
+- **✅ Looks good** — mark bead done, advance to next ready bead
 
 After hit-me agents finish, the workflow auto-advances (no re-prompt). Only the first round shows the menu.
 
@@ -242,16 +238,21 @@ When [Sophia](https://github.com/sophialab/sophia) is initialized:
 
 ```
 src/
-├── index.ts      # Extension runtime: commands, tools, and orchestrator state machine
-├── scan.ts       # First-class scan contract + provider entrypoint (currently builtin only)
-├── profiler.ts   # Built-in repo profiling (find, git, grep) + detection
-├── prompts.ts    # Flywheel-derived prompt templates
-├── sophia.ts     # Sophia CLI wrapper + dependency analysis + merge
-├── types.ts      # Shared TypeScript types: scan, state, plans, reviews
-├── worktree.ts   # WorktreePool + autoCommitWorktree
-├── tender.ts     # SwarmTender: agent health + conflict detection
-├── memory.ts     # Compound memory: read/append .pi-orchestrator/memory.md
-└── deep-plan.ts  # Direct pi CLI spawning helpers
+├── index.ts           # Extension runtime: commands, tools, and orchestrator state machine
+├── scan.ts            # First-class scan contract + provider entrypoint
+├── profiler.ts        # Built-in repo profiling (find, git, grep) + detection
+├── prompts.ts         # Flywheel-derived prompt templates
+├── types.ts           # Shared TypeScript types: scan, state, beads, reviews
+├── beads.ts           # br CLI wrapper: list, ready, done, create beads
+├── coordination.ts    # Coordination backend detection (beads, sophia, agent-mail)
+├── agent-mail.ts      # Agent-mail integration for multi-agent coordination
+├── agents-md.ts       # AGENTS.md generation for sub-agent context
+├── goal-refinement.ts # Goal refinement and constraint extraction
+├── sophia.ts          # Sophia CLI wrapper + dependency analysis + merge
+├── worktree.ts        # WorktreePool + autoCommitWorktree
+├── tender.ts          # SwarmTender: agent health + conflict detection
+├── memory.ts          # Compound memory: read/append .pi-orchestrator/memory.md
+└── deep-plan.ts       # Direct pi CLI spawning helpers
 ```
 
 Note: there is currently no separate `src/orchestrator.ts`; the orchestrator runtime lives in `src/index.ts`.
