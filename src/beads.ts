@@ -13,7 +13,7 @@ export async function readBeads(
   try {
     const result = await pi.exec("br", ["list", "--json"], { timeout: 10000, cwd });
     const data = JSON.parse(result.stdout);
-    return (data?.issues ?? []) as Bead[];
+    return (Array.isArray(data) ? data : data?.issues ?? []) as Bead[];
   } catch {
     return [];
   }
@@ -31,7 +31,8 @@ export async function readyBeads(
     const stdout = result.stdout.trim();
     if (!stdout) return [];
     const data = JSON.parse(stdout);
-    return (data?.issues ?? []) as Bead[];
+    // br ready --json returns a bare array, br list --json returns {issues: [...]}
+    return (Array.isArray(data) ? data : data?.issues ?? []) as Bead[];
   } catch {
     return [];
   }
