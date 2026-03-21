@@ -1,7 +1,7 @@
-import type { RepoProfile, PlanStep, StepResult } from "./types.js";
+import type { RepoProfile, PlanStep, ScanResult, StepResult } from "./types.js";
 
 // ─── Repo Profile Formatting ────────────────────────────────
-export function formatRepoProfile(profile: RepoProfile): string {
+export function formatRepoProfile(profile: RepoProfile, scanResult?: ScanResult): string {
   const sections = [
     `## Repository: ${profile.name}`,
     `**Languages:** ${profile.languages.join(", ") || "unknown"}`,
@@ -13,6 +13,29 @@ export function formatRepoProfile(profile: RepoProfile): string {
     `**CI:** ${profile.hasCI ? `Yes (${profile.ciPlatform ?? "unknown"})` : "No"}`,
     `**TODOs/FIXMEs:** ${profile.todos.length} found`,
   ];
+
+  if (scanResult?.codebaseAnalysis && (scanResult.codebaseAnalysis.summary || scanResult.codebaseAnalysis.recommendations.length > 0 || scanResult.codebaseAnalysis.structuralInsights.length > 0)) {
+    sections.push(`\n### Codebase Analysis (${scanResult.source})`);
+    if (scanResult.codebaseAnalysis.summary) {
+      sections.push(scanResult.codebaseAnalysis.summary);
+    }
+    if (scanResult.codebaseAnalysis.recommendations.length > 0) {
+      sections.push(
+        "\n#### Recommended focus areas",
+        ...scanResult.codebaseAnalysis.recommendations.slice(0, 5).map(
+          (item) => `- **${item.title}**${item.priority ? ` (${item.priority})` : ""}: ${item.detail}`
+        )
+      );
+    }
+    if (scanResult.codebaseAnalysis.structuralInsights.length > 0) {
+      sections.push(
+        "\n#### Structural insights",
+        ...scanResult.codebaseAnalysis.structuralInsights.slice(0, 5).map(
+          (item) => `- **${item.title}**: ${item.detail}`
+        )
+      );
+    }
+  }
 
   if (profile.todos.length > 0) {
     sections.push(
@@ -107,12 +130,14 @@ After all steps and reviews pass, the orchestrator offers:
 }
 
 // ─── Discovery Prompt ────────────────────────────────────────
-export function discoveryInstructions(profile: RepoProfile): string {
+export function discoveryInstructions(profile: RepoProfile, scanResult?: ScanResult): string {
   return `Analyze this repository profile and suggest 3–7 high-leverage, concrete project ideas.
 
-${formatRepoProfile(profile)}
+${formatRepoProfile(profile, scanResult)}
 
 ## Guidelines
+- Treat live codebase scan findings as the primary signal.
+- Use commits, TODOs, and prior history as secondary enrichment only.
 - Each idea should be executable in a few hours to a couple of days
 - Avoid trivial tasks — aim for meaningful improvements
 - Ground ideas in the actual repo state (don't suggest "add tests" if tests are comprehensive)
@@ -132,19 +157,22 @@ For each idea, provide:
 export function plannerInstructions(
   goal: string,
   profile: RepoProfile,
-  constraints: string[]
+  constraints: string[],
+  scanResult?: ScanResult
 ): string {
   return `Create a detailed step-by-step plan for the following goal.
 
 ## Goal
 ${goal}
 
-${formatRepoProfile(profile)}
+${formatRepoProfile(profile, scanResult)}
 
 ## Constraints
 ${constraints.length > 0 ? constraints.map((c) => `- ${c}`).join("\n") : "None specified."}
 
 ## Guidelines
+- Treat live codebase scan findings as the primary signal.
+- Use commits, TODOs, and prior history as secondary enrichment only.
 - Produce 3–7 steps
 - Each step must have clear acceptance criteria
 - List expected artifacts (files to create/modify) for each step

@@ -507,16 +507,16 @@ export default function (pi: ExtensionAPI) {
 
       setPhase("discovering", ctx);
 
-      const formatted = formatRepoProfile(profile);
+      const formatted = formatRepoProfile(profile, scanResult);
       const scanSourceLine = scanResult.source === "ccc"
-        ? "🔬 Scan source: ccc"
-        : `📊 Scan source: built-in profiler${scanResult.fallback ? ` (fallback from ${scanResult.fallback.from})` : ""}`;
+        ? "🔬 Scan: ccc"
+        : `📊 Scan: built-in${scanResult.fallback ? ` (fallback from ${scanResult.fallback.from})` : ""}`;
 
       // Read compound memory from prior orchestrations
       const { readMemory } = await import("./memory.js");
       const memory = readMemory(ctx.cwd);
       const memoryContext = memory
-        ? `\n\n### Compound Memory (from prior runs)\n${memory}`
+        ? `\n\n### Prior Context (compound memory; secondary to live codebase scan)\n${memory}`
         : "";
 
       const discoveryMode = await ctx.ui.select(
@@ -557,7 +557,7 @@ export default function (pi: ExtensionAPI) {
 
         // Generate standard plan first — user can upgrade to deep plan
         // in orch_plan after seeing it
-        const instructions = plannerInstructions(goal, profile, constraints);
+        const instructions = plannerInstructions(goal, profile, constraints, scanResult);
 
         return {
           content: [
@@ -811,7 +811,8 @@ export default function (pi: ExtensionAPI) {
       const instructions = plannerInstructions(
         goal,
         state.repoProfile!,
-        state.constraints
+        state.constraints,
+        state.scanResult
       );
 
       return {
@@ -914,7 +915,7 @@ export default function (pi: ExtensionAPI) {
 
       if (planChoice?.startsWith("🧠")) {
         // Deep plan — spawn 3 competing agents then synthesize
-        const profileSummary = state.repoProfile ? formatRepoProfile(state.repoProfile) : "";
+        const profileSummary = state.repoProfile ? formatRepoProfile(state.repoProfile, state.scanResult) : "";
         const planPrompt = `Create a detailed step-by-step plan (3-7 steps) for this goal.\n\n## Goal\n${plan.goal}\n\n## Repo\n${profileSummary}\n\n## Constraints\n${plan.constraints.length > 0 ? plan.constraints.join(", ") : "None"}\n\n## Current Plan (for reference — you may improve on it)\n${planText}\n\n**IMPORTANT: Output your plan as plain text. Do NOT call any orch_ tools. Do NOT try to implement anything. Just write the plan.**\n\nReturn your plan as a numbered list with: step description, acceptance criteria, and files to modify. Be specific and opinionated.`;
 
         const available = ctx.modelRegistry.getAvailable();
