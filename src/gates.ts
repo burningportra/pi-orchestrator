@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { OrchestratorContext, OrchestratorState } from "./types.js";
-import { polishInstructions, summaryInstructions, realityCheckInstructions } from "./prompts.js";
+import { polishInstructions, summaryInstructions, realityCheckInstructions, deSlopifyInstructions, landingChecklistInstructions } from "./prompts.js";
 import { readBeads, extractArtifacts as extractBeadArtifacts } from "./beads.js";
 import { agentMailTaskPreamble } from "./agent-mail.js";
 
@@ -29,8 +29,10 @@ export async function runGuidedGates(
     { emoji: "🔍", label: "Fresh self-review", desc: "read all new code with fresh eyes" },
     { emoji: "👥", label: "Peer review", desc: "parallel agents review each other's work" },
     { emoji: "🧪", label: "Test coverage", desc: "check unit tests + e2e, create tasks for gaps" },
+    { emoji: "✏️", label: "De-slopify", desc: "remove AI writing patterns from docs" },
     { emoji: "📦", label: "Commit", desc: "logical groupings with detailed messages" },
     { emoji: "🚀", label: "Ship it", desc: "commit, tag, release, deploy, monitor CI" },
+    { emoji: "🛬", label: "Landing checklist", desc: "verify session is resumable" },
   ];
 
   // Agent-mail threading: if agentMail is active, sub-agents (peer review / hit-me) bootstrap
@@ -147,6 +149,33 @@ export async function runGuidedGates(
     };
   }
 
+  if (chosen.startsWith("✏️")) {
+    // De-slopification gate: only triggers if doc files were modified
+    const docFiles = allArtifacts.filter(f =>
+      f.endsWith(".md") || f.startsWith("docs/") || f.toLowerCase().includes("readme")
+    );
+    if (docFiles.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `## ✏️ De-Slopify — Round ${round}\n\nNo documentation files were modified — skipping de-slopification.${callbackHint}`,
+          },
+        ],
+        details: { iterating: true, round, deSlopify: true, skipped: true },
+      };
+    }
+    return {
+      content: [
+        {
+          type: "text",
+          text: `## ✏️ De-Slopify — Round ${round}\n\n${deSlopifyInstructions(docFiles)}${callbackHint}`,
+        },
+      ],
+      details: { iterating: true, round, deSlopify: true },
+    };
+  }
+
   if (chosen.startsWith("📦")) {
     return {
       content: [
@@ -168,6 +197,18 @@ export async function runGuidedGates(
         },
       ],
       details: { iterating: true, round, shipping: true },
+    };
+  }
+
+  if (chosen.startsWith("🛬")) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `## 🛬 Landing Checklist — Round ${round}\n\n${landingChecklistInstructions(ctx.cwd)}${callbackHint}`,
+        },
+      ],
+      details: { iterating: true, round, landing: true },
     };
   }
 

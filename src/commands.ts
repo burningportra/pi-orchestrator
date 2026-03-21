@@ -194,4 +194,33 @@ export function registerCommands(oc: OrchestratorContext) {
       );
     },
   });
+
+  // ─── Command: /orchestrate-drift-check ─────────────────────
+  pi.registerCommand("orchestrate-drift-check", {
+    description: "Run strategic drift detection — check if the swarm is still converging on the goal",
+    handler: async (_args, ctx) => {
+      if (!oc.orchestratorActive || !oc.state.selectedGoal) {
+        ctx.ui.notify("No active orchestration with a selected goal.", "warning");
+        return;
+      }
+
+      const { readBeads } = await import("./beads.js");
+      const { strategicDriftCheckInstructions } = await import("./prompts.js");
+
+      const beads = await readBeads(pi, ctx.cwd);
+      const openBeads = beads.filter(b => b.status === "open" || b.status === "in_progress");
+      const closedBeads = beads.filter(b => b.status === "closed");
+      const results = Object.values(oc.state.beadResults ?? {});
+
+      const prompt = strategicDriftCheckInstructions(
+        oc.state.selectedGoal!,
+        beads,
+        results,
+        closedBeads.length,
+        beads.length
+      );
+
+      pi.sendUserMessage(prompt);
+    },
+  });
 }

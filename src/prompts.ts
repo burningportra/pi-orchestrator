@@ -707,6 +707,241 @@ A skill is worth creating if:
 - Suggest if any PART of it could be a skill`;
 }
 
+// ─── Strategic Drift Detection ───────────────────────────────
+// Derived from Agent Flywheel Section 7: "Watch for strategic drift."
+/**
+ * Proactive drift check that runs every N completed beads.
+ * Asks: "Do we actually have the thing we are trying to build?"
+ */
+export function strategicDriftCheckInstructions(
+  goal: string,
+  beads: Bead[],
+  results: BeadResult[],
+  completedCount: number,
+  totalCount: number
+): string {
+  const progressPct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+  return `## Strategic Drift Check (${completedCount}/${totalCount} beads, ${progressPct}%)
+
+A swarm can look productive while heading in the wrong direction. This check ensures we are still converging on the actual goal.
+
+### Goal
+${goal}
+
+### Current State
+${beads.map((b) => {
+  const r = results.find((r) => r.beadId === b.id);
+  return `- ${b.id}: ${r?.status === "success" ? "✅" : r ? "🔄" : "⬜"} ${b.title}`;
+}).join("\n")}
+
+### Answer These Questions
+1. **Gap analysis**: If we implement all remaining open beads perfectly, do we fully achieve the goal? If not, what is missing?
+2. **Direction check**: Is any completed work actually moving us AWAY from the goal or creating unnecessary complexity?
+3. **Bead sufficiency**: Are there capabilities the goal requires that no current bead addresses?
+4. **Priority alignment**: Are the highest-impact beads being worked on, or is the swarm doing leaf work while blockers sit idle?
+
+### Output
+- **Drift detected**: YES or NO
+- **Confidence**: HIGH / MEDIUM / LOW
+- **Missing beads**: List any beads that should be created
+- **Beads to deprioritize**: List any that are not actually needed
+- **Recommendation**: CONTINUE, PAUSE_AND_REVISE, or STOP`;
+}
+
+// ─── Blunder Hunt (Overshoot Mismatch Technique) ────────────
+// Derived from Agent Flywheel Section 5: "Lie to them and give them a huge number."
+/**
+ * The overshoot mismatch hunt prompt. Models stop finding problems after ~20-25 issues;
+ * claiming 80+ errors forces them to keep searching exhaustively.
+ */
+export function blunderHuntInstructions(cwd: string, passNumber: number): string {
+  return `## Blunder Hunt — Pass ${passNumber}/5
+
+Reread the beads carefully. I am POSITIVE that you missed or screwed up at least 80 elements in the bead definitions. Check for:
+
+1. **Logical flaws** in bead descriptions or acceptance criteria
+2. **Missing dependencies** between beads
+3. **Incomplete context** that would leave a fresh agent guessing
+4. **Contradictions** between beads
+5. **Missing test expectations**
+6. **Overly vague acceptance criteria**
+7. **Wrong file paths** in ### Files sections
+8. **Duplicative or overlapping beads**
+9. **Missing error handling expectations**
+10. **Architectural inconsistencies**
+
+For each issue found:
+- State the bead ID and the specific problem
+- Fix it directly via \`br update <id> --description "..."\`
+- Or create missing beads via \`br create\`
+
+Do NOT be satisfied with finding only a few issues. Keep looking. Use ultrathink.
+
+cd ${cwd}`;
+}
+
+// ─── Random Code Exploration Review ──────────────────────────
+// Derived from Agent Flywheel Section 8: alternating review patterns.
+/**
+ * Random exploration breaks the locality trap by forcing the reviewer
+ * to pick files NOT in the changed artifacts list.
+ */
+export function randomExplorationInstructions(
+  goal: string,
+  changedFiles: string[],
+  cwd: string
+): string {
+  const excludeList = changedFiles.length > 0
+    ? `\n\n**EXCLUDE these files** (already reviewed by other agents):\n${changedFiles.map(f => `- ${f}`).join("\n")}`
+    : "";
+
+  return `## Random Code Exploration Review
+
+Randomly explore code files in this project, choosing files to deeply investigate and understand. Trace their functionality and execution flows through related imports and dependents.${excludeList}
+
+### Goal Context
+${goal}
+
+### Instructions
+1. Pick 3-5 files at random (NOT from the changed files list above)
+2. For each file, trace execution flows through imports and callers
+3. Once you understand the purpose in the larger workflow context, do a super careful check with "fresh eyes" for:
+   - Obvious bugs, problems, errors, silly mistakes
+   - Logic errors in execution flows
+   - Missing error handling
+   - Assumptions that don't hold
+4. Fix any issues you find directly using the edit tool
+
+Be thorough. The bugs that survive to this phase live in utility modules, error handling paths, and edge-case branches — the places nobody looks.
+
+Use ultrathink.
+
+cd ${cwd}`;
+}
+
+// ─── De-Slopification ───────────────────────────────────────
+// Derived from Agent Flywheel Section 8: "De-Slopification"
+/** Extensible catalogue of AI slop patterns to detect and fix. */
+export const AI_SLOP_PATTERNS = [
+  { pattern: "emdash overuse (—)", fix: "Replace with semicolons, commas, or sentence splits" },
+  { pattern: '"It\'s not X, it\'s Y"', fix: "Recast the contrast without the formulaic structure" },
+  { pattern: '"Here\'s why" / "Here\'s why it matters:"', fix: "Remove the clickbait lead-in" },
+  { pattern: '"Let\'s dive in" / "Let us dive in"', fix: "Remove forced enthusiasm" },
+  { pattern: '"At its core..."', fix: "Remove pseudo-profound opener" },
+  { pattern: '"It\'s worth noting..."', fix: "Remove unnecessary hedge" },
+  { pattern: '"leverage" / "utilize"', fix: 'Use "use"' },
+  { pattern: '"comprehensive" / "robust"', fix: "Be specific about what makes it comprehensive" },
+  { pattern: '"seamless" / "seamlessly"', fix: "Describe the actual behavior" },
+  { pattern: '"In conclusion" / "To summarize"', fix: "Just state the conclusion" },
+];
+
+export function deSlopifyInstructions(files: string[]): string {
+  const patternList = AI_SLOP_PATTERNS
+    .map((p, i) => `${i + 1}. **${p.pattern}** → ${p.fix}`)
+    .join("\n");
+
+  return `## De-Slopification Pass
+
+Read through the following files carefully and remove telltale AI writing patterns. You MUST manually read each line and revise — NO regex or script-based replacement.
+
+### Files to review
+${files.map(f => `- ${f}`).join("\n")}
+
+### AI Slop Patterns to Fix
+${patternList}
+
+### Rules
+- Read each line of text and revise manually
+- Preserve the meaning while removing the AI-ish phrasing
+- If a sentence works fine with the pattern, leave it (not every emdash is bad)
+- Focus on user-facing documentation, README, and doc comments
+- Code comments are fine to clean up but don't over-polish them`;
+}
+
+// ─── Landing the Plane ──────────────────────────────────────
+// Derived from Agent Flywheel Section 8: "Landing the Plane"
+export function landingChecklistInstructions(cwd: string): string {
+  return `## Landing the Plane — Session Completion Checklist
+
+Work is NOT complete until every item below passes. A session is only "landable" when a future swarm can pick it back up from artifacts alone.
+
+### Checklist
+1. **Remaining work filed**: Create beads for any unfinished work or follow-up items
+2. **Quality gates**: Run tests (\`npm test\`), type check (\`npm run build\`), lints
+3. **Bead status**: Close all finished beads, update in-progress items
+4. **Sync beads**: \`br sync --flush-only\` to export to JSONL
+5. **Commit and push**: \`git pull --rebase && git add . && git commit && git push\`
+6. **Verify**: \`git status\` must show clean working tree and up-to-date with remote
+7. **Session resumability**: AGENTS.md + beads + agent-mail threads are sufficient for a new agent to continue
+
+### For Each Item
+Report: ✅ PASS or ❌ FAIL with reason
+
+cd ${cwd}`;
+}
+
+// ─── Swarm Marching Orders ──────────────────────────────────
+// Derived from Agent Flywheel Section 7: canonical swarm kickoff prompt.
+export function swarmMarchingOrders(cwd: string, beadId?: string): string {
+  return `## Swarm Marching Orders
+
+First read ALL of the AGENTS.md file and README.md file super carefully and understand ALL of both. Then use your code investigation capabilities to fully understand the code, technical architecture and purpose of the project.${beadId ? `\n\nYour assigned bead: ${beadId}` : ""}
+
+Be sure to check your agent mail and promptly respond to any messages. Then proceed meticulously with your assigned bead, working systematically and tracking progress via beads and agent mail messages.
+
+Don't get stuck in "communication purgatory" where nothing gets done. Be proactive about starting work, but inform fellow agents via messages and mark beads appropriately.
+
+When you're not sure what to do next, use \`bv --robot-triage\` to find the highest-impact bead, claim it, and start coding immediately. Acknowledge all communication from other agents. Use ultrathink.
+
+cd ${cwd}`;
+}
+
+/** Stagger delay configuration for thundering herd prevention. */
+export const SWARM_STAGGER_DELAY_MS = 30_000; // 30 seconds between agent starts
+
+// ─── Bead Quality Scoring ───────────────────────────────────
+// Derived from Agent Flywheel Section 4: beads as "executable memory"
+/**
+ * Prompt for LLM-based quality scoring of a bead on WHAT/WHY/HOW axes.
+ */
+export function beadQualityScoringPrompt(beadId: string, title: string, description: string): string {
+  return `## Bead Quality Assessment: ${beadId}
+
+### Title
+${title}
+
+### Description
+${description}
+
+### Score this bead on three axes (1-5 each):
+
+**WHAT (Implementation Details)**: Does the description specify concrete implementation steps?
+- 5: Exact functions, data structures, algorithms, file changes
+- 3: General approach but missing specifics
+- 1: Vague or missing implementation guidance
+
+**WHY (Rationale & Context)**: Does it explain the reasoning, intent, and background?
+- 5: Full rationale, design decisions, tradeoffs documented
+- 3: Some context but gaps in reasoning
+- 1: No rationale — just a bare task description
+
+**HOW (Verification)**: Does it include acceptance criteria, test expectations, verification steps?
+- 5: Specific, testable criteria with edge cases covered
+- 3: Basic criteria but missing edge cases
+- 1: No criteria — "just make it work"
+
+### Output Format (JSON)
+\`\`\`json
+{
+  "what": <1-5>,
+  "why": <1-5>,
+  "how": <1-5>,
+  "weaknesses": ["specific weakness 1", "specific weakness 2"],
+  "suggestions": ["specific improvement 1", "specific improvement 2"]
+}
+\`\`\``;
+}
+
 // ─── Goal Refinement Prompt ──────────────────────────────────
 export function goalRefinementPrompt(goal: string, profile: RepoProfile): string {
   return `## Goal Refinement

@@ -294,6 +294,10 @@ export interface OrchestratorState {
   polishOutputSizes?: number[];
   /** Convergence score (0-1) computed after 3+ rounds. */
   polishConvergenceScore?: number;
+  /** Number of completed beads since last drift check. */
+  beadsSinceLastDriftCheck?: number;
+  /** How often to auto-trigger drift checks (every N completed beads, default 3). */
+  driftCheckInterval?: number;
 }
 
 export function createInitialState(): OrchestratorState {

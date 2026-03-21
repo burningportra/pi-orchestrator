@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { OrchestratorContext, Bead } from "../types.js";
-import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore } from "../prompts.js";
+import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 
 // ─── Module-level bead snapshot for change detection ─────────
@@ -191,6 +191,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
           startLabel,
           `🔍 Polish again (round ${round + 1})`,
           `🧠 Fresh-agent refinement (round ${round + 1})`,
+          `🔨 Blunder hunt (5x overshoot)`,
         );
         // Cross-model review available after at least 1 polish round
         if (round >= 1) {
@@ -240,6 +241,29 @@ export function registerApproveTool(oc: OrchestratorContext) {
             },
           ],
           details: { approved: false, refining: true, freshAgent: true, beadCount: beads.length, polishRound: round },
+        };
+      }
+
+      if (choice?.startsWith("🔨")) {
+        // Blunder hunt: 5x overshoot mismatch technique
+        // Flywheel Section 5: "Lie to them and give them a huge number"
+        oc.setPhase("refining_beads", ctx);
+        oc.persistState();
+        await syncBeads(oc.pi, ctx.cwd);
+
+        // Build 5 sequential blunder hunt passes as a single task
+        const passes = Array.from({ length: 5 }, (_, i) =>
+          blunderHuntInstructions(ctx.cwd, i + 1)
+        ).join("\n\n---\n\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `**NEXT: Run all 5 blunder hunt passes, then call \`orch_approve_beads\` again.**\n\n${passes}`,
+            },
+          ],
+          details: { approved: false, refining: true, blunderHunt: true, beadCount: beads.length, polishRound: round },
         };
       }
 

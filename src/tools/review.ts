@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import type { OrchestratorContext } from "../types.js";
-import { implementerInstructions, realityCheckInstructions } from "../prompts.js";
+import { implementerInstructions, realityCheckInstructions, randomExplorationInstructions } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 import { runGuidedGates } from "../gates.js";
 
@@ -148,6 +148,10 @@ export function registerReviewTool(oc: OrchestratorContext) {
               name: `reality-check-${params.beadId}-r${round}`,
               task: `${rePresPreamble(`reality-check-${params.beadId}-r${round}`)}Reality checker for bead ${params.beadId} (round ${round}).\n\n${realityCheckInstructions(goal, allBeads, beadResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
             },
+            {
+              name: `random-explore-${params.beadId}-r${round}`,
+              task: `${rePresPreamble(`random-explore-${params.beadId}-r${round}`)}${randomExplorationInstructions(goal, allArtifactsForBead, ctx.cwd)}`,
+            },
           ];
           const reviewJson = JSON.stringify({ agents: agentConfigs }, null, 2);
           return {
@@ -201,6 +205,10 @@ export function registerReviewTool(oc: OrchestratorContext) {
             {
               name: `reality-check-${params.beadId}-r${round}`,
               task: `${hitMePreamble(`reality-check-${params.beadId}-r${round}`)}Reality checker for bead ${params.beadId} (round ${round}).\n\n${realityCheckInstructions(goal, allBeads, beadResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+            },
+            {
+              name: `random-explore-${params.beadId}-r${round}`,
+              task: `${hitMePreamble(`random-explore-${params.beadId}-r${round}`)}${randomExplorationInstructions(goal, allArtifactsForBead, ctx.cwd)}`,
             },
           ];
 
