@@ -109,7 +109,7 @@ export async function updateBeadStatus(
   pi: ExtensionAPI,
   cwd: string,
   beadId: string,
-  status: "in_progress" | "closed"
+  status: "in_progress" | "closed" | "deferred"
 ): Promise<void> {
   try {
     await pi.exec("br", ["update", beadId, "--status", status], {

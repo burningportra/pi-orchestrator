@@ -1231,9 +1231,16 @@ export default function (pi: ExtensionAPI) {
     ctx: ExtensionContext,
     extraInfo: string
   ): Promise<{ content: { type: "text"; text: string }[]; details: any }> {
-    const allArtifacts = [...new Set(st.plan!.steps.flatMap((s) => s.artifacts))];
-    const polish = polishInstructions(st.plan!.goal, allArtifacts);
-    const summaryText = summaryInstructions(st.plan!.goal, st.plan!.steps, st.stepResults);
+    const { readBeads, extractArtifacts: extractBeadArtifacts } = await import("./beads.js");
+    const allBeads = await readBeads(pi, ctx.cwd);
+    const activeBeads = st.activeBeadIds
+      ? allBeads.filter((b) => st.activeBeadIds!.includes(b.id))
+      : allBeads;
+    const allArtifacts = [...new Set(activeBeads.flatMap((b) => extractBeadArtifacts(b)))];
+    const goal = st.selectedGoal ?? st.plan?.goal ?? "Unknown goal";
+    const beadResults = Object.values(st.beadResults ?? {});
+    const polish = polishInstructions(goal, allArtifacts);
+    const summaryText = summaryInstructions(goal, activeBeads, beadResults);
 
     st.iterationRound = (st.iterationRound ?? 0) + 1;
     const round = st.iterationRound;
@@ -1286,8 +1293,7 @@ export default function (pi: ExtensionAPI) {
 
     if (!chosen) chosen = "✅";
 
-    const stepCount = st.plan!.steps.length;
-    const callbackHint = `\n\nAfter completing this, call \`orch_review\` with stepIndex ${stepCount + 1} and verdict "pass" for the next gate.`;
+    const callbackHint = `\n\nAfter completing this, call \`orch_review\` with beadId "__gates__" and verdict "pass" for the next gate.`;
 
     if (chosen.startsWith("✅")) {
       orchestratorActive = false;
@@ -1296,7 +1302,7 @@ export default function (pi: ExtensionAPI) {
       persistState();
       return {
         content: [
-          { type: "text", text: `${summaryText}${extraInfo}\n\nOrchestration complete after ${round} round(s).\n\n---\n## 🧠 Compound Memory\n\nDistill the key decisions, gotchas, patterns, and architectural choices from this orchestration. What would a future agent need to know about this repo? Write 3-7 bullet points and append them to \`.pi-orchestrator/memory.md\` using the write or bash tool. Format as a timestamped markdown section.` },
+          { type: "text", text: `${summaryText}${extraInfo}\n\nOrchestration complete after ${round} round(s).\n\n---\n## 🧠 Compound Memory\n\nDistill the key decisions, gotchas, patterns, and architectural choices from this orchestration. What would a future agent need to know about this repo? Write 3–7 bullet points and append them to \`.pi-orchestrator/memory.md\` using the write or bash tool. Format as a timestamped markdown section.` },
         ],
         details: { complete: true, rounds: round },
       };
@@ -1324,19 +1330,19 @@ export default function (pi: ExtensionAPI) {
       const peerAgents = [
         {
           name: `peer-bugs-r${round}`,
-          task: `${peerPreamble(`peer-bugs-r${round}`)}Peer reviewer (round ${round}). Review code written by your fellow agents. Check for issues, bugs, errors, inefficiencies, security problems, reliability issues. Diagnose root causes using first-principle analysis. Don't restrict to latest commits — cast a wider net and go super deep!\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
+          task: `${peerPreamble(`peer-bugs-r${round}`)}Peer reviewer (round ${round}). Review code written by your fellow agents. Check for issues, bugs, errors, inefficiencies, security problems, reliability issues. Diagnose root causes using first-principle analysis. Don't restrict to latest commits — cast a wider net and go super deep!\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
         },
         {
           name: `peer-polish-r${round}`,
-          task: `${peerPreamble(`peer-polish-r${round}`)}Polish reviewer (round ${round}). De-slopify the code. Remove AI slop, improve clarity, make it agent-friendly.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
+          task: `${peerPreamble(`peer-polish-r${round}`)}Polish reviewer (round ${round}). De-slopify the code. Remove AI slop, improve clarity, make it agent-friendly.\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
         },
         {
           name: `peer-ergonomics-r${round}`,
-          task: `${peerPreamble(`peer-ergonomics-r${round}`)}Ergonomics reviewer (round ${round}). If you came in fresh with zero context, would you understand this code? Fix anything confusing.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
+          task: `${peerPreamble(`peer-ergonomics-r${round}`)}Ergonomics reviewer (round ${round}). If you came in fresh with zero context, would you understand this code? Fix anything confusing.\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
         },
         {
           name: `peer-reality-r${round}`,
-          task: `${peerPreamble(`peer-reality-r${round}`)}Reality checker (round ${round}).\n\n${realityCheckInstructions(st.plan!.goal, st.plan!.steps, st.stepResults)}\n\nDo NOT edit code. Just report findings.\n\ncd ${ctx.cwd}`,
+          task: `${peerPreamble(`peer-reality-r${round}`)}Reality checker (round ${round}).\n\n${realityCheckInstructions(goal, activeBeads, beadResults)}\n\nDo NOT edit code. Just report findings.\n\ncd ${ctx.cwd}`,
         },
       ];
       const peerJson = JSON.stringify({ agents: peerAgents }, null, 2);
@@ -1344,7 +1350,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `**NEXT: Call \`parallel_subagents\` NOW with the config below.**\n\n## 👥 Peer Review — Round ${round}\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` with stepIndex ${stepCount + 1} and verdict "pass".`,
+            text: `**NEXT: Call \`parallel_subagents\` NOW with the config below.**\n\n## 👥 Peer Review — Round ${round}\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` with beadId "__gates__" and verdict "pass".`,
           },
         ],
         details: { iterating: true, round, peerReview: true },
@@ -1397,19 +1403,19 @@ export default function (pi: ExtensionAPI) {
     const agentConfigs = [
       {
         name: `fresh-eyes-r${round}`,
-        task: `${hitMePreamble(`fresh-eyes-r${round}`)}Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
+        task: `${hitMePreamble(`fresh-eyes-r${round}`)}Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
       },
       {
         name: `polish-r${round}`,
-        task: `${hitMePreamble(`polish-r${round}`)}Polish/de-slopify reviewer round ${round}.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly — don't just report.\n\ncd ${ctx.cwd}`,
+        task: `${hitMePreamble(`polish-r${round}`)}Polish/de-slopify reviewer round ${round}.\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly — don't just report.\n\ncd ${ctx.cwd}`,
       },
       {
         name: `ergonomics-r${round}`,
-        task: `${hitMePreamble(`ergonomics-r${round}`)}Agent-ergonomics reviewer round ${round}. Make this maximally intuitive for coding agents.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything that fails that test.\n\ncd ${ctx.cwd}`,
+        task: `${hitMePreamble(`ergonomics-r${round}`)}Agent-ergonomics reviewer round ${round}. Make this maximally intuitive for coding agents.\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything that fails that test.\n\ncd ${ctx.cwd}`,
       },
       {
         name: `reality-check-r${round}`,
-        task: `${hitMePreamble(`reality-check-r${round}`)}Reality checker round ${round}.\n\n${realityCheckInstructions(st.plan!.goal, st.plan!.steps, st.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+        task: `${hitMePreamble(`reality-check-r${round}`)}Reality checker round ${round}.\n\n${realityCheckInstructions(goal, activeBeads, beadResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
       },
     ];
 
@@ -1525,7 +1531,7 @@ export default function (pi: ExtensionAPI) {
       "Submit your implementation work for review. Provide a summary of what you changed. The tool evaluates against acceptance criteria and returns pass/fail.",
     promptSnippet: "Submit implementation for review against acceptance criteria",
     parameters: Type.Object({
-      stepIndex: Type.Number({ description: "which step you implemented (1-based)" }),
+      beadId: Type.String({ description: "bead ID to review (from br list), or \"__gates__\" for guided gates" }),
       summary: Type.String({ description: "brief summary of changes made" }),
       verdict: StringEnum(["pass", "fail"] as const, {
         description: "your self-assessment: did you meet all acceptance criteria?",
@@ -1541,475 +1547,198 @@ export default function (pi: ExtensionAPI) {
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (!state.plan) {
-        throw new Error("No plan exists. Call orch_plan first.");
-      }
+      const { getBeadById, readyBeads, updateBeadStatus, syncBeads, readBeads, extractArtifacts: extractBeadArtifacts } = await import("./beads.js");
 
-      const step = state.plan.steps.find((s) => s.index === params.stepIndex);
-
-      // Sentinel: orch_review with stepIndex = steps.length + 1 while iterating = show next gate
-      // Only accept exactly steps.length + 1 to prevent manipulation via arbitrary high values
-      if (state.phase === "iterating" && params.stepIndex === state.plan.steps.length + 1) {
+      // Sentinel: beadId === "__gates__" while iterating = show next gate
+      if (state.phase === "iterating" && params.beadId === "__gates__") {
         return await runGuidedGates(state, ctx, "");
       }
 
-      if (!step) {
-        throw new Error(`Step ${params.stepIndex} not found in plan (valid range: 1-${state.plan.steps.length}).`);
+      const bead = await getBeadById(pi, ctx.cwd, params.beadId);
+      if (!bead) {
+        throw new Error(`Bead ${params.beadId} not found. Use \`br list\` to see available beads.`);
       }
 
-      // Guard: reject re-review of already-completed steps (prevents re-triggering merge/review flow)
-      const alreadyCompleted = state.stepResults.find(
-        (r) => r.stepIndex === params.stepIndex && r.status === "success"
-      );
-      if (alreadyCompleted && params.verdict === "pass") {
+      // Guard: reject re-review of already-completed beads
+      const alreadyCompleted = state.beadResults?.[params.beadId];
+      if (alreadyCompleted?.status === "success" && params.verdict === "pass") {
         return {
           content: [
-            { type: "text", text: `Step ${params.stepIndex} already completed. Move to the next step or call \`orch_review\` with stepIndex ${state.plan.steps.length + 1} for guided gates.` },
+            { type: "text", text: `Bead ${params.beadId} already completed. Move to the next bead or call \`orch_review\` with beadId "__gates__" for guided gates.` },
           ],
-          details: { review: { stepIndex: params.stepIndex, passed: true }, alreadyDone: true },
+          details: { review: { beadId: params.beadId, passed: true }, alreadyDone: true },
         };
       }
 
-      // Record the step result
-      const stepResult: StepResult = {
-        stepIndex: params.stepIndex,
+      // Record the bead result
+      if (!state.beadResults) state.beadResults = {};
+      state.beadResults[params.beadId] = {
+        beadId: params.beadId,
         status: params.verdict === "pass" ? "success" : "partial",
         summary: params.summary,
       };
 
-      // Update or add
-      const existingIdx = state.stepResults.findIndex(
-        (r) => r.stepIndex === params.stepIndex
-      );
-      if (existingIdx >= 0) {
-        state.stepResults[existingIdx] = stepResult;
-      } else {
-        state.stepResults.push(stepResult);
-      }
-
-      const review: ReviewVerdict = {
-        stepIndex: params.stepIndex,
+      // Store review verdict
+      if (!state.beadReviews) state.beadReviews = {};
+      if (!state.beadReviews[params.beadId]) state.beadReviews[params.beadId] = [];
+      state.beadReviews[params.beadId].push({
+        beadId: params.beadId,
         passed: params.verdict === "pass",
         feedback: params.feedback,
         revisionInstructions: params.revisionInstructions,
-      };
-
-      // Always push (don't overwrite) so we can count passes per step
-      state.reviewVerdicts.push(review);
+      });
 
       persistState();
 
       if (params.verdict === "pass") {
-        // Update bead status to closed if beads coordination is active
-        const passBeadId = state.beadIds?.[params.stepIndex];
-        if (passBeadId) {
-          const { updateBeadStatus, syncBeads } = await import("./beads.js");
-          await updateBeadStatus(pi, ctx.cwd, passBeadId, "closed");
-          await syncBeads(pi, ctx.cwd);
-        }
+        // Update bead status to closed
+        await updateBeadStatus(pi, ctx.cwd, params.beadId, "closed");
+        await syncBeads(pi, ctx.cwd);
 
-        // Checkpoint via sophia if available
-        if (hasSophia && sophiaCRResult) {
-          const taskId = sophiaCRResult.taskIds.get(params.stepIndex);
-          if (taskId) {
-            const { checkpointTask } = await import("./sophia.js");
-            const cpResult = await checkpointTask(
-              pi,
-              ctx.cwd,
-              sophiaCRResult.cr.id,
-              taskId
-            );
-            if (!cpResult.ok) {
-              ctx.ui.notify(
-                `⚠️ Sophia checkpoint failed: ${cpResult.error}`,
-                "warning"
-              );
-            }
-          }
-        }
-
-        // Merge worktree changes back if this step used a worktree
-        // (same-dir steps commit directly to the main branch — no merge needed)
-        if (worktreePool && !isSameDirStep(params.stepIndex)) {
-          const wtBranch = worktreePool.getBranch(params.stepIndex);
-          const wtPath = worktreePool.getPath(params.stepIndex);
-          if (wtBranch) {
-            // Auto-commit any uncommitted changes (fallback for sub-agents that forgot)
-            if (wtPath) {
-              const { autoCommitWorktree } = await import("./worktree.js");
-              const acResult = await autoCommitWorktree(
-                pi, wtPath, `auto-commit step ${params.stepIndex}: ${step.description.slice(0, 60)}`
-              );
-              if (acResult.ok && acResult.data) {
-                ctx.ui.notify(`📝 Auto-committed uncommitted changes in step ${params.stepIndex} worktree`, "info");
-              }
-            }
-            const branchResult = await pi.exec("git", ["branch", "--show-current"], { timeout: 3000, cwd: ctx.cwd });
-            const targetBranch = branchResult.stdout.trim();
-
-            // PRE-MERGE SCOPE GATE: revert any out-of-scope files before merging
-            // Uses `git show` to get the original file content from the base branch,
-            // which works correctly in worktrees on different branches.
-            if (wtPath) {
-              const diffResult = await pi.exec("git", ["diff", "--name-only", targetBranch], { timeout: 5000, cwd: wtPath });
-              if (diffResult.stdout.trim()) {
-                const changedFiles = diffResult.stdout.trim().split("\n");
-                const allowedFiles = new Set(step.artifacts);
-                const outOfScope = changedFiles.filter(f => !allowedFiles.has(f));
-                if (outOfScope.length > 0) {
-                  ctx.ui.notify(`⚠️ Step ${params.stepIndex} touched out-of-scope files: ${outOfScope.join(", ")} — reverting`, "warning");
-                  // Restore each out-of-scope file to its state on the target branch
-                  for (const file of outOfScope) {
-                    try {
-                      const showResult = await pi.exec("git", ["show", `${targetBranch}:${file}`], { timeout: 5000, cwd: wtPath });
-                      if (showResult.code === 0) {
-                        // File exists on target branch — restore it
-                        const { writeFileSync } = await import("fs");
-                        const { join } = await import("path");
-                        writeFileSync(join(wtPath, file), showResult.stdout);
-                      } else {
-                        // File doesn't exist on target branch — remove it
-                        await pi.exec("git", ["rm", "-f", file], { timeout: 5000, cwd: wtPath });
-                      }
-                    } catch {
-                      ctx.ui.notify(`⚠️ Could not revert out-of-scope file: ${file}`, "warning");
-                    }
-                  }
-                  // Stage reverted files and amend the last commit
-                  await pi.exec("git", ["add", ...outOfScope], { timeout: 5000, cwd: wtPath });
-                  const hasChanges = await pi.exec("git", ["diff", "--cached", "--quiet"], { timeout: 5000, cwd: wtPath });
-                  if (hasChanges.code !== 0) {
-                    await pi.exec("git", ["commit", "--amend", "--no-edit"], { timeout: 5000, cwd: wtPath });
-                  }
-                }
-              }
-            }
-
-            const mergeResult = await mergeWorktreeChanges(
-              pi, ctx.cwd, wtBranch, targetBranch, step.description
-            );
-            if (!mergeResult.ok) {
-              if (mergeResult.conflict) {
-                ctx.ui.notify(
-                  `⚠️ Merge conflict in step ${params.stepIndex}: ${mergeResult.conflictFiles?.join(", ")}`,
-                  "warning"
-                );
-              } else {
-                ctx.ui.notify(`⚠️ Worktree merge failed: ${mergeResult.error}`, "warning");
-              }
-            }
-            // Release the worktree
-            await worktreePool.release(params.stepIndex);
-          }
-        }
-
-        // Track review passes per step using dedicated counter
-        const prevPassCount = state.reviewPassCounts[params.stepIndex] ?? 0;
-        state.reviewPassCounts[params.stepIndex] = prevPassCount + 1;
+        // Track review passes per bead
+        if (!state.beadReviewPassCounts) state.beadReviewPassCounts = {};
+        const prevPassCount = state.beadReviewPassCounts[params.beadId] ?? 0;
+        state.beadReviewPassCounts[params.beadId] = prevPassCount + 1;
         persistState();
+
+        // Sophia checkpointing commented out for now (uses step indices)
+        // TODO: re-enable with bead ID mapping
+
+        // Merge worktree changes back if this bead used a worktree
+        // (keep worktree merge logic keyed by bead ID where possible)
+        // TODO: worktree pool currently keyed by step index — will be updated later
 
         setPhase("reviewing", ctx);
 
-        // Hit-me flow uses two flags:
-        // - hitMeTriggered: set when user picks "🔥 Hit me" and agents are spawned
-        // - hitMeCompleted: set by the orchestrator ONLY after review agents return results
-        //
-        // An agent calling orch_review while hitMeTriggered=true but hitMeCompleted=false
-        // means it's trying to bypass — we block it and re-present the spawn instruction.
-        const hitMeWasTriggered = state.hitMeTriggered?.[params.stepIndex] ?? false;
-        const hitMeWasCompleted = state.hitMeCompleted?.[params.stepIndex] ?? false;
-        const allArtifactsForStep = step.artifacts;
+        // Hit-me flow uses two flags keyed by bead ID:
+        // - beadHitMeTriggered: set when user picks "🔥 Hit me" and agents are spawned
+        // - beadHitMeCompleted: set by the orchestrator ONLY after review agents return results
+        const hitMeWasTriggered = state.beadHitMeTriggered?.[params.beadId] ?? false;
+        const hitMeWasCompleted = state.beadHitMeCompleted?.[params.beadId] ?? false;
+        const allArtifactsForBead = extractBeadArtifacts(bead);
         let hitMeChoice: string | undefined;
 
         if (!hitMeWasTriggered) {
-          // No hit-me agents have run yet — user decides
           hitMeChoice = await ctx.ui.select(
-            `✅ Step ${params.stepIndex} passed self-review.`,
+            `✅ Bead ${params.beadId} (${bead.title}) passed self-review.`,
             [
-              "🔥 Hit me — spawn parallel review agents for this step",
+              "🔥 Hit me — spawn parallel review agents for this bead",
               "✅ Looks good — move on",
             ]
           );
         } else if (!hitMeWasCompleted) {
-          // Hit-me was triggered but agents haven't completed — bypass attempt
           ctx.ui.notify(`⚠️ Review agents haven't completed yet. Re-presenting spawn instruction.`, "warning");
-          // Don't decrement counters — just re-present the spawn instruction
           const round = Math.max(0, prevPassCount - 1);
-          const rePresThreadId = state.beadIds?.[params.stepIndex] ?? `step-${params.stepIndex}`;
+          const rePresThreadId = params.beadId;
           const rePresPreamble = (name: string) =>
             state.coordinationBackend?.agentMail
-              ? agentMailTaskPreamble(ctx.cwd, name, step.description, allArtifactsForStep, rePresThreadId)
+              ? agentMailTaskPreamble(ctx.cwd, name, bead.title, allArtifactsForBead, rePresThreadId)
               : "";
+          const allBeads = await readBeads(pi, ctx.cwd);
+          const beadResults = Object.values(state.beadResults ?? {});
+          const goal = state.selectedGoal ?? "Unknown goal";
           const agentConfigs = [
             {
-              name: `fresh-eyes-s${params.stepIndex}-r${round}`,
-              task: `${rePresPreamble(`fresh-eyes-s${params.stepIndex}-r${round}`)}Fresh-eyes reviewer for step ${params.stepIndex} (round ${round}). NEVER seen this code.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
+              name: `fresh-eyes-${params.beadId}-r${round}`,
+              task: `${rePresPreamble(`fresh-eyes-${params.beadId}-r${round}`)}Fresh-eyes reviewer for bead ${params.beadId} (round ${round}). NEVER seen this code.\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool.\n\ncd ${ctx.cwd}`,
             },
             {
-              name: `polish-s${params.stepIndex}-r${round}`,
-              task: `${rePresPreamble(`polish-s${params.stepIndex}-r${round}`)}Polish reviewer for step ${params.stepIndex} (round ${round}). De-slopify.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
+              name: `polish-${params.beadId}-r${round}`,
+              task: `${rePresPreamble(`polish-${params.beadId}-r${round}`)}Polish reviewer for bead ${params.beadId} (round ${round}). De-slopify.\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly.\n\ncd ${ctx.cwd}`,
             },
             {
-              name: `ergonomics-s${params.stepIndex}-r${round}`,
-              task: `${rePresPreamble(`ergonomics-s${params.stepIndex}-r${round}`)}Ergonomics reviewer for step ${params.stepIndex} (round ${round}).\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
+              name: `ergonomics-${params.beadId}-r${round}`,
+              task: `${rePresPreamble(`ergonomics-${params.beadId}-r${round}`)}Ergonomics reviewer for bead ${params.beadId} (round ${round}).\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
             },
             {
-              name: `reality-check-s${params.stepIndex}-r${round}`,
-              task: `${rePresPreamble(`reality-check-s${params.stepIndex}-r${round}`)}Reality checker for step ${params.stepIndex} (round ${round}).\n\n${realityCheckInstructions(state.plan!.goal, state.plan!.steps, state.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+              name: `reality-check-${params.beadId}-r${round}`,
+              task: `${rePresPreamble(`reality-check-${params.beadId}-r${round}`)}Reality checker for bead ${params.beadId} (round ${round}).\n\n${realityCheckInstructions(goal, allBeads, beadResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
             },
           ];
-          const stepReviewJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+          const reviewJson = JSON.stringify({ agents: agentConfigs }, null, 2);
           return {
             content: [
               {
                 type: "text",
-                text: `**Review agents must complete before advancing. Call \`parallel_subagents\` NOW with the config below.**\n\n## 🔥 Hit me — Step ${params.stepIndex}, Round ${round} (re-presented)\n\n\`\`\`json\n${stepReviewJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` again for step ${params.stepIndex} with what was fixed.`,
+                text: `**Review agents must complete before advancing. Call \`parallel_subagents\` NOW with the config below.**\n\n## 🔥 Hit me — Bead ${params.beadId}, Round ${round} (re-presented)\n\n\`\`\`json\n${reviewJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` again for bead ${params.beadId} with what was fixed.`,
               },
             ],
-            details: { review, hitMe: true, round, step: params.stepIndex, rePresented: true },
+            details: { review: { beadId: params.beadId, passed: true }, hitMe: true, round, bead: params.beadId, rePresented: true },
           };
         } else {
-          // Hit-me triggered AND completed — legit review round, auto-advance
           hitMeChoice = "✅";
-          state.hitMeTriggered[params.stepIndex] = false;
-          state.hitMeCompleted[params.stepIndex] = false;
+          if (!state.beadHitMeTriggered) state.beadHitMeTriggered = {};
+          if (!state.beadHitMeCompleted) state.beadHitMeCompleted = {};
+          state.beadHitMeTriggered[params.beadId] = false;
+          state.beadHitMeCompleted[params.beadId] = false;
           persistState();
-          ctx.ui.notify(`✅ Step ${params.stepIndex} passed review (round ${prevPassCount}).`, "info");
+          ctx.ui.notify(`✅ Bead ${params.beadId} passed review (round ${prevPassCount}).`, "info");
         }
 
         if (hitMeChoice?.startsWith("🔥")) {
-          // Mark that hit-me was triggered
-          if (!state.hitMeTriggered) state.hitMeTriggered = {};
-          if (!state.hitMeCompleted) state.hitMeCompleted = {};
-          state.hitMeTriggered[params.stepIndex] = true;
-          state.hitMeCompleted[params.stepIndex] = false;
+          if (!state.beadHitMeTriggered) state.beadHitMeTriggered = {};
+          if (!state.beadHitMeCompleted) state.beadHitMeCompleted = {};
+          state.beadHitMeTriggered[params.beadId] = true;
+          state.beadHitMeCompleted[params.beadId] = false;
           persistState();
 
           const round = prevPassCount;
-          const hitMeStepThreadId = state.beadIds?.[params.stepIndex] ?? `step-${params.stepIndex}`;
-          const hitMeStepPreamble = (name: string) =>
+          const hitMeThreadId = params.beadId;
+          const hitMePreamble = (name: string) =>
             state.coordinationBackend?.agentMail
-              ? agentMailTaskPreamble(ctx.cwd, name, step.description, allArtifactsForStep, hitMeStepThreadId)
+              ? agentMailTaskPreamble(ctx.cwd, name, bead.title, allArtifactsForBead, hitMeThreadId)
               : "";
+          const allBeads = await readBeads(pi, ctx.cwd);
+          const beadResults = Object.values(state.beadResults ?? {});
+          const goal = state.selectedGoal ?? "Unknown goal";
           const agentConfigs = [
             {
-              name: `fresh-eyes-s${params.stepIndex}-r${round}`,
-              task: `${hitMeStepPreamble(`fresh-eyes-s${params.stepIndex}-r${round}`)}Fresh-eyes reviewer for step ${params.stepIndex} (round ${round}). NEVER seen this code.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
+              name: `fresh-eyes-${params.beadId}-r${round}`,
+              task: `${hitMePreamble(`fresh-eyes-${params.beadId}-r${round}`)}Fresh-eyes reviewer for bead ${params.beadId} (round ${round}). NEVER seen this code.\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool.\n\ncd ${ctx.cwd}`,
             },
             {
-              name: `polish-s${params.stepIndex}-r${round}`,
-              task: `${hitMeStepPreamble(`polish-s${params.stepIndex}-r${round}`)}Polish reviewer for step ${params.stepIndex} (round ${round}). De-slopify.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
+              name: `polish-${params.beadId}-r${round}`,
+              task: `${hitMePreamble(`polish-${params.beadId}-r${round}`)}Polish reviewer for bead ${params.beadId} (round ${round}). De-slopify.\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly.\n\ncd ${ctx.cwd}`,
             },
             {
-              name: `ergonomics-s${params.stepIndex}-r${round}`,
-              task: `${hitMeStepPreamble(`ergonomics-s${params.stepIndex}-r${round}`)}Ergonomics reviewer for step ${params.stepIndex} (round ${round}).\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
+              name: `ergonomics-${params.beadId}-r${round}`,
+              task: `${hitMePreamble(`ergonomics-${params.beadId}-r${round}`)}Ergonomics reviewer for bead ${params.beadId} (round ${round}).\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
             },
             {
-              name: `reality-check-s${params.stepIndex}-r${round}`,
-              task: `${hitMeStepPreamble(`reality-check-s${params.stepIndex}-r${round}`)}Reality checker for step ${params.stepIndex} (round ${round}).\n\n${realityCheckInstructions(state.plan!.goal, state.plan!.steps, state.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+              name: `reality-check-${params.beadId}-r${round}`,
+              task: `${hitMePreamble(`reality-check-${params.beadId}-r${round}`)}Reality checker for bead ${params.beadId} (round ${round}).\n\n${realityCheckInstructions(goal, allBeads, beadResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
             },
           ];
 
-          // Run review agents inline — wait for completion before returning
-          // This prevents the LLM from bypassing by calling orch_review before agents finish
           const hitMeResults = await runHitMeAgents(agentConfigs, ctx.cwd, ctx);
 
-          // Mark completion — only the orchestrator can set this flag
-          state.hitMeCompleted[params.stepIndex] = true;
+          state.beadHitMeCompleted[params.beadId] = true;
           persistState();
-
-          const stepReviewJson = JSON.stringify({ agents: agentConfigs }, null, 2);
 
           return {
             content: [
               {
                 type: "text",
-                text: `## 🔥 Hit me — Step ${params.stepIndex}, Round ${round}\n\n${hitMeResults.text}\n\n${hitMeResults.diff ? `### Diff\n\`\`\`diff\n${hitMeResults.diff}\n\`\`\`\n\n` : ""}After reviewing the findings above, call \`orch_review\` again for step ${params.stepIndex} with what was fixed.`,
+                text: `## 🔥 Hit me — Bead ${params.beadId} (${bead.title}), Round ${round}\n\n${hitMeResults.text}\n\n${hitMeResults.diff ? `### Diff\n\`\`\`diff\n${hitMeResults.diff}\n\`\`\`\n\n` : ""}After reviewing the findings above, call \`orch_review\` again for bead ${params.beadId} with what was fixed.`,
               },
             ],
-            details: { review, hitMe: true, round, step: params.stepIndex },
+            details: { review: { beadId: params.beadId, passed: true }, hitMe: true, round, bead: params.beadId },
           };
         }
 
-        // User said "looks good" — figure out what to do next.
-        // Key scenarios:
-        // A) Parallel group: other steps in the same group may still need review
-        // B) Next group: if current group is done, launch the next parallel group
-        // C) Sequential: simple advance to next step
-        // D) All done: enter guided gates
+        // User said "looks good" — check for next ready beads
+        const ready = await readyBeads(pi, ctx.cwd);
 
-        // Find all steps that still need review (no success result yet)
-        const unreviewedSteps = state.plan.steps.filter(
-          (s) => !state.stepResults.find((r) => r.stepIndex === s.index && r.status === "success")
-        );
-
-        if (unreviewedSteps.length > 0) {
-          // Check if remaining steps can be skipped (work already done)
-          if (unreviewedSteps.length > 1) {
-            const skipChoice = await ctx.ui.select(
-              `${unreviewedSteps.length} steps remaining.`,
-              [
-                `▶️  Continue`,
-                "⏭️  Skip to completion — mark remaining steps as done",
-              ]
-            );
-            if (skipChoice?.startsWith("⏭️")) {
-              for (const rs of unreviewedSteps) {
-                state.stepResults.push({
-                  stepIndex: rs.index,
-                  status: "success",
-                  summary: "Skipped — work completed in earlier step",
-                });
-              }
-              state.currentStepIndex = state.plan.steps[state.plan.steps.length - 1].index;
-              persistState();
-              // Fall through to the "all steps done" branch below
-            }
-          }
-
-          // Re-check unreviewed after potential skip
-          const stillUnreviewed = state.plan.steps.filter(
-            (s) => !state.stepResults.find((r) => r.stepIndex === s.index && r.status === "success")
-          );
-
-          if (stillUnreviewed.length > 0) {
-            // Check if these steps were already implemented in a parallel group
-            // (they have worktrees, or were in a same-dir group)
-            // If so, tell the agent to call orch_review for them, not implement them.
-            const alreadyImplemented = stillUnreviewed.filter(
-              (s) => worktreePool?.getPath(s.index) || worktreePool?.getBranch(s.index) || isSameDirStep(s.index)
-            );
-
-            if (alreadyImplemented.length > 0) {
-              // These steps were implemented in parallel — just need review
-              const stepList = alreadyImplemented.map((s) => `- Step ${s.index}: ${s.description}`).join("\n");
-              ctx.ui.notify(`✅ Step ${params.stepIndex} passed! ${alreadyImplemented.length} parallel steps await review.`, "info");
-
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `✅ Step ${params.stepIndex} passed.\n\nThese steps were implemented in parallel and need review. Call \`orch_review\` for each:\n\n${stepList}`,
-                  },
-                ],
-                details: { review, parallelReviewPending: alreadyImplemented.map((s) => s.index) },
-              };
-            }
-
-            // Check if the next unreviewed steps form a parallel group
-            // and should be launched together
-            if (parallelAnalysis) {
-              const currentGroup = parallelAnalysis.groups.find((g) =>
-                g.includes(params.stepIndex)
-              );
-              const currentGroupIdx = currentGroup
-                ? parallelAnalysis.groups.indexOf(currentGroup)
-                : -1;
-
-              // Are all steps in the current group done?
-              const currentGroupDone = currentGroup?.every(
-                (idx) => state.stepResults.find((r) => r.stepIndex === idx && r.status === "success")
-              );
-
-              if (currentGroupDone && currentGroupIdx >= 0) {
-                const nextGroupIdx = currentGroupIdx + 1;
-                if (nextGroupIdx < parallelAnalysis.groups.length) {
-                  const nextGroup = parallelAnalysis.groups[nextGroupIdx];
-
-                  const nextGroupIsSameDir = sameDirGroups.has(nextGroupIdx);
-                  const nextGroupCanParallel = nextGroup.length > 1 &&
-                    (nextGroupIsSameDir || worktreePool);
-
-                  if (nextGroupCanParallel) {
-                    // Launch next parallel group
-                    const agentConfigs = nextGroup.map((stepIdx) => {
-                      const s = state.plan!.steps.find((st) => st.index === stepIdx)!;
-                      const wtPath = nextGroupIsSameDir ? undefined : worktreePool?.getPath(stepIdx);
-                      const workDir = wtPath ?? ctx.cwd;
-                      const agentName = `step-${stepIdx}`;
-                      const threadId = state.beadIds?.[stepIdx] ?? `step-${stepIdx}`;
-                      const preamble = state.coordinationBackend?.agentMail
-                        ? agentMailTaskPreamble(ctx.cwd, agentName, s.description, s.artifacts, threadId)
-                        : "";
-                      return {
-                        name: agentName,
-                        task: `${preamble}You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${s.description}\n\n### Acceptance Criteria\n${s.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${s.artifacts.join(", ")}\n\n⚠️ SCOPE CONSTRAINT: You MUST NOT create or modify any files outside the list above.\n\n### Working Directory\ncd to: ${workDir}\n${nextGroupIsSameDir ? "\n🤝 **Same-dir mode**: Other agents are working in this directory too. Your file reservations via agent-mail protect your files. Do NOT touch files outside your artifact list.\n" : ""}\nImplement the step.\n\nWhen done, do a fresh-eyes review then COMMIT:\n\`\`\`bash\ncd ${workDir}\ngit add ${s.artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "step ${stepIdx}: ${s.description.slice(0, 60)}"\n\`\`\`\n\nSummarize what you did.`,
-                      };
-                    });
-
-                    const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
-                    const modeLabel = nextGroupIsSameDir ? "same-dir + reservations" : "worktrees";
-                    ctx.ui.notify(`✅ Group ${currentGroupIdx + 1} complete! Launching Group ${nextGroupIdx + 1} (steps ${nextGroup.join(", ")}, ${modeLabel}).`, "info");
-
-                    return {
-                      content: [
-                        {
-                          type: "text",
-                          text: `✅ Step ${params.stepIndex} passed. Group ${currentGroupIdx + 1} complete!\n\n**NEXT: Call \`parallel_subagents\` NOW to launch Group ${nextGroupIdx + 1} (Steps ${nextGroup.join(", ")}).**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each step.`,
-                        },
-                      ],
-                      details: { review, nextGroup: nextGroup, launchingParallel: true, sameDirMode: nextGroupIsSameDir },
-                    };
-                  }
-                }
-              }
-            }
-
-            // Default: advance to next sequential step
-            const actualNextStep = stillUnreviewed[0];
-            state.currentStepIndex = actualNextStep.index;
-            state.retryCount = 0;
-            setPhase("implementing", ctx);
-            persistState();
-
-            // Mark next step's bead as in_progress
-            const nextBeadId = state.beadIds?.[actualNextStep.index];
-            if (nextBeadId) {
-              const { updateBeadStatus } = await import("./beads.js");
-              await updateBeadStatus(pi, ctx.cwd, nextBeadId, "in_progress");
-            }
-
-            const implInstr = implementerInstructions(
-              actualNextStep,
-              state.repoProfile!,
-              state.stepResults
-            );
-
-            ctx.ui.notify(`✅ Step ${params.stepIndex} passed! Moving to step ${actualNextStep.index}.`, "info");
-
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `✅ Step ${params.stepIndex} passed.\n\n---\nMoving to Step ${actualNextStep.index}:\n\n${implInstr}`,
-                },
-              ],
-              details: { review, nextStep: actualNextStep.index },
-            };
-          }
-        }
-
-        // All steps done — enter guided review gates directly
-        // (don't ask the agent to make another orch_review call — it may not follow through)
-        {
-          // Run beads validation if beads coordination is active
+        if (ready.length === 0) {
+          // All beads done — enter guided review gates
           let beadsReviewInfo = "";
-          if (state.coordinationBackend?.beads && state.beadIds) {
-            const { validateBeads, getBeadsSummary, syncBeads, readBeads } = await import("./beads.js");
+          if (state.coordinationBackend?.beads) {
+            const { validateBeads, getBeadsSummary } = await import("./beads.js");
             await syncBeads(pi, ctx.cwd);
             const validation = await validateBeads(pi, ctx.cwd);
             const allBeads = await readBeads(pi, ctx.cwd);
             const summary = getBeadsSummary(allBeads);
             beadsReviewInfo = `\n\n**Beads:** ${summary}${!validation.ok ? `\n⚠️ ${validation.cycles ? "Cycles detected" : ""} ${validation.orphaned.length > 0 ? `Orphaned: ${validation.orphaned.join(", ")}` : ""}` : ""}`;
-          }
-
-          // Run sophia validate/review if available
-          let sophiaReviewInfo = "";
-          if (hasSophia && sophiaCRResult) {
-            const { validateCR, reviewCR } = await import("./sophia.js");
-            const valResult = await validateCR(pi, ctx.cwd, sophiaCRResult.cr.id);
-            const revResult = await reviewCR(pi, ctx.cwd, sophiaCRResult.cr.id);
-            sophiaReviewInfo = `\n\n**Sophia validation:** ${valResult.ok ? "✅ passed" : `⚠️ ${valResult.error}`}\n**Sophia review:** ${revResult.ok ? "✅ passed" : `⚠️ ${revResult.error}`}`;
           }
 
           // Clean up worktrees and tender
@@ -2022,51 +1751,116 @@ export default function (pi: ExtensionAPI) {
             swarmTender = undefined;
           }
 
-          ctx.ui.notify("🔄 All steps done — entering review gates", "info");
+          ctx.ui.notify("🔄 All beads done — entering review gates", "info");
           setPhase("iterating", ctx);
           state.iterationRound = 0;
           state.currentGateIndex = 0;
           persistState();
 
-          // Fall through directly into the guided gate flow
-          // (reuse the sentinel handler inline instead of asking agent to call back)
-          return await runGuidedGates(state, ctx, beadsReviewInfo + sophiaReviewInfo);
+          return await runGuidedGates(state, ctx, beadsReviewInfo);
+        } else if (ready.length === 1) {
+          // Single next bead — emit implementer instructions
+          const nextBead = ready[0];
+          state.currentBeadId = nextBead.id;
+          await updateBeadStatus(pi, ctx.cwd, nextBead.id, "in_progress");
+          state.retryCount = 0;
+          setPhase("implementing", ctx);
+          persistState();
+
+          const prevResults = Object.values(state.beadResults ?? {});
+          const implInstr = implementerInstructions(nextBead, state.repoProfile!, prevResults);
+
+          ctx.ui.notify(`✅ Bead ${params.beadId} passed! Moving to bead ${nextBead.id} (${nextBead.title}).`, "info");
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `✅ Bead ${params.beadId} (${bead.title}) passed.\n\n---\nMoving to Bead ${nextBead.id}:\n\n${implInstr}`,
+              },
+            ],
+            details: { review: { beadId: params.beadId, passed: true }, nextBead: nextBead.id },
+          };
+        } else {
+          // Multiple ready beads — emit parallel_subagents config
+          const goal = state.selectedGoal ?? "Unknown goal";
+          const agentConfigs = ready.map((b) => {
+            const artifacts = extractBeadArtifacts(b);
+            const agentName = `bead-${b.id}`;
+            const threadId = b.id;
+            const preamble = state.coordinationBackend?.agentMail
+              ? agentMailTaskPreamble(ctx.cwd, agentName, b.title, artifacts, threadId)
+              : "";
+            const prevResults = Object.values(state.beadResults ?? {});
+            const implInstr = implementerInstructions(b, state.repoProfile!, prevResults);
+            return {
+              name: agentName,
+              task: `${preamble}${implInstr}\n\ncd ${ctx.cwd}`,
+            };
+          });
+
+          // Mark all as in_progress
+          for (const b of ready) {
+            await updateBeadStatus(pi, ctx.cwd, b.id, "in_progress");
+          }
+          setPhase("implementing", ctx);
+          persistState();
+
+          const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+          ctx.ui.notify(`✅ Bead ${params.beadId} passed! ${ready.length} beads now ready for parallel implementation.`, "info");
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `✅ Bead ${params.beadId} (${bead.title}) passed.\n\n**NEXT: Call \`parallel_subagents\` NOW to implement ${ready.length} ready beads.**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each bead.`,
+              },
+            ],
+            details: { review: { beadId: params.beadId, passed: true }, readyBeads: ready.map((b) => b.id), launchingParallel: true },
+          };
         }
       } else {
-        // Failed — retry
-        state.retryCount++;
+        // Failed — retry (bead stays open, don't update status)
+        state.retryCount = (state.retryCount ?? 0) + 1;
         persistState();
+
+        const review = { beadId: params.beadId, passed: false, feedback: params.feedback };
 
         if (state.retryCount >= state.maxRetries) {
           const cont = await ctx.ui.confirm(
-            "Step Failed",
-            `Step ${params.stepIndex} failed after ${state.maxRetries} attempts.\n\nContinue to next step anyway?`
+            "Bead Failed",
+            `Bead ${params.beadId} (${bead.title}) failed after ${state.maxRetries} attempts.\n\nSkip and move on?`
           );
 
           if (cont) {
-            const nextStep = state.plan.steps.find(
-              (s) => s.index === params.stepIndex + 1
-            );
-            if (nextStep) {
-              state.currentStepIndex = nextStep.index;
+            // Mark as blocked and move to next ready bead
+            state.beadResults[params.beadId] = {
+              beadId: params.beadId,
+              status: "blocked",
+              summary: `Skipped after ${state.maxRetries} failed attempts`,
+            };
+            await updateBeadStatus(pi, ctx.cwd, params.beadId, "deferred");
+            await syncBeads(pi, ctx.cwd);
+
+            const ready = await readyBeads(pi, ctx.cwd);
+            if (ready.length > 0) {
+              const nextBead = ready[0];
+              state.currentBeadId = nextBead.id;
               state.retryCount = 0;
               setPhase("implementing", ctx);
               persistState();
 
-              const implInstr = implementerInstructions(
-                nextStep,
-                state.repoProfile!,
-                state.stepResults
-              );
+              const prevResults = Object.values(state.beadResults ?? {});
+              const implInstr = implementerInstructions(nextBead, state.repoProfile!, prevResults);
 
               return {
                 content: [
                   {
                     type: "text",
-                    text: `⚠️ Skipping step ${params.stepIndex} (max retries). Moving to Step ${nextStep.index}:\n\n${implInstr}`,
+                    text: `⚠️ Skipping bead ${params.beadId} (max retries). Moving to bead ${nextBead.id} (${nextBead.title}):\n\n${implInstr}`,
                   },
                 ],
-                details: { review, skipped: true, nextStep: nextStep.index },
+                details: { review, skipped: true, nextBead: nextBead.id },
               };
             }
           }
@@ -2083,7 +1877,7 @@ export default function (pi: ExtensionAPI) {
         }
 
         ctx.ui.notify(
-          `⚠️ Step ${params.stepIndex} needs revision (attempt ${state.retryCount}/${state.maxRetries})`,
+          `⚠️ Bead ${params.beadId} needs revision (attempt ${state.retryCount}/${state.maxRetries})`,
           "warning"
         );
 
@@ -2091,7 +1885,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `❌ Step ${params.stepIndex} did not pass review (attempt ${state.retryCount}/${state.maxRetries}).\n\nRevision needed: ${params.revisionInstructions ?? params.feedback}\n\nPlease fix the issues using the code tools, then call \`orch_review\` again.`,
+              text: `❌ Bead ${params.beadId} (${bead.title}) did not pass review (attempt ${state.retryCount}/${state.maxRetries}).\n\nRevision needed: ${params.revisionInstructions ?? params.feedback}\n\nPlease fix the issues using the code tools, then call \`orch_review\` again.`,
             },
           ],
           details: { review, retryCount: state.retryCount },
@@ -2104,7 +1898,7 @@ export default function (pi: ExtensionAPI) {
       const icon = a.verdict === "pass" ? "✅" : "❌";
       return new Text(
         theme.fg("toolTitle", theme.bold("orch_review ")) +
-          theme.fg("dim", `step ${a.stepIndex} ${icon}`),
+          theme.fg("dim", `bead ${a.beadId} ${icon}`),
         0, 0
       );
     },
@@ -2112,17 +1906,17 @@ export default function (pi: ExtensionAPI) {
     renderResult(result, { expanded }, theme) {
       const d = result.details as any;
       if (d?.complete)
-        return new Text(theme.fg("success", "🎉 All steps complete!"), 0, 0);
+        return new Text(theme.fg("success", "🎉 All beads complete!"), 0, 0);
       if (d?.stopped)
         return new Text(theme.fg("error", "🛑 Orchestration stopped"), 0, 0);
       if (d?.review?.passed)
         return new Text(
-          theme.fg("success", `✅ Step ${d.review.stepIndex} passed`) +
-            (d.nextStep ? theme.fg("dim", ` → step ${d.nextStep}`) : ""),
+          theme.fg("success", `✅ Bead ${d.review.beadId} passed`) +
+            (d.nextBead ? theme.fg("dim", ` → bead ${d.nextBead}`) : ""),
           0, 0
         );
       return new Text(
-        theme.fg("warning", `❌ Step ${d?.review?.stepIndex} needs revision`) +
+        theme.fg("warning", `❌ Bead ${d?.review?.beadId} needs revision`) +
           theme.fg("dim", ` (${d?.retryCount}/${state.maxRetries})`),
         0, 0
       );
