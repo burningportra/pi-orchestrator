@@ -79,15 +79,19 @@ async function detectBeads(pi: ExtensionAPI, cwd: string): Promise<boolean> {
 }
 
 async function detectAgentMail(pi: ExtensionAPI): Promise<boolean> {
-  // Check if agent-mail HTTP server is reachable
+  // Check if agent-mail HTTP server is reachable via its liveness endpoint
   try {
     const result = await pi.exec("curl", [
-      "-s", "-o", "/dev/null", "-w", "%{http_code}",
-      "--max-time", "2",
-      "http://127.0.0.1:8765/",
+      "-s", "--max-time", "2",
+      "http://127.0.0.1:8765/health/liveness",
     ], { timeout: 5000 });
-    const code = parseInt(result.stdout.trim(), 10);
-    return code >= 200 && code < 500;
+    try {
+      const parsed = JSON.parse(result.stdout.trim());
+      return parsed?.status === "ok" || parsed?.status === "healthy";
+    } catch {
+      // Fallback: any 2xx response means it's up
+      return result.code === 0 && result.stdout.length > 0;
+    }
   } catch {
     return false;
   }

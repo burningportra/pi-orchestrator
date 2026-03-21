@@ -58,7 +58,7 @@ describe("detectCoordinationBackend", () => {
     mockExistsSync.mockReturnValue(true);
     mockPi.exec.mockImplementation(async (cmd: string, args: string[]) => {
       if (cmd === "br" && args[0] === "--help") return { code: 0, stdout: "br help", stderr: "" };
-      if (cmd === "curl") return { code: 0, stdout: "200", stderr: "" };
+      if (cmd === "curl") return { code: 0, stdout: '{"status":"ok"}', stderr: "" };
       if (cmd === "sophia" && args[0] === "--help") return { code: 0, stdout: "sophia help", stderr: "" };
       if (cmd === "sophia" && args[0] === "cr") return { code: 0, stdout: '{"ok":true}', stderr: "" };
       return { code: 1, stdout: "", stderr: "" };
@@ -85,7 +85,7 @@ describe("detectCoordinationBackend", () => {
   it("returns partial availability: br yes, agent-mail no, sophia yes", async () => {
     mockPi.exec.mockImplementation(async (cmd: string, args: string[]) => {
       if (cmd === "br" && args[0] === "--help") return { code: 0, stdout: "br help", stderr: "" };
-      if (cmd === "curl") return { code: 0, stdout: "503", stderr: "" }; // unreachable
+      if (cmd === "curl") return { code: 1, stdout: "", stderr: "" }; // unreachable
       if (cmd === "sophia" && args[0] === "--help") return { code: 0, stdout: "sophia help", stderr: "" };
       if (cmd === "sophia" && args[0] === "cr") return { code: 0, stdout: '{"ok":true}', stderr: "" };
       return { code: 1, stdout: "", stderr: "" };
@@ -106,7 +106,7 @@ describe("detectCoordinationBackend", () => {
   it("returns beads false when .beads/ directory is missing", async () => {
     mockPi.exec.mockImplementation(async (cmd: string, args: string[]) => {
       if (cmd === "br" && args[0] === "--help") return { code: 0, stdout: "br help", stderr: "" };
-      if (cmd === "curl") return { code: 0, stdout: "200", stderr: "" };
+      if (cmd === "curl") return { code: 0, stdout: '{"status":"ok"}', stderr: "" };
       if (cmd === "sophia" && args[0] === "--help") return { code: 0, stdout: "sophia help", stderr: "" };
       if (cmd === "sophia" && args[0] === "cr") return { code: 0, stdout: '{"ok":true}', stderr: "" };
       return { code: 1, stdout: "", stderr: "" };

@@ -141,9 +141,44 @@ export default function (pi: ExtensionAPI) {
     return { text, diff };
   }
 
+  // ─── Agent Mail helpers ────────────────────────────────────
+  const AGENT_MAIL_URL = "http://127.0.0.1:8765";
+
   /**
-   * Generates an agent-mail bootstrap preamble to prepend to a parallel sub-agent's task.
-   * Only called when `state.coordinationBackend?.agentMail` is true.
+   * Call an agent-mail MCP tool via its JSON-RPC HTTP endpoint.
+   * Used by the orchestrator itself (not sub-agents) to manage projects/reservations.
+   */
+  async function agentMailRPC(toolName: string, args: Record<string, unknown>): Promise<any> {
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method: "tools/call",
+      params: { name: toolName, arguments: args },
+    });
+    const result = await pi.exec("curl", [
+      "-s", "-X", "POST", `${AGENT_MAIL_URL}/api`,
+      "-H", "Content-Type: application/json",
+      "-d", body,
+      "--max-time", "5",
+    ], { timeout: 8000 });
+    try {
+      const parsed = JSON.parse(result.stdout);
+      return parsed?.result?.structuredContent ?? parsed?.result ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Ensure project exists in agent-mail. Called once during orch_profile.
+   */
+  async function ensureAgentMailProject(cwd: string): Promise<void> {
+    await agentMailRPC("ensure_project", { human_key: cwd });
+  }
+
+  /**
+   * Generates an agent-mail bootstrap preamble for a parallel sub-agent's task.
+   * Uses curl commands that agents can run via bash (pi has no MCP support).
    */
   function agentMailTaskPreamble(
     cwd: string,
@@ -152,14 +187,70 @@ export default function (pi: ExtensionAPI) {
     artifacts: string[],
     threadId: string
   ): string {
-    const artifactsJson = JSON.stringify(artifacts);
+    const safeDesc = stepDesc.replace(/"/g, '\\"').replace(/`/g, '\\`');
+
+    // Build the JSON-RPC curl commands agents will run
+    const rpcCall = (tool: string, args: Record<string, unknown>) => {
+      const body = JSON.stringify({
+        jsonrpc: "2.0", id: 1,
+        method: "tools/call",
+        params: { name: tool, arguments: args },
+      });
+      // Escape for bash single-quote wrapping
+      return `curl -s -X POST ${AGENT_MAIL_URL}/api -H 'Content-Type: application/json' -d '${body.replace(/'/g, "'\\''")}'`;
+    };
+
+    const registerCmd = rpcCall("register_agent", {
+      project_key: cwd, program: "pi-subagent", model: "auto",
+      task_description: safeDesc, name: agentName,
+    });
+    const reserveCmd = rpcCall("file_reservation_paths", {
+      project_key: cwd, agent_name: agentName,
+      paths: artifacts, ttl_seconds: 3600, exclusive: true, reason: threadId,
+    });
+    const announceCmd = rpcCall("send_message", {
+      project_key: cwd, sender_name: agentName, to: "all",
+      subject: `[${threadId}] Starting: ${safeDesc.slice(0, 60)}`,
+      body_md: `Working on: ${safeDesc}\\nFiles: ${artifacts.join(", ")}`,
+      thread_id: threadId,
+    });
+    const doneCmd = rpcCall("send_message", {
+      project_key: cwd, sender_name: agentName, to: "all",
+      subject: `[${threadId}] Done`,
+      body_md: "REPLACE_WITH_YOUR_SUMMARY",
+      thread_id: threadId,
+    });
+    const releaseCmd = rpcCall("release_file_reservations", {
+      project_key: cwd, agent_name: agentName,
+    });
+
     return `## Agent Mail Coordination
-Before starting work, bootstrap your agent-mail session:
-1. Call \`macro_start_session(human_key="${cwd}", program="claude-code", model="your-model", task_description="${stepDesc.replace(/"/g, '\\"')}")\`
-2. Reserve your files: \`file_reservation_paths(project_key="${cwd}", agent_name="${agentName}", paths=${artifactsJson}, ttl_seconds=3600, exclusive=true)\`
-3. Announce in thread: \`send_message(project_key="${cwd}", sender_name="${agentName}", to="all", subject="[${threadId}] Starting...", body_md="Working on: ${stepDesc.replace(/"/g, '\\"')}", thread_id="${threadId}")\`
-4. When done, send a summary message to the thread with your findings: \`send_message(project_key="${cwd}", sender_name="${agentName}", to="all", subject="[${threadId}] Done", body_md="<your findings summary>", thread_id="${threadId}")\`
-5. Then: \`release_file_reservations(project_key="${cwd}", agent_name="${agentName}")\`
+Run these bash commands to coordinate with other parallel agents:
+
+**1. Register yourself (run first):**
+\`\`\`bash
+${registerCmd}
+\`\`\`
+
+**2. Reserve your files:**
+\`\`\`bash
+${reserveCmd}
+\`\`\`
+
+**3. Announce start:**
+\`\`\`bash
+${announceCmd}
+\`\`\`
+
+**4. When done, send summary** (replace REPLACE_WITH_YOUR_SUMMARY with actual summary):
+\`\`\`bash
+${doneCmd}
+\`\`\`
+
+**5. Release reservations:**
+\`\`\`bash
+${releaseCmd}
+\`\`\`
 
 `;
   }
@@ -586,6 +677,8 @@ Before starting work, bootstrap your agent-mail session:
       if (coordBackend.agentMail) {
         const { ensureAgentMailSection } = await import("./agents-md.js");
         await ensureAgentMailSection(ctx.cwd);
+        // Register project in agent-mail so sub-agents can use it
+        await ensureAgentMailProject(ctx.cwd);
       }
 
       // Coordination backend summary
