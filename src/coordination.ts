@@ -78,8 +78,7 @@ async function detectBeads(pi: ExtensionAPI, cwd: string): Promise<boolean> {
   return existsSync(join(cwd, ".beads"));
 }
 
-async function detectAgentMail(pi: ExtensionAPI): Promise<boolean> {
-  // Check if agent-mail HTTP server is reachable via its liveness endpoint
+async function isAgentMailReachable(pi: ExtensionAPI): Promise<boolean> {
   try {
     const result = await pi.exec("curl", [
       "-s", "--max-time", "2",
@@ -89,12 +88,41 @@ async function detectAgentMail(pi: ExtensionAPI): Promise<boolean> {
       const parsed = JSON.parse(result.stdout.trim());
       return parsed?.status === "ok" || parsed?.status === "healthy";
     } catch {
-      // Fallback: any 2xx response means it's up
       return result.code === 0 && result.stdout.length > 0;
     }
   } catch {
     return false;
   }
+}
+
+async function detectAgentMail(pi: ExtensionAPI): Promise<boolean> {
+  // Check if already running
+  if (await isAgentMailReachable(pi)) return true;
+
+  // Not running — check if installed and try to start it
+  try {
+    const whichResult = await pi.exec("uv", ["run", "python", "-c", "import mcp_agent_mail"], { timeout: 5000 });
+    if (whichResult.code !== 0) return false; // not installed
+  } catch {
+    return false;
+  }
+
+  // Installed but not running — start in background
+  try {
+    await pi.exec("bash", ["-c",
+      "nohup uv run python -m mcp_agent_mail.cli serve-http > /dev/null 2>&1 &"
+    ], { timeout: 5000 });
+
+    // Wait up to 5 seconds for it to become reachable
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (await isAgentMailReachable(pi)) return true;
+    }
+  } catch {
+    // Failed to start — fall through
+  }
+
+  return false;
 }
 
 async function detectSophia(pi: ExtensionAPI, cwd: string): Promise<boolean> {
