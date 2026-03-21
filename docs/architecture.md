@@ -2,7 +2,7 @@
 
 ## Overview
 
-pi-orchestrator turns `/orchestrate` into a structured, multi-agent workflow. It scans the codebase, proposes improvements, plans the work (optionally with competing AI models), implements steps in parallel git worktrees, reviews with parallel agents, and repeats until you're satisfied.
+pi-orchestrator turns `/orchestrate` into a structured, multi-agent workflow. It scans the codebase, proposes improvements, plans the work, executes steps in git worktrees when parallelism is possible, reviews the results, and iterates until the user is satisfied.
 
 Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
 
@@ -12,7 +12,7 @@ Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
 /orchestrate
   │
   ├─► orch_profile     — Scan repo + load compound memory from prior runs
-  │     └─ Discovery mode: 📋 Standard or 🚀 Creative (think 100, tell me 7 best)
+  │     └─ Discovery mode: 📋 Standard or 🚀 Creative (broader ideation, return 7)
   │
   ├─► orch_discover    — LLM generates 3–7 ideas (minimum enforced)
   │
@@ -56,17 +56,34 @@ Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
 
 ## Scan Contract
 
-Repository scanning now has a first-class contract so the orchestrator can evolve its scan providers without breaking the rest of the workflow.
+Repository scanning now uses a dedicated contract so the orchestrator can add or swap scan providers without breaking the rest of the workflow.
+
+### What exists today
+
+The orchestrator now uses the abstraction in production:
 
 - **`RepoProfile`** remains the legacy shape consumed throughout discovery, planning, and implementation.
 - **`ScanResult`** wraps that profile with scan metadata:
-  - `source` — where the scan came from (`ccc` or `builtin`)
-  - `provider` — provider identifier
+  - `source` — the provider family (`ccc` or `builtin`)
+  - `provider` — the concrete provider id that produced the result
+  - `profile` — the unchanged legacy `RepoProfile` payload used by the rest of the workflow
   - `codebaseAnalysis` — normalized recommendation inputs, structural insights, and quality signals
-  - `fallback` — explicit fallback metadata when a provider degrades to the built-in path
-- **`scanRepo()`** is the integration point the orchestrator should call instead of invoking profiling logic directly.
+  - `fallback` — explicit metadata describing provider degradation to the built-in scan path
+- **`ScanProvider`** defines the provider interface.
+- **`scanRepo()`** is the single orchestrator entrypoint. The runtime should call this instead of invoking `profileRepo()` directly.
 
-This keeps current behavior stable while making room for richer providers like ccc.
+### Current behavior
+
+`scanRepo()` now attempts a ccc-backed scan first and pairs those findings with the legacy `RepoProfile` shape so the rest of the workflow keeps working. If ccc is unavailable, uninitialized, or otherwise fails, the orchestrator falls back to the built-in profiler.
+
+### Context priority order
+
+When scan data is rendered into prompts and tool output, the orchestrator now treats context in this order:
+
+1. **Live codebase scan** — ccc summary, recommendations, and structural insights
+2. **Repo profile details** — languages, frameworks, entrypoints, tests, docs, CI
+3. **Recent commits and TODOs** — useful but secondary signals
+4. **Compound memory / prior history** — enrichment only, never the primary driver
 
 ## Phases
 
@@ -77,7 +94,7 @@ The workflow begins with `orch_profile`, which scans the repository and loads co
 - **📋 Standard** — straightforward repo analysis
 - **🚀 Creative** — the LLM thinks of 100 ideas internally and surfaces the 7 best
 
-`orch_discover` then generates 3–7 improvement ideas (minimum 3 enforced). `orch_select` presents these to the user, who picks one and chooses a planning mode.
+`orch_discover` then generates 3–7 improvement ideas (minimum 3 enforced). `orch_select` presents these to the user and captures the selected goal plus any constraints. The actual planning-mode choice happens inside `orch_plan`, where the user can keep the standard plan, request deep planning, or reject it.
 
 ### 2. Planning
 
@@ -103,14 +120,16 @@ Agents get read-only tools and cannot call `orch_*` tools.
 
 Plan approval is a 3-option select showing the full plan text:
 
-- **✅ Approve** → create Sophia tasks, start work
+- **✅ Approve** → keep the plan and move to the pre-implementation polish loop
 - **🚀 Creative brainstorm** → 3 parallel agents enhance the plan
 - **❌ Reject** → stop
 
-After approval, Sophia tasks are created and shown with dependencies. The user can:
+After approval, the user gets one more gate before execution:
 
-- **🔍 Polish** — review tasks in plan space, send back for revision
-- **▶️ Start implementing** — proceed to execution
+- **🔍 Polish** — review tasks in plan space and send them back for revision
+- **▶️ Start implementing** — commit to execution
+
+Only after the user chooses **Start implementing** does the orchestrator create Sophia tasks / CR state. That avoids orphaned Sophia artifacts if the plan gets revised in polish mode.
 
 #### Step Dependencies (dependsOn)
 
@@ -218,14 +237,16 @@ When [Sophia](https://github.com/sophialab/sophia) is initialized:
 
 ```
 src/
-├── index.ts      # Extension: tools, commands, state machine
-├── scan.ts       # Scan contract + provider entrypoint (ccc-first, builtin fallback)
+├── index.ts      # Extension runtime: commands, tools, and orchestrator state machine
+├── scan.ts       # First-class scan contract + provider entrypoint (currently builtin only)
 ├── profiler.ts   # Built-in repo profiling (find, git, grep) + detection
 ├── prompts.ts    # Flywheel-derived prompt templates
 ├── sophia.ts     # Sophia CLI wrapper + dependency analysis + merge
-├── types.ts      # TypeScript types: state, plans, reviews
+├── types.ts      # Shared TypeScript types: scan, state, plans, reviews
 ├── worktree.ts   # WorktreePool + autoCommitWorktree
 ├── tender.ts     # SwarmTender: agent health + conflict detection
 ├── memory.ts     # Compound memory: read/append .pi-orchestrator/memory.md
-└── deep-plan.ts  # Direct pi CLI spawning (unused, kept for reference)
+└── deep-plan.ts  # Direct pi CLI spawning helpers
 ```
+
+Note: there is currently no separate `src/orchestrator.ts`; the orchestrator runtime lives in `src/index.ts`.

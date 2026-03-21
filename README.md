@@ -1,6 +1,6 @@
 # pi-orchestrator
 
-Type `/orchestrate` in any repo. It scans your codebase, proposes improvements, plans the work, implements in parallel, and reviews — all in one command.
+Type `/orchestrate` in any repo. It scans your codebase with ccc when available, falls back gracefully to the built-in profiler when it is not, proposes improvements, plans the work, implements in parallel, and reviews — all in one command.
 
 ## Install
 
@@ -15,7 +15,7 @@ Then open any project and type `/orchestrate`.
 ```
 You: /orchestrate
 
-→ Scans your repo (languages, structure, recent commits)
+→ Scans your repo (ccc codebase analysis first, profile/commits/history second)
 → Proposes 3–7 improvements ranked by impact
 → You pick one (or type your own goal)
 → Creates a step-by-step plan
@@ -36,8 +36,10 @@ You: /orchestrate
 
 - [pi](https://github.com/badlogic/pi-mono) installed
 - Node.js ≥ 18, git ≥ 2.20
+- Optional but recommended: [ccc](https://github.com/cocoindex-io/cocoindex-code) for richer codebase scanning
 
-Multi-model planning requires a pi subscription. Sophia is optional.
+Multi-model planning requires a pi subscription. Sophia and ccc are optional.
+If ccc is unavailable, `/orchestrate` falls back to the built-in profiler and keeps the same workflow.
 See [docs/setup.md](docs/setup.md) for detailed configuration.
 
 ## Commands
@@ -51,8 +53,8 @@ See [docs/setup.md](docs/setup.md) for detailed configuration.
 
 ## Learn more
 
-- [Setup & Configuration](docs/setup.md) — prerequisites, subscriptions, Sophia
-- [Architecture](docs/architecture.md) — how the workflow works under the hood
+- [Setup & Configuration](docs/setup.md) — prerequisites, ccc, subscriptions, Sophia
+- [Architecture](docs/architecture.md) — scan pipeline, context priority, and workflow internals
 
 ## Development
 

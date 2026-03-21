@@ -22,6 +22,34 @@ pi
 # Expected output: "Phase: idle" (no active session)
 ```
 
+## ccc Codebase Scanning (Optional, Recommended)
+
+pi-orchestrator now prefers ccc for the first scan because it gives richer live codebase context than the legacy built-in profiler alone. The orchestrator still preserves the old workflow contract by pairing ccc findings with the existing repo profile shape.
+
+### What ccc changes
+
+- **Primary codebase signal** — ccc findings are shown ahead of commits, TODOs, and memory during discovery/planning
+- **Richer scan context** — the orchestrator can surface structural insights and recommendation inputs from semantic code search
+- **Graceful fallback** — if ccc is missing, not initialized, or errors, the orchestrator falls back to the built-in profiler and keeps the workflow moving
+
+### Install ccc
+
+```bash
+pipx install cocoindex-code
+```
+
+### Initialize ccc in a repo
+
+```bash
+cd your-project
+ccc init -f
+ccc index
+```
+
+### What if I skip ccc?
+
+Nothing breaks. `/orchestrate` still works — it just uses the built-in profiler instead of ccc-backed codebase analysis.
+
 ## Subscription Setup (Multi-Model Features)
 
 Parallel agent features (deep planning, creative brainstorm) require access to multiple model providers.
