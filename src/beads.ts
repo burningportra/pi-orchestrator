@@ -1,6 +1,68 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { Bead, BvInsights, BvNextPick } from "./types.js";
 
+// ─── bv (beads-viewer) Integration ────────────────────────────
+
+let _bvAvailable: boolean | null = null;
+
+/**
+ * Detects whether the `bv` CLI is available. Result is cached.
+ */
+export async function detectBv(pi: ExtensionAPI): Promise<boolean> {
+  if (_bvAvailable !== null) return _bvAvailable;
+  try {
+    const result = await pi.exec("which", ["bv"], { timeout: 5000 });
+    _bvAvailable = result.stdout.trim().length > 0;
+  } catch {
+    _bvAvailable = false;
+  }
+  return _bvAvailable;
+}
+
+/** Reset bv detection cache (for testing). */
+export function resetBvCache(): void {
+  _bvAvailable = null;
+}
+
+/**
+ * Runs `bv --robot-insights` and returns typed graph health data.
+ * Returns null if bv is unavailable or output can't be parsed.
+ */
+export async function bvInsights(
+  pi: ExtensionAPI,
+  cwd: string
+): Promise<BvInsights | null> {
+  if (!(await detectBv(pi))) return null;
+  try {
+    const result = await pi.exec("bv", ["--robot-insights"], { timeout: 15000, cwd });
+    return JSON.parse(result.stdout) as BvInsights;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Runs `bv --robot-next` and returns the optimal next bead pick.
+ * Returns null if bv is unavailable, no actionable items, or parse error.
+ */
+export async function bvNext(
+  pi: ExtensionAPI,
+  cwd: string
+): Promise<BvNextPick | null> {
+  if (!(await detectBv(pi))) return null;
+  try {
+    const result = await pi.exec("bv", ["--robot-next"], { timeout: 15000, cwd });
+    const stdout = result.stdout.trim();
+    if (!stdout) return null;
+    const data = JSON.parse(stdout);
+    // bv --robot-next may return an object or null/empty
+    if (!data || !data.id) return null;
+    return data as BvNextPick;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Beads Integration ────────────────────────────────────────
 
 /**
@@ -137,51 +199,72 @@ export async function syncBeads(
 }
 
 /**
- * Validates beads — checks for dependency cycles and orphaned open beads.
+ * Validates beads — checks for dependency cycles, orphaned open beads, and graph health.
+ * When bv is available, uses graph-theoretic analysis for richer validation.
  */
 export async function validateBeads(
   pi: ExtensionAPI,
   cwd: string
-): Promise<{ ok: boolean; orphaned: string[]; cycles: boolean }> {
+): Promise<{ ok: boolean; orphaned: string[]; cycles: boolean; warnings: string[] }> {
   let cycles = false;
-  const orphaned: string[] = [];
+  let orphaned: string[] = [];
+  const warnings: string[] = [];
 
-  try {
-    const cycleResult = await pi.exec("br", ["dep", "cycles"], { timeout: 10000, cwd });
-    if (cycleResult.stdout.toLowerCase().includes("cycle")) {
-      cycles = true;
-    }
-  } catch {
-    // Non-fatal
-  }
+  // Try bv insights first for richer analysis
+  const insights = await bvInsights(pi, cwd);
 
-  // Detect orphaned open beads — open beads with no dependencies and not depended on by anyone
-  try {
-    const allBeads = await readBeads(pi, cwd);
-    const openBeads = allBeads.filter((b) => b.status === "open");
-    if (openBeads.length > 1) {
-      // Build dependency graph: which beads have deps, which are depended upon
-      const hasDeps = new Set<string>();
-      const isDependedOn = new Set<string>();
-      for (const bead of openBeads) {
-        const deps = await beadDeps(pi, cwd, bead.id);
-        if (deps.length > 0) {
-          hasDeps.add(bead.id);
-          for (const dep of deps) isDependedOn.add(dep);
-        }
-      }
-      // Orphaned = open bead that neither has deps nor is depended upon
-      for (const bead of openBeads) {
-        if (!hasDeps.has(bead.id) && !isDependedOn.has(bead.id)) {
-          orphaned.push(bead.id);
-        }
+  if (insights) {
+    // Use bv data for cycles and orphans
+    cycles = insights.Cycles !== null && insights.Cycles.length > 0;
+    orphaned = insights.Orphans ?? [];
+
+    // Add warnings for bottlenecks
+    for (const b of insights.Bottlenecks ?? []) {
+      if (b.Value > 5) {
+        warnings.push(`bead ${b.ID} is a bottleneck (betweenness=${b.Value.toFixed(1)}) — consider splitting`);
       }
     }
-  } catch {
-    // Non-fatal
+
+    // Add warnings for articulation points
+    for (const id of insights.Articulation ?? []) {
+      warnings.push(`bead ${id} is a single point of failure in the dep graph`);
+    }
+  } else {
+    // Fallback: manual cycle/orphan detection
+    try {
+      const cycleResult = await pi.exec("br", ["dep", "cycles"], { timeout: 10000, cwd });
+      if (cycleResult.stdout.toLowerCase().includes("cycle")) {
+        cycles = true;
+      }
+    } catch {
+      // Non-fatal
+    }
+
+    try {
+      const allBeads = await readBeads(pi, cwd);
+      const openBeads = allBeads.filter((b) => b.status === "open");
+      if (openBeads.length > 1) {
+        const hasDeps = new Set<string>();
+        const isDependedOn = new Set<string>();
+        for (const bead of openBeads) {
+          const deps = await beadDeps(pi, cwd, bead.id);
+          if (deps.length > 0) {
+            hasDeps.add(bead.id);
+            for (const dep of deps) isDependedOn.add(dep);
+          }
+        }
+        for (const bead of openBeads) {
+          if (!hasDeps.has(bead.id) && !isDependedOn.has(bead.id)) {
+            orphaned.push(bead.id);
+          }
+        }
+      }
+    } catch {
+      // Non-fatal
+    }
   }
 
-  return { ok: !cycles && orphaned.length === 0, orphaned, cycles };
+  return { ok: !cycles && orphaned.length === 0, orphaned, cycles, warnings };
 }
 
 /**

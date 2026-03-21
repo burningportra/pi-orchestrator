@@ -80,11 +80,35 @@ export function registerApproveTool(oc: OrchestratorContext) {
       // Validate — check for cycles
       const validation = await validateBeads(oc.pi, ctx.cwd);
 
-      // Format bead list for display
-      const beadListText = beads.map((b) => {
+      // Format bead list for display — group subtasks under parents
+      const parentIds = new Set(beads.filter((b) => b.parent).map((b) => b.parent!));
+      const childrenByParent = new Map<string, typeof beads>();
+      for (const b of beads) {
+        if (b.parent) {
+          const children = childrenByParent.get(b.parent) ?? [];
+          children.push(b);
+          childrenByParent.set(b.parent, children);
+        }
+      }
+      const childIds = new Set(beads.filter((b) => b.parent).map((b) => b.id));
+
+      const formatBead = (b: typeof beads[0], indent = "") => {
         const files = extractArtifacts(b);
-        return `**${b.id}: ${b.title}**\n   ${b.description.split("\n").slice(0, 3).join("\n   ")}\n   📄 ${files.length > 0 ? files.join(", ") : "(no files specified)"}`;
-      }).join("\n\n");
+        return `${indent}**${b.id}: ${b.title}**\n${indent}   ${b.description.split("\n").slice(0, 3).join("\n" + indent + "   ")}\n${indent}   📄 ${files.length > 0 ? files.join(", ") : "(no files specified)"}`;
+      };
+
+      const beadListParts: string[] = [];
+      for (const b of beads) {
+        if (childIds.has(b.id)) continue; // rendered under parent
+        beadListParts.push(formatBead(b));
+        const children = childrenByParent.get(b.id);
+        if (children) {
+          for (const child of children) {
+            beadListParts.push(`   ↳ ${formatBead(child, "   ")}`);
+          }
+        }
+      }
+      const beadListText = beadListParts.join("\n\n");
 
       const validationWarning = !validation.ok
         ? `\n\n⚠️ Validation issues: ${validation.cycles ? "dependency cycles detected" : ""} ${validation.orphaned.length > 0 ? `orphaned: ${validation.orphaned.join(", ")}` : ""}`

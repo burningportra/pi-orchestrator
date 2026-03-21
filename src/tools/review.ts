@@ -30,7 +30,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const { getBeadById, readyBeads, updateBeadStatus, syncBeads, readBeads, extractArtifacts: extractBeadArtifacts } = await import("../beads.js");
+      const { getBeadById, readyBeads, updateBeadStatus, syncBeads, readBeads, extractArtifacts: extractBeadArtifacts, bvNext, getBeadById: getBeadByIdFn } = await import("../beads.js");
 
       // Sentinel: beadId === "__gates__" while iterating = show next gate
       if (oc.state.phase === "iterating" && params.beadId === "__gates__") {
@@ -77,6 +77,26 @@ export function registerReviewTool(oc: OrchestratorContext) {
         // Update bead status to closed
         await updateBeadStatus(oc.pi, ctx.cwd, params.beadId, "closed");
         await syncBeads(oc.pi, ctx.cwd);
+
+        // Auto-close parent if all sibling subtasks are closed
+        if (bead.parent) {
+          const allBeads = await readBeads(oc.pi, ctx.cwd);
+          const siblings = allBeads.filter((b) => b.parent === bead.parent);
+          const allSiblingsClosed = siblings.every((b) => b.status === "closed" || b.id === params.beadId);
+          if (allSiblingsClosed) {
+            await updateBeadStatus(oc.pi, ctx.cwd, bead.parent, "closed");
+            await syncBeads(oc.pi, ctx.cwd);
+            // Record parent as complete
+            if (!oc.state.beadResults) oc.state.beadResults = {};
+            oc.state.beadResults[bead.parent] = {
+              beadId: bead.parent,
+              status: "success",
+              summary: "All subtasks complete",
+            };
+            oc.persistState();
+            ctx.ui.notify(`✅ Parent bead ${bead.parent} auto-closed — all subtasks complete.`, "info");
+          }
+        }
 
         // Track review passes per bead
         if (!oc.state.beadReviewPassCounts) oc.state.beadReviewPassCounts = {};
