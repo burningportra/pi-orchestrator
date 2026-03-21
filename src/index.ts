@@ -67,7 +67,7 @@ const PHASE_EMOJI: Record<OrchestratorPhase, string> = {
 
 export default function (pi: ExtensionAPI) {
   // Log version at startup so stale code is immediately obvious
-  const ORCHESTRATOR_VERSION = '0.5.0';
+  const ORCHESTRATOR_VERSION = '0.6.0';
   console.log(`[pi-orchestrator] v${ORCHESTRATOR_VERSION} loaded`);
 
   let state: OrchestratorState = createInitialState();
