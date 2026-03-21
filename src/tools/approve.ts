@@ -72,6 +72,27 @@ export function registerApproveTool(oc: OrchestratorContext) {
         };
       }
 
+      // ── Polish loop: compute change delta if returning from refinement ──
+      const isRefining = oc.state.phase === "refining_beads";
+      if (isRefining) {
+        const currentSnapshot = snapshotBeads(beads);
+        if (_lastBeadSnapshot) {
+          const changes = countChanges(_lastBeadSnapshot, currentSnapshot);
+          oc.state.polishChanges.push(changes);
+        }
+        oc.state.polishRound++;
+        _lastBeadSnapshot = currentSnapshot;
+
+        // Check convergence: 2 consecutive rounds with 0 changes
+        const pc = oc.state.polishChanges;
+        if (pc.length >= 2 && pc[pc.length - 1] === 0 && pc[pc.length - 2] === 0) {
+          oc.state.polishConverged = true;
+        }
+      } else if (!_lastBeadSnapshot) {
+        // First entry — take initial snapshot
+        _lastBeadSnapshot = snapshotBeads(beads);
+      }
+
       // Store bead IDs in state
       oc.state.activeBeadIds = beads.map((b) => b.id);
       oc.setPhase("awaiting_bead_approval", ctx);
@@ -110,50 +131,73 @@ export function registerApproveTool(oc: OrchestratorContext) {
       }
       const beadListText = beadListParts.join("\n\n");
 
-      const validationWarning = !validation.ok
+      const bvWarnings = validation.warnings?.length ? `\n⚠️ ${validation.warnings.join("\n⚠️ ")}` : "";
+      const validationWarning = (!validation.ok
         ? `\n\n⚠️ Validation issues: ${validation.cycles ? "dependency cycles detected" : ""} ${validation.orphaned.length > 0 ? `orphaned: ${validation.orphaned.join(", ")}` : ""}`
+        : "") + bvWarnings;
+
+      // ── Build UI options based on polish state ──
+      const round = oc.state.polishRound;
+      const maxReached = round >= MAX_POLISH_ROUNDS;
+      const converged = oc.state.polishConverged;
+
+      // Round info header
+      const changesInfo = oc.state.polishChanges.length > 0
+        ? `\n📊 Polish history: ${oc.state.polishChanges.map((n, i) => `R${i + 1}: ${n} change${n !== 1 ? "s" : ""}`).join(", ")}`
+        : "";
+      const roundHeader = round > 0
+        ? `\n🔄 Polish round ${round}${changesInfo}${converged ? "\n✅ Steady-state reached (0 changes for 2 consecutive rounds)" : ""}`
         : "";
 
-      // Interactive approval/refinement loop
-      let polishing = true;
-      while (polishing) {
-        const choice = await ctx.ui.select(
-          `${beads.length} beads ready for: ${oc.state.selectedGoal}\n\n${beadListText}${validationWarning}`,
-          [
-            "▶️  Start implementing",
-            "🔍 Refine — send beads back for LLM review (Phase 6)",
-            "❌ Reject",
-          ]
+      const options: string[] = [];
+      if (maxReached) {
+        options.push(
+          "▶️  Start implementing (max rounds reached)",
+          "❌ Reject"
         );
-
-        if (choice?.startsWith("🔍")) {
-          oc.setPhase("refining_beads", ctx);
-          oc.persistState();
-          await syncBeads(oc.pi, ctx.cwd);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `**NEXT: Review and refine the beads using br CLI, then call \`orch_approve_beads\` again.**\n\n${beadRefinementPrompt()}\n\n---\n\nCurrent beads:\n\n${beadListText}`,
-              },
-            ],
-            details: { approved: false, refining: true, beadCount: beads.length },
-          };
-        }
-
-        if (!choice || choice.startsWith("❌")) {
-          oc.orchestratorActive = false;
-          oc.setPhase("idle", ctx);
-          oc.persistState();
-          return {
-            content: [{ type: "text", text: "Beads rejected. Orchestration stopped." }],
-            details: { approved: false },
-          };
-        }
-
-        // "▶️ Start implementing" — break out of loop
-        polishing = false;
+      } else {
+        const startLabel = converged
+          ? "▶️  Start implementing (steady-state reached ✅)"
+          : "▶️  Start implementing";
+        options.push(
+          startLabel,
+          `🔍 Polish again (round ${round + 1})`,
+          "❌ Reject"
+        );
       }
+
+      const choice = await ctx.ui.select(
+        `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}\n\n${beadListText}${validationWarning}`,
+        options
+      );
+
+      if (choice?.startsWith("🔍")) {
+        oc.setPhase("refining_beads", ctx);
+        oc.persistState();
+        await syncBeads(oc.pi, ctx.cwd);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `**NEXT: Review and refine the beads using br CLI, then call \`orch_approve_beads\` again.**\n\n${beadRefinementPrompt(round, oc.state.polishChanges)}\n\n---\n\nCurrent beads:\n\n${beadListText}`,
+            },
+          ],
+          details: { approved: false, refining: true, beadCount: beads.length, polishRound: round },
+        };
+      }
+
+      if (!choice || choice.startsWith("❌")) {
+        oc.orchestratorActive = false;
+        oc.setPhase("idle", ctx);
+        oc.persistState();
+        return {
+          content: [{ type: "text", text: "Beads rejected. Orchestration stopped." }],
+          details: { approved: false },
+        };
+      }
+
+      // "▶️ Start implementing" — reset polish snapshot
+      _lastBeadSnapshot = undefined;
 
       // ── Approved — launch execution ──────────────────────────
       // Reset bead-centric implementation state

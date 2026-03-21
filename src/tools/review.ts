@@ -30,7 +30,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const { getBeadById, readyBeads, updateBeadStatus, syncBeads, readBeads, extractArtifacts: extractBeadArtifacts, bvNext, getBeadById: getBeadByIdFn } = await import("../beads.js");
+      const { getBeadById, readyBeads, updateBeadStatus, syncBeads, readBeads, extractArtifacts: extractBeadArtifacts, bvNext } = await import("../beads.js");
 
       // Sentinel: beadId === "__gates__" while iterating = show next gate
       if (oc.state.phase === "iterating" && params.beadId === "__gates__") {
@@ -232,7 +232,8 @@ export function registerReviewTool(oc: OrchestratorContext) {
             const validation = await validateBeads(oc.pi, ctx.cwd);
             const allBeads = await readBeads(oc.pi, ctx.cwd);
             const summary = getBeadsSummary(allBeads);
-            beadsReviewInfo = `\n\n**Beads:** ${summary}${!validation.ok ? `\n⚠️ ${validation.cycles ? "Cycles detected" : ""} ${validation.orphaned.length > 0 ? `Orphaned: ${validation.orphaned.join(", ")}` : ""}` : ""}`;
+            const warningsStr = validation.warnings?.length ? `\n⚠️ ${validation.warnings.join("\n⚠️ ")}` : "";
+            beadsReviewInfo = `\n\n**Beads:** ${summary}${!validation.ok ? `\n⚠️ ${validation.cycles ? "Cycles detected" : ""} ${validation.orphaned.length > 0 ? `Orphaned: ${validation.orphaned.join(", ")}` : ""}` : ""}${warningsStr}`;
           }
 
           // Clean up worktrees and tender
@@ -253,8 +254,16 @@ export function registerReviewTool(oc: OrchestratorContext) {
 
           return await runGuidedGates(oc, oc.state, ctx, beadsReviewInfo);
         } else if (ready.length === 1) {
-          // Single next bead — emit implementer instructions
-          const nextBead = ready[0];
+          // Single next bead — use bv for smarter selection, fall back to first ready
+          const bvPick = await bvNext(oc.pi, ctx.cwd);
+          let nextBead = ready[0];
+          if (bvPick) {
+            // bvNext may suggest a bead from the ready list — prefer it
+            const bvBead = await getBeadById(oc.pi, ctx.cwd, bvPick.id);
+            if (bvBead && bvBead.status !== "closed" && bvBead.status !== "deferred") {
+              nextBead = bvBead;
+            }
+          }
           oc.state.currentBeadId = nextBead.id;
           await updateBeadStatus(oc.pi, ctx.cwd, nextBead.id, "in_progress");
           oc.state.retryCount = 0;
