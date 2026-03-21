@@ -7,3 +7,6 @@ dist/
 *.map
 !src/
 .sophia/
+.DS_Store
+.cocoindex_code/
+.pi/suggester/
