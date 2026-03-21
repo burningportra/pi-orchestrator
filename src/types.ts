@@ -31,14 +31,28 @@ export interface ScanQualitySignal {
   detail?: string;
 }
 
+export type ScanRecommendationPriority = "low" | "medium" | "high";
+
+export interface ScanRecommendation {
+  /** Stable identifier for deduping or provider-specific follow-up. */
+  id: string;
+  /** Short recommendation title. */
+  title: string;
+  /** Human-readable detail suitable for prompts or UI. */
+  detail: string;
+  /** Optional structured payload for downstream routing. */
+  payload?: Record<string, unknown>;
+  priority?: ScanRecommendationPriority;
+}
+
 export interface ScanCodebaseAnalysis {
-  /** High-level scan summary suitable for prompt context. */
+  /** Short scan summary that can be reused in prompts. */
   summary?: string;
-  /** Concrete recommendation inputs for discovery/planning. */
-  recommendations: string[];
+  /** Provider-supplied recommendation inputs for discovery and planning. */
+  recommendations: ScanRecommendation[];
   /** Structural findings about architecture, boundaries, or hotspots. */
   structuralInsights: ScanInsight[];
-  /** Normalized quality signals that providers can attach. */
+  /** Quality signals attached by a scan provider. */
   qualitySignals: ScanQualitySignal[];
 }
 
@@ -49,25 +63,45 @@ export interface ScanErrorInfo {
 }
 
 export interface ScanFallbackInfo {
+  /** Whether the requested provider path degraded to the built-in profiler. */
   used: boolean;
+  /** Provider family originally attempted. */
   from: ScanSource;
+  /** Current fallback target. Step 1 only supports builtin fallback. */
   to: "builtin";
+  /** Human-readable explanation for the fallback decision. */
   reason: string;
+  /** Optional structured error from the failed provider attempt. */
   error?: ScanErrorInfo;
 }
 
 /**
  * Normalized repository scan output.
  *
- * `profile` intentionally preserves the legacy `RepoProfile` contract so the
- * existing orchestrator flow can continue to operate unchanged while scan
- * providers attach richer codebase-analysis metadata around it.
+ * `profile` keeps the existing `RepoProfile` shape so current discovery,
+ * planning, and implementation code can continue to work unchanged.
+ * Providers can attach additional scan metadata alongside it.
+ *
+ * In practice, Step 1 callers should usually read this as:
+ * `const profile = scanResult.profile`.
  */
+export interface ScanSourceMetadata {
+  /** Friendly provider label for diagnostics/UI. */
+  label?: string;
+  /** Provider version or implementation tag when known. */
+  version?: string;
+  /** Non-fatal warnings emitted during scanning. */
+  warnings?: string[];
+}
+
 export interface ScanResult {
+  /** The provider that actually produced the attached RepoProfile. */
   source: ScanSource;
+  /** Stable provider identifier for programmatic checks/logging. */
   provider: string;
   profile: RepoProfile;
   codebaseAnalysis: ScanCodebaseAnalysis;
+  sourceMetadata?: ScanSourceMetadata;
   fallback?: ScanFallbackInfo;
 }
 

@@ -508,6 +508,9 @@ export default function (pi: ExtensionAPI) {
       setPhase("discovering", ctx);
 
       const formatted = formatRepoProfile(profile);
+      const scanSourceLine = scanResult.source === "ccc"
+        ? "🔬 Scan source: ccc"
+        : `📊 Scan source: built-in profiler${scanResult.fallback ? ` (fallback from ${scanResult.fallback.from})` : ""}`;
 
       // Read compound memory from prior orchestrations
       const { readMemory } = await import("./memory.js");
@@ -536,7 +539,7 @@ export default function (pi: ExtensionAPI) {
           persistState();
           return {
             content: [{ type: "text", text: "No goal entered. Orchestration stopped." }],
-            details: { profile },
+            details: { profile, scanResult },
           };
         }
 
@@ -560,10 +563,10 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `**NEXT: Call \`orch_plan\` with a structured plan NOW.**\n\nGoal: "${goal}"\n\n---\n\nRepository profiled successfully.\n\n${formatted}${memoryContext}\n\n${instructions}`,
+              text: `**NEXT: Call \`orch_plan\` with a structured plan NOW.**\n\nGoal: "${goal}"\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n\n${formatted}${memoryContext}\n\n${instructions}`,
             },
           ],
-          details: { profile, customGoal: goal },
+          details: { profile, scanResult, customGoal: goal },
         };
       }
 
@@ -576,10 +579,10 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `${discoveryPrompt}\n\n---\n\nRepository profiled successfully.\n\n${formatted}${memoryContext}`,
+            text: `${discoveryPrompt}\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n\n${formatted}${memoryContext}`,
           },
         ],
-        details: { profile },
+        details: { profile, scanResult },
       };
     },
 
@@ -596,6 +599,10 @@ export default function (pi: ExtensionAPI) {
         return new Text(theme.fg("warning", "📊 Scanning..."), 0, 0);
       const d = result.details as any;
       let text = theme.fg("success", "📊 Repository profiled");
+      if (d?.scanResult?.source) {
+        const sourceLabel = d.scanResult.source === "ccc" ? "ccc" : "built-in";
+        text += theme.fg("dim", ` via ${sourceLabel}`);
+      }
       if (d?.profile) {
         text += theme.fg("dim", ` — ${d.profile.name}`);
         text += theme.fg("dim", ` [${d.profile.languages?.join(", ")}]`);
