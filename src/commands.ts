@@ -177,7 +177,7 @@ export function registerCommands(oc: OrchestratorContext) {
           ctx.ui.notify("Prune cancelled.", "info");
           return;
         }
-        const ok = markRule(entry.id, false, "pruned via /memory command");
+        const ok = markRule(entry.id, false, "pruned via /memory command", ctx.cwd);
         ctx.ui.notify(ok ? `🗑️ Marked ${entry.id} as harmful.` : "❌ Failed to mark rule.", ok ? "info" : "error");
         return;
       }

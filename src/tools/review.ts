@@ -254,16 +254,8 @@ export function registerReviewTool(oc: OrchestratorContext) {
 
           return await runGuidedGates(oc, oc.state, ctx, beadsReviewInfo);
         } else if (ready.length === 1) {
-          // Single next bead — use bv for smarter selection, fall back to first ready
-          const bvPick = await bvNext(oc.pi, ctx.cwd);
-          let nextBead = ready[0];
-          if (bvPick) {
-            // bvNext may suggest a bead from the ready list — prefer it
-            const bvBead = await getBeadById(oc.pi, ctx.cwd, bvPick.id);
-            if (bvBead && bvBead.status !== "closed" && bvBead.status !== "deferred") {
-              nextBead = bvBead;
-            }
-          }
+          // Single next bead
+          const nextBead = ready[0];
           oc.state.currentBeadId = nextBead.id;
           await updateBeadStatus(oc.pi, ctx.cwd, nextBead.id, "in_progress");
           oc.state.retryCount = 0;
@@ -285,7 +277,16 @@ export function registerReviewTool(oc: OrchestratorContext) {
             details: { review: { beadId: params.beadId, passed: true }, nextBead: nextBead.id },
           };
         } else {
-          // Multiple ready beads — emit parallel_subagents config
+          // Multiple ready beads — use bvNext to order by impact, then emit parallel_subagents
+          const bvPick = await bvNext(oc.pi, ctx.cwd);
+          if (bvPick) {
+            // Move bv's top pick to front of the ready list
+            const idx = ready.findIndex((b) => b.id === bvPick.id);
+            if (idx > 0) {
+              const [top] = ready.splice(idx, 1);
+              ready.unshift(top);
+            }
+          }
           const goal = oc.state.selectedGoal ?? "Unknown goal";
           const agentConfigs = ready.map((b) => {
             const artifacts = extractBeadArtifacts(b);

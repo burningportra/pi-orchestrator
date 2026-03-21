@@ -249,19 +249,15 @@ describe("bvInsights", () => {
       Articulation: ["bead-y"],
       Slack: [{ ID: "bead-z", Value: 2 }],
     };
-    const pi = makePi(async (_cmd, args) => {
-      if (args[0] === "bv") return { code: 0, stdout: "/usr/local/bin/bv", stderr: "" };
-      return { code: 0, stdout: JSON.stringify(insightsData), stderr: "" };
-    });
     // Mock: which bv → found, bv --robot-insights → JSON
-    const pi2 = {
+    const pi = {
       exec: vi.fn(async (cmd: string, args: string[]) => {
         if (cmd === "which") return { code: 0, stdout: "/usr/local/bin/bv\n", stderr: "" };
         return { code: 0, stdout: JSON.stringify(insightsData), stderr: "" };
       }),
     } as unknown as ExtensionAPI;
 
-    const result = await bvInsights(pi2, CWD);
+    const result = await bvInsights(pi, CWD);
     expect(result).not.toBeNull();
     expect(result!.Bottlenecks).toHaveLength(1);
     expect(result!.Bottlenecks[0].ID).toBe("bead-x");

@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { Bead } from "./types.js";
 import { join } from "path";
-import { writeFileSync, mkdirSync } from "fs";
+import { writeFileSync, mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 
 export interface CrossModelReviewResult {
@@ -77,12 +77,18 @@ If the beads look solid, say so briefly — don't invent problems.`;
     const rawOutput = result.stdout.trim();
     const suggestions = parseSuggestions(rawOutput);
 
+    // Clean up temp files
+    try { rmSync(outputDir, { recursive: true, force: true }); } catch { /* ignore */ }
+
     return {
       suggestions,
       rawOutput,
       model: altModel ?? "default",
     };
   } catch (err) {
+    // Clean up temp files on error too
+    try { rmSync(outputDir, { recursive: true, force: true }); } catch { /* ignore */ }
+
     return {
       suggestions: [],
       rawOutput: err instanceof Error ? err.message : String(err),

@@ -254,6 +254,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
       }
 
       if (!choice || choice.startsWith("❌")) {
+        _lastBeadSnapshot = undefined;
         oc.orchestratorActive = false;
         oc.setPhase("idle", ctx);
         oc.persistState();
