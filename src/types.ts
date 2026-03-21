@@ -272,3 +272,40 @@ export function createInitialState(): OrchestratorState {
     currentGateIndex: 0,
   };
 }
+
+// ─── Orchestrator Context (shared runtime for extracted modules) ──
+
+export interface HitMeResult {
+  text: string;
+  diff: string;
+}
+
+/**
+ * Shared runtime context passed to extracted tool/command/gate handlers.
+ * Replaces module-level variable closures from the monolithic index.ts.
+ */
+export interface OrchestratorContext {
+  /** The pi extension API. */
+  pi: import("@mariozechner/pi-coding-agent").ExtensionAPI;
+  /** Mutable orchestrator state. */
+  state: OrchestratorState;
+  /** Whether the orchestrator is currently active. */
+  get orchestratorActive(): boolean;
+  set orchestratorActive(v: boolean);
+  /** Orchestrator version string. */
+  version: string;
+  /** Sophia CR result (if sophia backend active). */
+  sophiaCRResult?: import("./sophia.js").PlanToCRResult;
+  /** Worktree pool for parallel execution. */
+  worktreePool?: import("./worktree.js").WorktreePool;
+  /** Swarm tender for monitoring parallel agents. */
+  swarmTender?: import("./tender.js").SwarmTender;
+
+  // ─── Helpers ─────────────────────────────────────────────
+  setPhase: (phase: OrchestratorPhase, ctx: import("@mariozechner/pi-coding-agent").ExtensionContext) => void;
+  persistState: () => void;
+  updateWidget: (ctx: import("@mariozechner/pi-coding-agent").ExtensionContext) => void;
+  runHitMeAgents: (configs: { name: string; task: string }[], cwd: string, ctx: import("@mariozechner/pi-coding-agent").ExtensionContext) => Promise<HitMeResult>;
+  agentMailRPC: (tool: string, args: Record<string, unknown>) => Promise<any>;
+  ensureAgentMailProject: (cwd: string) => Promise<void>;
+}
