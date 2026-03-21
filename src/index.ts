@@ -43,6 +43,12 @@ import {
   type PlanToCRResult,
   type ParallelAnalysis,
 } from "./sophia.js";
+import {
+  detectCoordinationBackend,
+  selectStrategy,
+  resetDetection,
+  type CoordinationBackend,
+} from "./coordination.js";
 import { WorktreePool } from "./worktree.js";
 import { runDeepPlanAgents } from "./deep-plan.js";
 
@@ -185,7 +191,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     if (!orchestratorActive) return;
     return {
-      systemPrompt: event.systemPrompt + "\n\n" + orchestratorSystemPrompt(hasSophia),
+      systemPrompt: event.systemPrompt + "\n\n" + orchestratorSystemPrompt(hasSophia, state.coordinationBackend),
     };
   });
 
@@ -217,14 +223,24 @@ export default function (pi: ExtensionAPI) {
           worktreePool = WorktreePool.fromState(pi, state.worktreePoolState);
         }
 
-        // Restore sophia state — re-validate availability
-        hasSophia = state.hasSophia ?? false;
-        if (hasSophia) {
-          // Re-check sophia is still available (might have been uninstalled)
-          const stillAvailable = await isSophiaAvailable(pi, ctx.cwd);
-          if (!stillAvailable) {
-            hasSophia = false;
-            state.hasSophia = false;
+        // Restore coordination backend — re-validate availability
+        if (state.coordinationBackend) {
+          // Re-detect to catch uninstalled tools
+          resetDetection();
+          const freshBackend = await detectCoordinationBackend(pi, ctx.cwd);
+          state.coordinationBackend = freshBackend;
+          state.coordinationStrategy = selectStrategy(freshBackend);
+          hasSophia = freshBackend.sophia;
+          state.hasSophia = hasSophia;
+        } else {
+          // Legacy state without coordination backend — use hasSophia flag
+          hasSophia = state.hasSophia ?? false;
+          if (hasSophia) {
+            const stillAvailable = await isSophiaAvailable(pi, ctx.cwd);
+            if (!stillAvailable) {
+              hasSophia = false;
+              state.hasSophia = false;
+            }
           }
         }
         if (state.sophiaCRId && state.sophiaTaskIds) {
@@ -499,10 +515,12 @@ export default function (pi: ExtensionAPI) {
       state.scanResult = scanResult;
       state.repoProfile = profile;
 
-      // Detect sophia availability
-      const sophiaAvail = await isSophiaAvailable(pi, ctx.cwd);
-      const sophiaInit = sophiaAvail && await isSophiaInitialized(pi, ctx.cwd);
-      hasSophia = sophiaInit ?? false;
+      // Detect all coordination backends (beads, agent-mail, sophia)
+      const coordBackend = await detectCoordinationBackend(pi, ctx.cwd);
+      const coordStrategy = selectStrategy(coordBackend);
+      state.coordinationBackend = coordBackend;
+      state.coordinationStrategy = coordStrategy;
+      hasSophia = coordBackend.sophia;
       persistState();
 
       setPhase("discovering", ctx);
@@ -511,6 +529,15 @@ export default function (pi: ExtensionAPI) {
       const scanSourceLine = scanResult.source === "ccc"
         ? "🔬 Scan: ccc"
         : `📊 Scan: built-in${scanResult.fallback ? ` (fallback from ${scanResult.fallback.from})` : ""}`;
+
+      // Coordination backend summary
+      const coordParts: string[] = [];
+      if (coordBackend.beads) coordParts.push("beads");
+      if (coordBackend.agentMail) coordParts.push("agent-mail");
+      if (coordBackend.sophia) coordParts.push("sophia");
+      const coordLine = coordParts.length > 0
+        ? `🤝 Coordination: ${coordParts.join(" + ")} → strategy: **${coordStrategy}**`
+        : "🤝 Coordination: bare worktrees (no beads/agent-mail/sophia detected)";
 
       // Read compound memory from prior orchestrations
       const { readMemory } = await import("./memory.js");
@@ -563,7 +590,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `**NEXT: Call \`orch_plan\` with a structured plan NOW.**\n\nGoal: "${goal}"\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n\n${formatted}${memoryContext}\n\n${instructions}`,
+              text: `**NEXT: Call \`orch_plan\` with a structured plan NOW.**\n\nGoal: "${goal}"\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}\n\n${formatted}${memoryContext}\n\n${instructions}`,
             },
           ],
           details: { profile, scanResult, customGoal: goal },
@@ -571,18 +598,28 @@ export default function (pi: ExtensionAPI) {
       }
 
       const isCreative = discoveryMode?.startsWith("🚀");
-      const discoveryPrompt = isCreative
-        ? `**NEXT: Call \`orch_discover\` with your top 7 ideas NOW.**\n\n🚀 Creative Discovery Mode: Come up with your top 7 most brilliant ideas for adding extremely powerful and cool functionality that will make this system far more compelling, useful, intuitive, versatile, powerful, robust, and reliable for users. Be pragmatic — don't suggest features that are extremely hard to implement or not worth the complexity. But I don't want you to just think of 7 ideas: seriously think hard, come up with ONE HUNDRED ideas internally, then only tell me your 7 VERY BEST and most brilliant, clever, and radically innovative ideas.`
-        : `**NEXT: Call \`orch_discover\` to generate project ideas NOW.**`;
+      const isWizard = discoveryMode?.startsWith("🧠");
+      const discoveryModeKey: "standard" | "wizard" | "creative" = isWizard ? "wizard" : isCreative ? "creative" : "standard";
+
+      const modeInstructions = discoveryInstructions(profile, scanResult, discoveryModeKey);
+
+      let discoveryPrompt: string;
+      if (isWizard) {
+        discoveryPrompt = `**NEXT: Call \`orch_discover\` with your top 5 ideas and next 5-10 honorable mentions NOW.**\n\n🧠 Idea Wizard Mode: Use structured ideation with rubric scoring.\n\n${modeInstructions}`;
+      } else if (isCreative) {
+        discoveryPrompt = `**NEXT: Call \`orch_discover\` with your top 7 ideas NOW.**\n\n🚀 Creative Discovery Mode:\n\n${modeInstructions}`;
+      } else {
+        discoveryPrompt = `**NEXT: Call \`orch_discover\` to generate project ideas NOW.**\n\n${modeInstructions}`;
+      }
 
       return {
         content: [
           {
             type: "text",
-            text: `${discoveryPrompt}\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n\n${formatted}${memoryContext}`,
+            text: `${discoveryPrompt}\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}\n\n${formatted}${memoryContext}`,
           },
         ],
-        details: { profile, scanResult },
+        details: { profile, scanResult, discoveryMode: discoveryModeKey },
       };
     },
 
@@ -649,10 +686,47 @@ export default function (pi: ExtensionAPI) {
       setPhase("awaiting_selection", ctx);
       persistState();
 
+      // Write full ideation results as a session artifact
+      const topIdeas = state.candidateIdeas.filter((i) => i.tier === "top");
+      const honorableIdeas = state.candidateIdeas.filter((i) => i.tier === "honorable" || !i.tier);
+      const artifactLines: string[] = [
+        `# Discovery Ideas — ${new Date().toISOString().slice(0, 10)}`,
+        "",
+      ];
+      if (topIdeas.length > 0) {
+        artifactLines.push("## Top Picks", "");
+        for (const idea of topIdeas) {
+          artifactLines.push(`### ${idea.title}`, `**Category:** ${idea.category} | **Effort:** ${idea.effort} | **Impact:** ${idea.impact}`);
+          artifactLines.push(`\n${idea.description}`);
+          if (idea.rationale) artifactLines.push(`\n**Rationale:** ${idea.rationale}`);
+          if (idea.sourceEvidence?.length) artifactLines.push(`\n**Evidence:** ${idea.sourceEvidence.join("; ")}`);
+          if (idea.scores) artifactLines.push(`\n**Scores:** useful=${idea.scores.useful} pragmatic=${idea.scores.pragmatic} accretive=${idea.scores.accretive} robust=${idea.scores.robust} ergonomic=${idea.scores.ergonomic}`);
+          if (idea.risks?.length) artifactLines.push(`\n**Risks:** ${idea.risks.join("; ")}`);
+          if (idea.synergies?.length) artifactLines.push(`\n**Synergies:** ${idea.synergies.join(", ")}`);
+          artifactLines.push("");
+        }
+      }
+      if (honorableIdeas.length > 0) {
+        artifactLines.push("## Honorable Mentions", "");
+        for (const idea of honorableIdeas) {
+          artifactLines.push(`### ${idea.title}`, `**Category:** ${idea.category} | **Effort:** ${idea.effort} | **Impact:** ${idea.impact}`);
+          artifactLines.push(`\n${idea.description}`);
+          if (idea.rationale) artifactLines.push(`\n**Rationale:** ${idea.rationale}`);
+          if (idea.sourceEvidence?.length) artifactLines.push(`\n**Evidence:** ${idea.sourceEvidence.join("; ")}`);
+          artifactLines.push("");
+        }
+      }
+      try {
+        const artifactDir = join(tmpdir(), `pi-orchestrator-discovery`);
+        mkdirSync(artifactDir, { recursive: true });
+        const artifactPath = join(artifactDir, `ideas-${Date.now()}.md`);
+        writeFileSync(artifactPath, artifactLines.join("\n"), "utf8");
+      } catch { /* best-effort */ }
+
       const ideaList = state.candidateIdeas
         .map(
           (idea, i) =>
-            `${i + 1}. **[${idea.category}] ${idea.title}** (effort: ${idea.effort}, impact: ${idea.impact})\n   ${idea.description}`
+            `${i + 1}. **[${idea.category}] ${idea.title}** (effort: ${idea.effort}, impact: ${idea.impact})${idea.tier === "honorable" ? " _(honorable mention)_" : ""}\n   ${idea.description}${idea.rationale ? `\n   _${idea.rationale}_` : ""}`
         )
         .join("\n\n");
 
@@ -660,7 +734,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `**NEXT: Call \`orch_select\` NOW to present these to the user.**\n\n---\n\nGenerated ${state.candidateIdeas.length} project ideas:\n\n${ideaList}`,
+            text: `**NEXT: Call \`orch_select\` NOW to present these to the user.**\n\n---\n\nGenerated ${state.candidateIdeas.length} project ideas (${topIdeas.length} top, ${honorableIdeas.length} honorable):\n\n${ideaList}`,
           },
         ],
         details: { ideas: state.candidateIdeas },
@@ -679,10 +753,22 @@ export default function (pi: ExtensionAPI) {
       if (isPartial)
         return new Text(theme.fg("warning", "💡 Generating ideas..."), 0, 0);
       const d = result.details as any;
-      let text = theme.fg("success", `💡 ${d?.ideas?.length ?? 0} ideas generated`);
-      if (expanded && d?.ideas) {
-        for (const idea of d.ideas) {
-          text += `\n  [${idea.category}] ${idea.title}`;
+      const ideas: any[] = d?.ideas ?? [];
+      const topCount = ideas.filter((i: any) => i.tier === "top").length;
+      const honorableCount = ideas.length - topCount;
+      const tierInfo = honorableCount > 0 ? ` (${topCount} top, ${honorableCount} honorable)` : "";
+      let text = theme.fg("success", `💡 ${ideas.length} ideas generated${tierInfo}`);
+      if (expanded && ideas.length > 0) {
+        for (const idea of ideas) {
+          const scoreStr = idea.scores
+            ? (() => {
+                const avg = (idea.scores.useful * 2 + idea.scores.pragmatic * 2 + idea.scores.accretive * 1.5 + idea.scores.robust + idea.scores.ergonomic) / 7.5;
+                const stars = "★".repeat(Math.round(avg)) + "☆".repeat(5 - Math.round(avg));
+                return ` ${stars}`;
+              })()
+            : "";
+          const tierMark = idea.tier === "honorable" ? theme.fg("dim", " (honorable)") : "";
+          text += `\n  [${idea.category}] ${idea.title}${scoreStr}${tierMark}`;
         }
       }
       return new Text(text, 0, 0);
@@ -703,10 +789,31 @@ export default function (pi: ExtensionAPI) {
         throw new Error("No ideas available. Call orch_discover first.");
       }
 
-      const options = state.candidateIdeas.map(
-        (idea) =>
-          `[${idea.category}] ${idea.title} (effort: ${idea.effort}, impact: ${idea.impact})`
-      );
+      // Group ideas by tier for display
+      const topIdeas = state.candidateIdeas.filter((i) => i.tier === "top");
+      const honorableIdeas = state.candidateIdeas.filter((i) => i.tier === "honorable" || !i.tier);
+      const hasMixedTiers = topIdeas.length > 0 && honorableIdeas.length > 0;
+
+      // Build display options — ideas in tier order, each with rationale subtitle
+      const orderedIdeas = hasMixedTiers ? [...topIdeas, ...honorableIdeas] : state.candidateIdeas;
+      const options: string[] = [];
+
+      for (let i = 0; i < orderedIdeas.length; i++) {
+        const idea = orderedIdeas[i];
+        const rationaleSnippet = idea.rationale
+          ? `\n     → ${idea.rationale.length > 120 ? idea.rationale.slice(0, 117) + "..." : idea.rationale}`
+          : "";
+        // Add tier header as a visual separator
+        if (hasMixedTiers && i === 0) {
+          options.push(`── Top Picks ──`);
+        }
+        if (hasMixedTiers && i === topIdeas.length) {
+          options.push(`── Also Worth Considering ──`);
+        }
+        options.push(
+          `[${idea.category}] ${idea.title} (effort: ${idea.effort}, impact: ${idea.impact})${rationaleSnippet}`
+        );
+      }
       options.push("✏️  Enter a custom goal");
 
       let choice: string | undefined;
@@ -765,9 +872,23 @@ export default function (pi: ExtensionAPI) {
         if (refinementUsed) {
           state.constraints = extractConstraints(refinement.answers);
         }
+      } else if (choice.startsWith("──")) {
+        // User selected a tier header — treat as no selection, re-prompt would be ideal
+        // but for simplicity, treat as cancelled
+        orchestratorActive = false;
+        setPhase("idle", ctx);
+        persistState();
+        return {
+          content: [{ type: "text", text: "No idea selected. Orchestration stopped." }],
+          details: { selected: false },
+        };
       } else {
+        // Map selected option back to the idea in orderedIdeas
         const choiceIndex = options.indexOf(choice);
-        const idea = state.candidateIdeas[choiceIndex];
+        // Count how many tier headers precede this choice
+        const headersBefore = options.slice(0, choiceIndex).filter((o) => o.startsWith("──")).length;
+        const ideaIndex = choiceIndex - headersBefore;
+        const idea = orderedIdeas[ideaIndex];
         goal = `${idea.title}: ${idea.description}`;
 
         // Offer to refine the system-provided idea

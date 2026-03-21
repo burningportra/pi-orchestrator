@@ -130,6 +130,14 @@ export interface TodoItem {
 }
 
 // ─── Discovery ───────────────────────────────────────────────
+export interface IdeaScores {
+  useful: number;     // 1-5: solves a real, frequent pain
+  pragmatic: number;  // 1-5: realistic to build in hours/days
+  accretive: number;  // 1-5: clearly adds value beyond what exists
+  robust: number;     // 1-5: handles edge cases, works reliably
+  ergonomic: number;  // 1-5: reduces friction or cognitive load
+}
+
 export interface CandidateIdea {
   id: string;
   title: string;
@@ -137,6 +145,18 @@ export interface CandidateIdea {
   category: IdeaCategory;
   effort: "low" | "medium" | "high";
   impact: "low" | "medium" | "high";
+  /** Why this idea beat other candidates — specific repo evidence and reasoning. */
+  rationale: string;
+  /** "top" = top 5 picks, "honorable" = next 5-10 worth considering. */
+  tier: "top" | "honorable";
+  /** What repo signals support this idea. */
+  sourceEvidence?: string[];
+  /** Known downsides or unknowns. */
+  risks?: string[];
+  /** IDs of other ideas this complements. */
+  synergies?: string[];
+  /** Rubric scores (1-5 per axis). */
+  scores?: IdeaScores;
 }
 
 export type IdeaCategory =
@@ -231,6 +251,16 @@ export interface OrchestratorState {
   sophiaCRBranch?: string;
   sophiaCRTitle?: string;
   sophiaTaskIds?: Record<number, number>;
+
+  // ─── Coordination backend state ────────────────────────────
+  /** Detected coordination backends (beads, agentMail, sophia) */
+  coordinationBackend?: import("./coordination.js").CoordinationBackend;
+  /** Selected coordination strategy based on available backends */
+  coordinationStrategy?: import("./coordination.js").CoordinationStrategy;
+  /** Bead IDs mapped from plan step indices (when using beads coordination) */
+  beadIds?: Record<number, string>;
+  /** Whether agent-mail session was bootstrapped for this orchestration */
+  agentMailSessionActive?: boolean;
 }
 
 export function createInitialState(): OrchestratorState {

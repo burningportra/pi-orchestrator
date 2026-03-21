@@ -1,0 +1,30 @@
+{
+  "stateVersion": 8,
+  "steeringHistory": [
+    {
+      "turnId": "d456f5c1",
+      "suggestedPrompt": "Yes, go ahead and init beads, check agent-mail, and set things up. The work I want to parallelize is integrating beads + agent-mail as the coordination layer for parallel agents in the orchestrator it",
+      "actualUserPrompt": "Yes, go ahead and init beads, check agent-mail, and set things up. The work I want to parallelize is integrating beads + agent-mail as the coordination layer for parallel agents in the orchestrator. We also need to add the agent mail to the agents.md per project. \"## MCP Agent Mail: coordination for multi-agent workflows\n\nWhat it is\n- A mail-like layer that lets coding agents coordinate asynchronously via MCP tools and resources.\n- Provides identities, inbox/outbox, searchable threads, and advisory file reservations, with human-auditable artifacts in Git.\n\nWhy it's useful\n- Prevents agents from stepping on each other with explicit file reservations (leases) for files/globs.\n- Keeps communication out of your token budget by storing messages in a per-project archive.\n- Offers quick reads (`resource://inbox/...`, `resource://thread/...`) and macros that bundle common flows.\n\nHow to use effectively\n1) Same repository\n   - Register an identity: call `ensure_project`, then `register_agent` using this repo's absolute path as `project_key`.\n   - Reserve files before you edit: `file_reservation_paths(project_key, agent_name, [\"src/**\"], ttl_seconds=3600, exclusive=true)` to signal intent and avoid conflict.\n   - Communicate with threads: use `send_message(..., thread_id=\"FEAT-123\")`; check inbox with `fetch_inbox` and acknowledge with `acknowledge_message`.\n   - Read fast: `resource://inbox/{Agent}?project=<abs-path>&limit=20` or `resource://thread/{id}?project=<abs-path>&include_bodies=true`.\n   - Tip: set `AGENT_NAME` in your environment so the pre-commit guard can block commits that conflict with others' active exclusive file reservations.\n\n2) Across different repos in one project (e.g., Next.js frontend + FastAPI backend)\n   - Option A (single project bus): register both sides under the same `project_key` (shared key/path). Keep reservation patterns specific (e.g., `frontend/**` vs `backend/**`).\n   - Option B (separate projects): each repo has its own `project_key`; use `macro_contact_handshake` or `request_contact`/`respond_contact` to link agents, then message directly. Keep a shared `thread_id` (e.g., ticket key) across repos for clean summaries/audits.\n\nMacros vs granular tools\n- Prefer macros when you want speed or are on a smaller model: `macro_start_session`, `macro_prepare_thread`, `macro_file_reservation_cycle`, `macro_contact_handshake`.\n- Use granular tools when you need control: `register_agent`, `file_reservation_paths`, `send_message`, `fetch_inbox`, `acknowledge_message`.\n\nCommon pitfalls\n- \"from_agent not registered\": always `register_agent` in the correct `project_key` first.\n- \"FILE_RESERVATION_CONFLICT\": adjust patterns, wait for expiry, or use a non-exclusive reservation when appropriate.\n- Auth errors: if JWT+JWKS is enabled, include a bearer token with a `kid` that matches server JWKS; static bearer is used only when JWT is disabled.\" so i suppose we need a initialization check when launching /orchestrate too",
+      "classification": "changed_course",
+      "similarity": 0.12359762749827932,
+      "timestamp": "2026-03-21T14:10:29.780Z"
+    },
+    {
+      "turnId": "31c23f73",
+      "suggestedPrompt": "Yes, start with the detection bead.",
+      "actualUserPrompt": "learn from how this worked to improve how the orchestrate plugin will work",
+      "classification": "changed_course",
+      "similarity": 0.20372369131138696,
+      "timestamp": "2026-03-21T14:11:59.653Z"
+    },
+    {
+      "turnId": "6f8f23b5",
+      "suggestedPrompt": "Yes, start with the detection bead. Make sure to check what's already in the codebase before creating new files.",
+      "actualUserPrompt": "Yes, start with the detection bead. Make sure to check what's already in the codebase before creating new files.",
+      "classification": "accepted_exact",
+      "similarity": 1,
+      "timestamp": "2026-03-21T14:13:31.915Z"
+    }
+  ],
+  "turnsSinceLastStalenessCheck": 3
+}

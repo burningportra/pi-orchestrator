@@ -1,0 +1,163 @@
+{
+  "seedVersion": 3,
+  "generatedAt": "2026-03-21T14:07:06.659Z",
+  "sourceCommit": "37bc080b2b718c8cf5ea6d3d795835a9f9efde43",
+  "generatorVersion": "2026-03-11.2",
+  "seederPromptVersion": "2026-03-11.2",
+  "suggestionPromptVersion": "2026-03-11.1",
+  "configFingerprint": "sha256:1c8240f0803f32e5bd8896c2fabd508516dbefbc88d624d285ba5069a7cccf1a",
+  "projectIntentSummary": "pi-orchestrator is a multi-agent orchestration extension for the 'pi' coding agent platform. When a user types `/orchestrate` in any repository, it runs a complete automated workflow: scanning the codebase (preferring ccc semantic code search with graceful fallback to a built-in profiler), proposing 3-15 improvements ranked by impact, letting the user select a goal, creating a step-by-step plan (optionally via multi-model 'deep planning' where 3 different AI models compete and their plans are synthesized), executing steps in parallel using git worktrees when dependencies allow, reviewing results through multi-agent review passes, and saving learnings to compound memory for future runs. The project is based on the 'Agentic Coding Flywheel' methodology and integrates optionally with Sophia for structured change request tracking. It is designed as a pi extension (TypeScript, loaded via `pi -e ./src/index.ts`) and is currently at version 0.5.0.",
+  "objectivesSummary": "The primary objectives of pi-orchestrator are:\n\n1. **One-command orchestration**: Turn `/orchestrate` into a complete scan→plan→implement→review→ship workflow requiring minimal user intervention beyond approval gates.\n\n2. **Multi-model deep planning**: Allow 3 different AI models (e.g., Gemini, GPT, Claude) to compete on plan generation, then synthesize a 'best of all worlds' hybrid plan.\n\n3. **Parallel execution**: Detect independent plan steps via dependency analysis and execute them simultaneously in isolated git worktrees, with a SwarmTender monitoring agent health, detecting stuck agents, and flagging file conflicts.\n\n4. **Multi-agent review**: Provide 4 parallel review agents (fresh-eyes, polish, ergonomics, reality-check) at both per-step and post-implementation gates.\n\n5. **Compound memory**: Persist learnings (decisions, gotchas, patterns) across orchestration runs in `.pi-orchestrator/memory.md` so each session benefits from prior knowledge.\n\n6. **Sophia integration**: Optionally create formal Change Requests with task contracts, checkpoint tasks, and run validation/review through Sophia CLI.\n\n7. **Graceful degradation**: Every optional dependency (ccc, Sophia, multi-model subscriptions) degrades gracefully — the core workflow always works with a single model and the built-in profiler.",
+  "constraintsSummary": "Key constraints for the project:\n\n1. **Runtime environment**: Must run inside the pi coding agent platform as an extension; depends on `@mariozechner/pi-coding-agent`, `@mariozechner/pi-ai`, and `@mariozechner/pi-tui` APIs.\n\n2. **Prerequisites**: Requires Node.js ≥ 18 and git ≥ 2.20 (for worktree support). Multi-model features require a pi subscription with multiple model providers configured.\n\n3. **Graceful fallback everywhere**: ccc unavailable → built-in profiler; Sophia unavailable → no CR tracking; single model → standard planning instead of deep plan. Nothing should break when optional dependencies are missing.\n\n4. **Context window management**: Compound memory is truncated to last 10KB on read to protect the LLM context window. README excerpts are truncated at 2000 chars. Scan results prioritize live codebase data over historical signals.\n\n5. **Sophia contract requirements**: When Sophia is present, CRs must include `why`, `scope`, `non_goals`, `invariants`, `blast_radius`, `test_plan`, `rollback_plan`. Task contracts require `intent`, `acceptance_criteria`, `scope`.\n\n6. **Worktree isolation**: Parallel agents must work in isolated git worktrees, with auto-commit fallback for uncommitted changes and `--no-ff` merge-back strategy.\n\n7. **Review agents are read-only for planning**: Deep plan agents get read-only tools and cannot call `orch_*` tools.",
+  "principlesGuidelinesSummary": "The project follows several core principles derived from the Agentic Coding Flywheel methodology:\n\n1. **Flywheel-derived prompts**: Each agent role has purpose-built prompt templates — `synthesisInstructions` ('best of all worlds'), `adversarialReviewInstructions` ('fresh eyes, fix what you find'), `realityCheckInstructions` ('do we actually have the thing?'), `implementerInstructions` ('read, understand, be proactive' + self-review), `polishInstructions` ('de-slopify'), `commitStrategyInstructions` (logical commit grouping), `planToTasksInstructions` ('so detailed you never consult the plan').\n\n2. **Context priority order**: (1) Live codebase scan, (2) Repo profile details, (3) Recent commits/TODOs, (4) Compound memory — never let historical data override live analysis.\n\n3. **User gates at every transition**: Users approve/reject at plan approval, pre-implementation polish, per-step review, and post-implementation gates. The system never auto-ships without user consent.\n\n4. **Scan contract abstraction**: Repository scanning uses a dedicated contract (`ScanProvider` interface, `scanRepo()` entrypoint) so providers can be added/swapped without breaking the workflow.\n\n5. **Dependency-aware parallelism**: Steps declare `dependsOn` with explicit cycle detection and self-ref filtering. The planner self-checks: 'if your description says after/once/then, you probably need dependsOn.'\n\n6. **Sophia trust model**: Advisory mode with risk tiers, configurable thresholds, and optional gating. Merge requires non-author approval and passing checks.\n\n7. **Compound learning**: Every completed run extracts and persists learnings for future sessions — the system gets smarter over time within a repo.",
+  "implementationStatusSummary": "The project is at v0.5.0 with a working implementation. The core orchestrator state machine lives in `src/index.ts` with supporting modules for scanning (`scan.ts`), profiling (`profiler.ts`), prompts (`prompts.ts`), Sophia integration (`sophia.ts`), worktree management (`worktree.ts`), swarm monitoring (`tender.ts`), compound memory (`memory.ts`), deep planning (`deep-plan.ts`), goal refinement (`goal-refinement.ts`), and shared types (`types.ts`). The ccc scan integration is implemented with fallback to the built-in profiler. The current `plan.txt` shows two pending tasks: adding commit instructions to review agent prompts and implementing autoCommitWorktree fallback for review rounds. The project uses TypeScript with vitest for testing.",
+  "topObjectives": [
+    "Provide a one-command `/orchestrate` workflow that scans, plans, implements, reviews, and ships code changes",
+    "Enable multi-model deep planning with competing plans and synthesis",
+    "Execute independent plan steps in parallel via git worktrees with SwarmTender monitoring",
+    "Run multi-agent review passes (fresh-eyes, polish, ergonomics, reality-check) at per-step and post-implementation gates",
+    "Persist compound memory across runs so each session learns from prior orchestrations",
+    "Integrate optionally with Sophia for formal change request tracking and validation",
+    "Degrade gracefully when optional dependencies (ccc, Sophia, multi-model) are unavailable"
+  ],
+  "constraints": [
+    "Must run as a pi coding agent extension using @mariozechner/pi-* APIs",
+    "Requires Node.js >= 18 and git >= 2.20 for worktree support",
+    "Compound memory truncated to 10KB to protect LLM context window",
+    "Deep plan agents get read-only tools and cannot call orch_* tools",
+    "Worktree parallel execution must fall back to sequential if worktree creation fails",
+    "Sophia CRs only created after user explicitly chooses 'Start implementing' to avoid orphaned artifacts",
+    "Context priority: live scan > repo profile > commits/TODOs > compound memory"
+  ],
+  "keyFiles": [
+    {
+      "path": "README.md",
+      "hash": "sha256:86c0f099b7670378ca2b658f8f76e4bffc1558a4efd3a4c14e460f012c0d693a",
+      "whyImportant": "Project overview, feature summary, installation instructions, and command reference",
+      "category": "vision"
+    },
+    {
+      "path": "docs/architecture.md",
+      "hash": "sha256:e7803398940b27cbb17376ce0f238ca0671adb88a331282255d52a67e98e61f3",
+      "whyImportant": "Comprehensive architecture documentation covering all phases, scan contract, parallel execution, review gates, compound memory, and Sophia integration",
+      "category": "architecture"
+    },
+    {
+      "path": "docs/setup.md",
+      "hash": "sha256:c394d2c1236c5cf303b27421e29da8bf8ebf1320c6c5c21b5dc73e8f3b6f0359",
+      "whyImportant": "Setup guide covering prerequisites, ccc scanning, multi-model subscriptions, Sophia integration, and configuration options",
+      "category": "architecture"
+    },
+    {
+      "path": "SOPHIA.yaml",
+      "hash": "sha256:f847532585126e0e11f5f899b48a9b3ad6bdca135a1eb4fb3d65432dd21621f0",
+      "whyImportant": "Sophia configuration defining contract requirements, merge policies, trust model, and classification rules",
+      "category": "principles_guidelines"
+    },
+    {
+      "path": "src/index.ts",
+      "hash": "sha256:2027030240b350971a2e6a471ecd3a54fbfdb3f99f90f609109dcb35282a31c8",
+      "whyImportant": "Main extension runtime containing the orchestrator state machine, commands, tools, and all phase logic",
+      "category": "code_entrypoint"
+    },
+    {
+      "path": "src/prompts.ts",
+      "hash": "sha256:6b236389401d44a751583345116a5f4255432c56d3171df4973d8af0f70edab2",
+      "whyImportant": "Flywheel-derived prompt templates encoding the project's agent behavior principles",
+      "category": "principles_guidelines"
+    },
+    {
+      "path": "src/types.ts",
+      "hash": "sha256:000961db91a317d7503effc049830e88eb9225e312718f35507d96adea8ed444",
+      "whyImportant": "Shared TypeScript types for scan results, state, plans, reviews defining the data model",
+      "category": "architecture"
+    },
+    {
+      "path": "src/scan.ts",
+      "hash": "sha256:971d9a66e4932f54a3701785b648d25678acc1f1afd80fce8af6746ec98a63e7",
+      "whyImportant": "Scan contract and provider entrypoint — the abstraction layer for codebase scanning",
+      "category": "architecture"
+    },
+    {
+      "path": "src/sophia.ts",
+      "hash": "sha256:8c0569f54a34e6b3513daa677daeacf168f4ceda81c621e76109bd1b0b1b324b",
+      "whyImportant": "Sophia CLI wrapper, dependency analysis, and worktree merge logic",
+      "category": "architecture"
+    },
+    {
+      "path": "src/worktree.ts",
+      "hash": "sha256:a9e00dc14ad7ff4663edae6e0fc1253fddcb6f81835593c8f86be5617e3f6975",
+      "whyImportant": "WorktreePool implementation for parallel git worktree management",
+      "category": "architecture"
+    },
+    {
+      "path": "src/tender.ts",
+      "hash": "sha256:66344fb9a922c78eb59e71406259726d6a0102468f00826c8d513d50beb0f77d",
+      "whyImportant": "SwarmTender agent health monitoring and conflict detection",
+      "category": "architecture"
+    },
+    {
+      "path": "src/memory.ts",
+      "hash": "sha256:74a67deb81f12fe990d9b120b161fb37dfcbe7fe1af99fc15d3f1f39b94add3d",
+      "whyImportant": "Compound memory read/write for cross-session learning persistence",
+      "category": "architecture"
+    },
+    {
+      "path": "package.json",
+      "hash": "sha256:9cc03116ab95a72cbcae0a63b9e1d5a947f102ce4048b97c4b3b5cab37385a9e",
+      "whyImportant": "Project metadata, dependencies, scripts, and pi extension configuration",
+      "category": "other"
+    },
+    {
+      "path": "plan.txt",
+      "hash": "sha256:b13df1dcaf59e1e9d2a3689f907c0e42dbc197c9beee213117297f5c5057ee13",
+      "whyImportant": "Current pending tasks for the project (review agent commit instructions and autoCommit fallback)",
+      "category": "other"
+    }
+  ],
+  "categoryFindings": {
+    "vision": {
+      "found": true,
+      "rationale": "README.md provides a clear project vision: a one-command orchestration system for AI-assisted code improvement with multi-model planning, parallel execution, multi-agent review, and compound memory. docs/architecture.md expands on this with the Agentic Coding Flywheel methodology and the full workflow diagram.",
+      "files": [
+        "README.md",
+        "docs/architecture.md"
+      ]
+    },
+    "architecture": {
+      "found": true,
+      "rationale": "docs/architecture.md is a comprehensive architecture document covering all phases (discovery, planning, implementation, review, completion), the scan contract abstraction, context priority order, parallel execution with worktrees, SwarmTender monitoring, Sophia integration, and the project structure. docs/setup.md provides configuration architecture. The source files in src/ implement the documented architecture.",
+      "files": [
+        "docs/architecture.md",
+        "docs/setup.md",
+        "src/types.ts",
+        "src/scan.ts",
+        "src/sophia.ts",
+        "src/worktree.ts",
+        "src/tender.ts",
+        "src/memory.ts",
+        "src/deep-plan.ts"
+      ]
+    },
+    "principles_guidelines": {
+      "found": true,
+      "rationale": "Principles are embedded across multiple sources: (1) docs/architecture.md defines the context priority order, flywheel-derived prompt patterns, and dependency analysis conventions; (2) src/prompts.ts encodes agent behavior principles via purpose-built prompt templates; (3) SOPHIA.yaml defines contract requirements, merge policies, and trust model; (4) The scan contract in docs/architecture.md establishes the provider abstraction principle. No standalone CONTRIBUTING.md or coding style guide exists, but the project's conventions are well-documented in the architecture docs.",
+      "files": [
+        "docs/architecture.md",
+        "src/prompts.ts",
+        "SOPHIA.yaml"
+      ]
+    }
+  },
+  "openQuestions": [
+    "Are there any tests currently written? The package.json references vitest but no test files were explored.",
+    "What is the .cocoindex_code directory — is it generated by ccc or manually maintained?",
+    "What is the current state of the .pi and .pi-orchestrator directories — do they contain active configuration or memory?",
+    "The .github directory likely contains CI/CD workflows — what CI checks are configured?",
+    "How does goal-refinement.ts (imported in index.ts) work and what constraints does it extract?",
+    "What is the .firecrawl directory for?"
+  ],
+  "reseedNotes": "This is a well-documented project with comprehensive architecture docs. The main orchestrator logic is entirely in src/index.ts (likely a large file). Future reseeds should explore: (1) test files if they exist, (2) .github for CI config, (3) the full src/index.ts for state machine details, (4) src/goal-refinement.ts which was imported but not explored. The plan.txt shows active development work on review agent improvements.",
+  "lastReseedReason": "initial_missing",
+  "lastChangedFiles": []
+}

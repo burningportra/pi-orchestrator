@@ -1,0 +1,20 @@
+{
+  "stateVersion": 8,
+  "lastSuggestion": {
+    "text": "Great. Now let's commit this and move on to the next step.",
+    "shownAt": "2026-03-21T13:58:40.992Z",
+    "turnId": "b34257bc",
+    "sourceLeafId": "b34257bc"
+  },
+  "steeringHistory": [
+    {
+      "turnId": "f54dc400",
+      "suggestedPrompt": "Run the tests to make sure everything passes.",
+      "actualUserPrompt": "Run the tests to make sure everything passes.",
+      "classification": "accepted_exact",
+      "similarity": 1,
+      "timestamp": "2026-03-21T13:58:32.588Z"
+    }
+  ],
+  "turnsSinceLastStalenessCheck": 2
+}

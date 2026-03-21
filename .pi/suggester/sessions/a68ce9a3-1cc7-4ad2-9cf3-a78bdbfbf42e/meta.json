@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "sessionId": "a68ce9a3-1cc7-4ad2-9cf3-a78bdbfbf42e",
+  "sessionFile": "/Users/kevtrinh/.pi/agent/sessions/--Users-kevtrinh-Code-pi-orchestrator--/2026-03-21T13-33-16-356Z_a68ce9a3-1cc7-4ad2-9cf3-a78bdbfbf42e.jsonl",
+  "cwd": "/Users/kevtrinh/Code/pi-orchestrator",
+  "ignoreLegacyPiSessionEntries": true,
+  "legacyMigration": {
+    "performedAt": "2026-03-21T13:48:31.008Z",
+    "importedLegacyEntries": false,
+    "legacyStateEntryCount": 0,
+    "legacyUsageEntryCount": 0,
+    "note": "Legacy suggester-state/suggester-usage pi session entries were imported once into extension-owned storage and are ignored afterwards."
+  }
+}

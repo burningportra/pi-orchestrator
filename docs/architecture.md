@@ -89,12 +89,17 @@ When scan data is rendered into prompts and tool output, the orchestrator now tr
 
 ### 1. Discovery
 
-The workflow begins with `orch_profile`, which scans the repository and loads compound memory from prior runs. Discovery supports two modes:
+The workflow begins with `orch_profile`, which scans the repository and loads compound memory from prior runs. Discovery supports three modes:
 
-- **📋 Standard** — straightforward repo analysis
-- **🚀 Creative** — the LLM thinks of 100 ideas internally and surfaces the 7 best
+- **📋 Standard** — straightforward repo analysis, 3-7 practical ideas
+- **🧠 Idea Wizard** — structured ideation with rubric ranking. The LLM generates 25-30 candidates internally, scores each against 5 axes (useful, pragmatic, accretive, robust, ergonomic), winnows and merges overlaps, then returns 10-15 tiered ideas (5 top + 5-10 honorable mentions) with rationale and source evidence
+- **🚀 Creative** — the LLM thinks of 100 ideas internally, applies the same rubric, and surfaces the 7 best with rationale
 
-`orch_discover` then generates 3–7 improvement ideas (minimum 3 enforced). `orch_select` presents these to the user and captures the selected goal plus any constraints. The actual planning-mode choice happens inside `orch_plan`, where the user can keep the standard plan, request deep planning, or reject it.
+Each idea includes a `rationale` (why it beat other candidates, citing repo evidence), a `tier` (top vs honorable), and optional `scores`, `sourceEvidence`, `risks`, and `synergies`. In Idea Wizard and Creative modes, scores are required.
+
+`orch_discover` generates 3–15 ideas (minimum 3 enforced). `orch_select` presents these grouped by tier (top picks first, then honorable mentions), with rationale shown as a subtitle. The user selects an idea or enters a custom goal. The actual planning-mode choice happens inside `orch_plan`, where the user can keep the standard plan, request deep planning, or reject it.
+
+Full ideation results are persisted as a session artifact (`discovery/ideas-<timestamp>.md`) for later reference or follow-up orchestration runs.
 
 ### 2. Planning
 

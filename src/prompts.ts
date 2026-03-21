@@ -67,9 +67,39 @@ export function formatRepoProfile(profile: RepoProfile, scanResult?: ScanResult)
 }
 
 // ─── System Prompt for Orchestrator Mode ────────────────────
-export function orchestratorSystemPrompt(hasSophia: boolean): string {
-  const sophiaSection = hasSophia
-    ? `
+export function orchestratorSystemPrompt(
+  hasSophia: boolean,
+  coordBackend?: import("./coordination.js").CoordinationBackend
+): string {
+  // Build coordination section based on detected backends
+  let coordinationSection = "";
+
+  const useBeadsAgentMail = coordBackend?.beads && coordBackend?.agentMail;
+
+  if (useBeadsAgentMail) {
+    coordinationSection = `
+## Coordination: Beads + Agent Mail
+The orchestrator uses **beads** for task lifecycle and **agent-mail** for inter-agent messaging and file reservations.
+
+### Beads (task tracking)
+- Plan steps are converted to beads via \`br create\` with dependency edges via \`br dep add\`
+- Bead status tracks implementation: open → in_progress → closed
+- \`br sync --flush-only\` persists state to .beads/ (git-visible JSONL)
+- Use \`br ready\` to see actionable (unblocked) tasks
+
+### Agent Mail (coordination)
+- Each parallel agent bootstraps with \`macro_start_session\` using this repo's absolute path as \`project_key\`
+- File reservations prevent conflicts: \`file_reservation_paths(project_key, agent_name, paths, ttl_seconds=3600, exclusive=true)\`
+- Thread ID = bead ID — all progress updates, review findings, and handoffs are scoped to the task
+- Check inbox with \`fetch_inbox\` before advancing; urgent messages may require attention
+- Release reservations when done: \`release_file_reservations(project_key, agent_name)\`
+
+### Parallel Execution
+When plan steps have disjoint artifacts and agent-mail is available, agents work in the **same directory** with file reservations (no worktrees needed).
+When artifacts overlap, fall back to git worktree isolation.
+${hasSophia ? "\nSophia is also available as a secondary backend for CR/task management." : ""}`;
+  } else if (hasSophia) {
+    coordinationSection = `
 ## Sophia Integration
 The orchestrator uses Sophia for change request and task management. When \`orch_plan\` is approved:
 - A Sophia CR is created automatically with tasks matching plan steps
@@ -86,8 +116,8 @@ When the plan has independent steps (no shared artifacts), use \`parallel_subage
 5. Worktrees are cleaned up after merge
 
 The plan result shows which step groups can run in parallel and provides worktree paths.
-If worktree creation fails, the orchestrator falls back to sequential execution in the shared directory.`
-    : "";
+If worktree creation fails, the orchestrator falls back to sequential execution in the shared directory.`;
+  }
 
   return `You are operating as a repo-aware multi-agent orchestrator. You have access to specialized orchestrator tools that drive a structured workflow.
 
@@ -98,7 +128,7 @@ If worktree creation fails, the orchestrator falls back to sequential execution 
 4. Call \`orch_plan\` to create a step-by-step plan for the selected goal
 5. For each plan step, implement using code tools (read, write, edit, bash), then call \`orch_review\`
 6. After all steps pass review, the orchestrator runs post-completion checks and offers follow-up actions
-${sophiaSection}
+${coordinationSection}
 
 ## Multi-Pass Review
 Each step goes through multiple review passes:
@@ -130,10 +160,85 @@ After all steps and reviews pass, the orchestrator offers:
 }
 
 // ─── Discovery Prompt ────────────────────────────────────────
-export function discoveryInstructions(profile: RepoProfile, scanResult?: ScanResult): string {
+export function discoveryInstructions(profile: RepoProfile, scanResult?: ScanResult, mode?: "standard" | "wizard" | "creative"): string {
+  const repoContext = formatRepoProfile(profile, scanResult);
+
+  if (mode === "wizard") {
+    return `Analyze this repository and generate your best improvement ideas using structured ideation.
+
+${repoContext}
+
+## Process (do this internally before outputting)
+1. **Ground yourself** — study the repo profile, scan findings, TODOs, commits, and any memory context carefully
+2. **Generate broadly** — come up with at least 25–30 candidate ideas (do NOT output these)
+3. **Score each candidate** against these 5 axes (1-5 scale):
+   - **Useful** (2× weight) — does it solve a real, frequent pain?
+   - **Pragmatic** (2× weight) — is it realistic to build in hours/days?
+   - **Accretive** (1.5× weight) — does it clearly add value beyond what exists?
+   - **Robust** (1× weight) — will it handle edge cases and work reliably?
+   - **Ergonomic** (1× weight) — does it reduce friction or cognitive load?
+4. **Cut** — remove anything scoring <3 average, anything duplicative, anything already addressed
+5. **Rank** — sort by weighted score
+6. **Merge overlaps** — if two ideas are variants of the same thing, combine into one stronger idea
+7. **Balance** — ensure at least 2 different categories in the top 5
+8. **Tier** — label your best 5 as tier "top", next 5-10 as tier "honorable"
+
+## Output requirements
+For each surviving idea, provide:
+- **id**: unique kebab-case identifier
+- **title**: short descriptive title
+- **description**: 2-3 sentences explaining what to do and why
+- **category**: feature | refactor | docs | dx | performance | reliability | security | testing
+- **effort**: low | medium | high
+- **impact**: low | medium | high
+- **rationale**: 2-3 sentences explaining why this beat other candidates. Cite specific repo evidence. Do NOT write generic rationale like "this would improve the project" — explain what specific signals support this and what alternatives you considered.
+- **tier**: "top" or "honorable"
+- **sourceEvidence**: array of strings — what repo signals prompted this (e.g. "TODO in src/scan.ts:45", "ccc finding: no error recovery", "recent commits all touch prompts.ts")
+- **scores**: { useful, pragmatic, accretive, robust, ergonomic } — your 1-5 ratings
+- **risks**: (optional) known downsides
+- **synergies**: (optional) ids of complementary ideas
+
+Return 10-15 ideas total (5 top + 5-10 honorable).`;
+  }
+
+  if (mode === "creative") {
+    return `Analyze this repository and generate your most brilliant, innovative improvement ideas.
+
+${repoContext}
+
+## Process (do this internally before outputting)
+1. **Ground yourself** — study the repo profile, scan findings, TODOs, commits carefully
+2. **Think of ONE HUNDRED ideas** — be radically creative, but stay pragmatic
+3. **Score each candidate** against these 5 axes (1-5 scale):
+   - **Useful** (2× weight) — does it solve a real, frequent pain?
+   - **Pragmatic** (2× weight) — is it realistic to build in hours/days?
+   - **Accretive** (1.5× weight) — does it clearly add value beyond what exists?
+   - **Robust** (1× weight) — will it handle edge cases and work reliably?
+   - **Ergonomic** (1× weight) — does it reduce friction or cognitive load?
+4. **Cut ruthlessly** — remove anything scoring <3 average, anything duplicative, anything boring
+5. **Merge overlaps** — combine variant ideas into stronger unified ones
+6. **Pick your 7 VERY BEST** — the most brilliant, clever, and radically innovative ideas that are still pragmatic
+
+## Output requirements
+For each idea, provide:
+- **id**: unique kebab-case identifier
+- **title**: short descriptive title
+- **description**: 2-3 sentences explaining what to do and why
+- **category**: feature | refactor | docs | dx | performance | reliability | security | testing
+- **effort**: low | medium | high
+- **impact**: low | medium | high
+- **rationale**: 2-3 sentences explaining why this is brilliant and what repo evidence supports it
+- **tier**: "top" for all 7
+- **sourceEvidence**: array of strings — what repo signals prompted this
+- **scores**: { useful, pragmatic, accretive, robust, ergonomic } — your 1-5 ratings
+- **risks**: (optional) known downsides
+- **synergies**: (optional) ids of complementary ideas`;
+  }
+
+  // Standard mode — lightweight, backward-compatible
   return `Analyze this repository profile and suggest 3–7 high-leverage, concrete project ideas.
 
-${formatRepoProfile(profile, scanResult)}
+${repoContext}
 
 ## Guidelines
 - Treat live codebase scan findings as the primary signal.
@@ -150,7 +255,9 @@ For each idea, provide:
 - **description**: 2-3 sentences explaining what to do and why
 - **category**: feature | refactor | docs | dx | performance | reliability | security | testing
 - **effort**: low | medium | high
-- **impact**: low | medium | high`;
+- **impact**: low | medium | high
+- **rationale**: a brief sentence on why this idea is worth pursuing given the repo state
+- **tier**: "top" for all ideas`;
 }
 
 // ─── Planner Instructions ────────────────────────────────────
