@@ -192,10 +192,8 @@ export default function (pi: ExtensionAPI) {
    * Generates an agent-mail bootstrap preamble for a parallel sub-agent's task.
    * Uses curl commands against the JSON-RPC HTTP endpoint (pi has no MCP).
    *
-   * The agent must:
-   * 1. Call macro_start_session to register and get its auto-assigned name
-   * 2. Parse the name from the response
-   * 3. Use that name for all subsequent calls (reservations, messages)
+   * macro_start_session handles registration + file reservations in one call.
+   * The agent parses its auto-assigned name from the response for subsequent calls.
    */
   function agentMailTaskPreamble(
     cwd: string,
@@ -209,36 +207,36 @@ export default function (pi: ExtensionAPI) {
     const startSessionCmd = amRpcCmd("macro_start_session", {
       human_key: cwd, program: "pi-subagent", model: "auto",
       task_description: safeDesc,
+      file_reservation_paths: artifacts,
+      inbox_limit: 5,
     });
 
     return `## Agent Mail Coordination
-You are coordinating with other parallel agents via agent-mail (HTTP JSON-RPC at ${AGENT_MAIL_URL}/api).
+You are coordinating with other parallel agents via agent-mail (HTTP at ${AGENT_MAIL_URL}).
+Run these bash commands. **This is required, not optional.**
 
-**Step 1 — Bootstrap session (run FIRST, before any work):**
+**1. Bootstrap session + reserve files (run FIRST, before any work):**
 \`\`\`bash
 ${startSessionCmd}
 \`\`\`
-Parse the JSON response to get your assigned agent name from \`result.structuredContent.agent.name\` (e.g. "VioletLantern"). Save it — you need it for ALL subsequent calls.
-
-**Step 2 — Reserve your files** (replace YOUR_AGENT_NAME with the name from step 1):
+This registers you, reserves your files, and fetches your inbox in one call.
+Parse the JSON response: your agent name is at \`result.structuredContent.agent.name\` (e.g. "VioletLantern").
+Save it in a variable — you need it for the remaining calls. Example:
 \`\`\`bash
-${amRpcCmd("file_reservation_paths", {
-      project_key: cwd, agent_name: "YOUR_AGENT_NAME",
-      paths: artifacts, ttl_seconds: 3600, exclusive: true, reason: threadId,
-    })}
+export MY_AGENT_NAME="<name from response>"
 \`\`\`
 
-**Step 3 — Announce start** (replace YOUR_AGENT_NAME):
+**2. Announce start** (use your actual agent name):
 \`\`\`bash
 ${amRpcCmd("send_message", {
       project_key: cwd, sender_name: "YOUR_AGENT_NAME", to: ["all"],
       subject: `[${threadId}] Starting: ${safeDesc.slice(0, 60)}`,
-      body_md: `Working on: ${safeDesc}`,
+      body_md: `Working on: ${safeDesc}\\nFiles: ${artifacts.join(", ")}`,
       thread_id: threadId,
     })}
 \`\`\`
 
-**Step 4 — When done, send summary** (replace YOUR_AGENT_NAME and summary):
+**3. When DONE — send summary + release** (replace YOUR_AGENT_NAME and YOUR_SUMMARY):
 \`\`\`bash
 ${amRpcCmd("send_message", {
       project_key: cwd, sender_name: "YOUR_AGENT_NAME", to: ["all"],
@@ -246,10 +244,6 @@ ${amRpcCmd("send_message", {
       body_md: "YOUR_SUMMARY_HERE",
       thread_id: threadId,
     })}
-\`\`\`
-
-**Step 5 — Release reservations** (replace YOUR_AGENT_NAME):
-\`\`\`bash
 ${amRpcCmd("release_file_reservations", {
       project_key: cwd, agent_name: "YOUR_AGENT_NAME",
     })}
