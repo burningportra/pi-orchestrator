@@ -190,7 +190,12 @@ export default function (pi: ExtensionAPI) {
       lines.push(
         `🎯 Goal: ${state.selectedGoal.length > 60 ? state.selectedGoal.slice(0, 57) + "..." : state.selectedGoal}`
       );
-    if (state.plan) {
+    if (state.activeBeadIds && state.activeBeadIds.length > 0) {
+      const done = Object.values(state.beadResults ?? {}).filter(r => r.status === "success").length;
+      const total = state.activeBeadIds.length;
+      lines.push(`📊 Progress: ${done}/${total} beads done`);
+    } else if (state.plan) {
+      // Legacy fallback
       const done = state.stepResults.length;
       const total = state.plan.steps.length;
       const passed = state.reviewVerdicts.filter((r) => r.passed).length;
@@ -292,6 +297,15 @@ export default function (pi: ExtensionAPI) {
               ),
             };
           }
+        }
+
+        // Restore bead tracking — beads survive on disk in .beads/
+        if (state.activeBeadIds && state.activeBeadIds.length > 0) {
+          const done = Object.values(state.beadResults ?? {}).filter(r => r.status === "success").length;
+          ctx.ui.notify(
+            `Restored bead orchestration: ${done}/${state.activeBeadIds.length} beads complete. Run /orchestrate-status for details.`,
+            "info"
+          );
         }
       }
     }
