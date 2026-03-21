@@ -21,7 +21,7 @@ import {
   orchestratorSystemPrompt,
   formatRepoProfile,
   discoveryInstructions,
-  plannerInstructions,
+  beadCreationPrompt,
   implementerInstructions,
   reviewerInstructions,
   adversarialReviewInstructions,
@@ -358,7 +358,7 @@ export default function (pi: ExtensionAPI) {
       if (goalArg) {
         // Skip discovery, go straight with user's goal
         pi.sendUserMessage(
-          `Start the orchestrator workflow for this repo. I want to: ${goalArg}\n\nBegin by calling \`orch_profile\` to scan the repo, then skip discovery and go straight to \`orch_plan\` with my stated goal.`,
+          `Start the orchestrator workflow for this repo. I want to: ${goalArg}\n\nBegin by calling \`orch_profile\` to scan the repo, then skip discovery and go straight to creating beads with my stated goal.`,
           { deliverAs: "followUp" }
         );
       } else {
@@ -618,18 +618,16 @@ export default function (pi: ExtensionAPI) {
         state.selectedGoal = goal;
         state.candidateIdeas = [];
         state.constraints = constraints;
-        setPhase("planning", ctx);
+        setPhase("creating_beads", ctx);
         persistState();
 
-        // Generate standard plan first — user can upgrade to deep plan
-        // in orch_plan after seeing it
-        const instructions = plannerInstructions(goal, profile, constraints, scanResult);
+        const instructions = beadCreationPrompt(goal, formatted, constraints);
 
         return {
           content: [
             {
               type: "text",
-              text: `**NEXT: Call \`orch_plan\` with a structured plan NOW.**\n\nGoal: "${goal}"\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}\n\n${formatted}${memoryContext}\n\n${instructions}`,
+              text: `**NEXT: Create beads for this goal using \`br create\` and \`br dep add\` in bash NOW.**\n\nGoal: "${goal}"\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}\n\n${formatted}${memoryContext}\n\n${instructions}`,
             },
           ],
           details: { profile, scanResult, customGoal: goal },
@@ -987,20 +985,16 @@ export default function (pi: ExtensionAPI) {
       }
       persistState();
 
-      // Generate a standard plan first — user can upgrade to deep plan
-      // in orch_plan after seeing it
-      const instructions = plannerInstructions(
-        goal,
-        state.repoProfile!,
-        state.constraints,
-        state.scanResult
-      );
+      const repoContext = state.repoProfile ? formatRepoProfile(state.repoProfile) : "";
+      const instructions = beadCreationPrompt(goal, repoContext, state.constraints);
+
+      setPhase("creating_beads", ctx);
 
       return {
         content: [
           {
             type: "text",
-            text: `**NEXT: Call \`orch_plan\` with a structured plan NOW.**\n\nGoal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n\n${instructions}`,
+            text: `**NEXT: Create beads for this goal using \`br create\` and \`br dep add\` in bash NOW.**\n\nGoal: "${goal}"${state.constraints.length > 0 ? `\nConstraints: ${state.constraints.join(", ")}` : ""}\n\n---\n\n${instructions}`,
           },
         ],
         details: { selected: true, goal, constraints: state.constraints },
