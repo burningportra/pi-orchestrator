@@ -1237,32 +1237,32 @@ Before starting work, bootstrap your agent-mail session:
       setPhase("awaiting_plan_approval", ctx);
       persistState();
 
-      // Polish tasks in plan space BEFORE creating sophia tasks
+      // Polish beads in plan space BEFORE creating beads/sophia tasks
       // This way, if the user sends back for revision and the LLM calls
-      // orch_plan again, we haven't created orphaned CRs/tasks yet.
+      // orch_plan again, we haven't created orphaned beads/CRs yet.
       let polishing = true;
       while (polishing) {
-        const taskList = plan.steps
-          .map((s) => `**Step ${s.index}: ${s.description}**\n   ✓ ${s.acceptanceCriteria.join("\n   ✓ ")}\n   📄 ${s.artifacts.join(", ")}${s.dependsOn !== undefined ? (s.dependsOn.length === 0 ? "\n   ⚡ independent" : `\n   🔗 depends on: ${s.dependsOn.join(", ")}`) : ""}`)
+        const beadList = plan.steps
+          .map((s) => `**Bead ${s.index}: ${s.description}**\n   ✓ ${s.acceptanceCriteria.join("\n   ✓ ")}\n   📄 ${s.artifacts.join(", ")}${s.dependsOn !== undefined ? (s.dependsOn.length === 0 ? "\n   ⚡ independent" : `\n   🔗 depends on: ${s.dependsOn.join(", ")}`) : ""}`)
           .join("\n\n");
 
         const polishChoice = await ctx.ui.select(
-          `${plan.steps.length} tasks ready.\n\n${taskList}`,
+          `${plan.steps.length} beads ready.\n\n${beadList}`,
           [
             "▶️  Start implementing",
-            "🔍 Polish — send tasks back for LLM review",
+            "🔍 Polish — send beads back for LLM review",
             "❌ Reject plan",
           ]
         );
 
         if (polishChoice?.startsWith("🔍")) {
           // Return to LLM for revision — it will call orch_plan again
-          // No sophia CR created yet, so no orphans
+          // No beads/sophia CR created yet, so no orphans
           return {
             content: [
               {
                 type: "text",
-                text: `**NEXT: Review the tasks below, revise them, and call \`orch_plan\` again with updated steps NOW.**\n\n## 🔍 Task Polishing\n\n${taskList}\n\n---\n\nCheck over each task super carefully — are you sure it makes sense? Is it optimal? Could we change anything to make the system work better for users? If so, revise the task. It's a lot easier and faster to operate in "plan space" before we start implementing these things! Use /effort max.`,
+                text: `**NEXT: Review the beads below, revise them, and call \`orch_plan\` again with updated steps NOW.**\n\n## 🔍 Bead Polishing\n\n${beadList}\n\n---\n\nCheck over each bead super carefully — are you sure it makes sense? Is it optimal? Could we change anything to make the system work better for users? If so, revise the bead. It's a lot easier and faster to operate in "plan space" before we start implementing these things! Use /effort max.`,
               },
             ],
             details: { approved: true, plan, polishing: true },
