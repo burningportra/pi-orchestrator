@@ -158,7 +158,8 @@ Before starting work, bootstrap your agent-mail session:
 1. Call \`macro_start_session(human_key="${cwd}", program="claude-code", model="your-model", task_description="${stepDesc.replace(/"/g, '\\"')}")\`
 2. Reserve your files: \`file_reservation_paths(project_key="${cwd}", agent_name="${agentName}", paths=${artifactsJson}, ttl_seconds=3600, exclusive=true)\`
 3. Announce in thread: \`send_message(project_key="${cwd}", sender_name="${agentName}", to="all", subject="[${threadId}] Starting...", body_md="Working on: ${stepDesc.replace(/"/g, '\\"')}", thread_id="${threadId}")\`
-4. When done: \`release_file_reservations(project_key="${cwd}", agent_name="${agentName}")\`
+4. When done, send a summary message to the thread with your findings: \`send_message(project_key="${cwd}", sender_name="${agentName}", to="all", subject="[${threadId}] Done", body_md="<your findings summary>", thread_id="${threadId}")\`
+5. Then: \`release_file_reservations(project_key="${cwd}", agent_name="${agentName}")\`
 
 `;
   }
@@ -1483,6 +1484,15 @@ Before starting work, bootstrap your agent-mail session:
       { emoji: "📦", label: "Commit", desc: "logical groupings with detailed messages" },
       { emoji: "🚀", label: "Ship it", desc: "commit, tag, release, deploy, monitor CI" },
     ];
+
+    // Agent-mail threading: if agentMail is active, sub-agents (peer review / hit-me) bootstrap
+    // their own sessions via agentMailTaskPreamble() injected into their tasks.
+    // The orchestrator itself doesn't have an agent-mail identity — it's the spawner,
+    // not a participant. Sub-agents handle their own inbox checking via macro_start_session.
+    // Thread IDs are gate-scoped (e.g. "peer-review-r1", "hit-me-r1").
+    if (st.coordinationBackend?.agentMail) {
+      // Agent-mail threading is active — sub-agents will coordinate via thread messages
+    }
 
     let chosen: string | undefined;
     const startGate = st.currentGateIndex ?? 0;
