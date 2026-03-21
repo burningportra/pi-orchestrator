@@ -129,6 +129,35 @@ export interface TodoItem {
   type: "TODO" | "FIXME" | "HACK" | "XXX";
 }
 
+// ─── Beads (br CLI types) ────────────────────────────────────
+
+/** Mirrors br list --json output for a single bead/issue. */
+export interface Bead {
+  id: string;
+  title: string;
+  description: string;
+  status: "open" | "in_progress" | "closed" | "deferred";
+  priority: number; // 0-4
+  type: string;     // "task" | "feature" | "bug" etc.
+  labels: string[];
+  estimate?: number; // minutes
+  /** Parent bead ID (from --parent flag). */
+  parent?: string;
+}
+
+export interface BeadResult {
+  beadId: string;
+  status: "success" | "partial" | "blocked";
+  summary: string;
+}
+
+export interface BeadReview {
+  beadId: string;
+  passed: boolean;
+  feedback: string;
+  revisionInstructions?: string;
+}
+
 // ─── Discovery ───────────────────────────────────────────────
 export interface IdeaScores {
   useful: number;     // 1-5: solves a real, frequent pain
@@ -213,6 +242,9 @@ export type OrchestratorPhase =
   | "awaiting_selection"
   | "planning"
   | "awaiting_plan_approval"
+  | "creating_beads"
+  | "refining_beads"
+  | "awaiting_bead_approval"
   | "implementing"
   | "reviewing"
   | "iterating"
@@ -261,6 +293,22 @@ export interface OrchestratorState {
   beadIds?: Record<number, string>;
   /** Whether agent-mail session was bootstrapped for this orchestration */
   agentMailSessionActive?: boolean;
+
+  // ─── Bead-centric state (new) ──────────────────────────────
+  /** Bead IDs created for this orchestration (ordered). */
+  activeBeadIds?: string[];
+  /** Results keyed by bead ID. */
+  beadResults?: Record<string, import("./types.js").BeadResult>;
+  /** Review verdicts keyed by bead ID. */
+  beadReviews?: Record<string, import("./types.js").BeadReview[]>;
+  /** Currently executing bead ID. */
+  currentBeadId?: string | null;
+  /** Hit-me triggered per bead ID. */
+  beadHitMeTriggered?: Record<string, boolean>;
+  /** Hit-me completed per bead ID. */
+  beadHitMeCompleted?: Record<string, boolean>;
+  /** Review pass counts per bead ID. */
+  beadReviewPassCounts?: Record<string, number>;
 }
 
 export function createInitialState(): OrchestratorState {

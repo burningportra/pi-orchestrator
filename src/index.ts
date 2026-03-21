@@ -68,6 +68,9 @@ const PHASE_EMOJI: Record<OrchestratorPhase, string> = {
   awaiting_selection: "🎯",
   planning: "📝",
   awaiting_plan_approval: "📋",
+  creating_beads: "🔨",
+  refining_beads: "🔍",
+  awaiting_bead_approval: "📋",
   implementing: "🔨",
   reviewing: "🔍",
   iterating: "🔄",
@@ -586,6 +589,7 @@ export default function (pi: ExtensionAPI) {
         [
           "📋 Standard — 3-7 practical ideas",
           "🚀 Creative — think of 100, tell me your 7 best",
+          "🧠 Idea Wizard — structured ideation with rubric scoring",
           "✏️  I know what I want — enter my own goal",
         ]
       );
@@ -707,6 +711,18 @@ export default function (pi: ExtensionAPI) {
           ] as const),
           effort: StringEnum(["low", "medium", "high"] as const),
           impact: StringEnum(["low", "medium", "high"] as const),
+          rationale: Type.Optional(Type.String({ description: "why this idea beat other candidates — cite specific repo evidence" })),
+          tier: Type.Optional(StringEnum(["top", "honorable"] as const)),
+          sourceEvidence: Type.Optional(Type.Array(Type.String(), { description: "repo signals that prompted this idea" })),
+          scores: Type.Optional(Type.Object({
+            useful: Type.Number({ description: "1-5: solves a real, frequent pain" }),
+            pragmatic: Type.Number({ description: "1-5: realistic to build in hours/days" }),
+            accretive: Type.Number({ description: "1-5: clearly adds value beyond what exists" }),
+            robust: Type.Number({ description: "1-5: handles edge cases, works reliably" }),
+            ergonomic: Type.Number({ description: "1-5: reduces friction or cognitive load" }),
+          })),
+          risks: Type.Optional(Type.Array(Type.String(), { description: "known downsides" })),
+          synergies: Type.Optional(Type.Array(Type.String(), { description: "ids of complementary ideas" })),
         }),
         { description: "3-7 project ideas based on the repo profile", minItems: 3, maxItems: 7 }
       ),
@@ -760,8 +776,17 @@ export default function (pi: ExtensionAPI) {
 
       const ideaList = state.candidateIdeas
         .map(
-          (idea, i) =>
-            `${i + 1}. **[${idea.category}] ${idea.title}** (effort: ${idea.effort}, impact: ${idea.impact})${idea.tier === "honorable" ? " _(honorable mention)_" : ""}\n   ${idea.description}${idea.rationale ? `\n   _${idea.rationale}_` : ""}`
+          (idea, i) => {
+            let line = `${i + 1}. **[${idea.category}] ${idea.title}** (effort: ${idea.effort}, impact: ${idea.impact})${idea.tier === "honorable" ? " _(honorable mention)_" : ""}`;
+            line += `\n   ${idea.description}`;
+            if (idea.scores) {
+              const s = idea.scores;
+              const weighted = s.useful * 2 + s.pragmatic * 2 + s.accretive * 1.5 + s.robust + s.ergonomic;
+              line += `\n   📊 **Score: ${weighted.toFixed(1)}/37.5** — useful=${s.useful} pragmatic=${s.pragmatic} accretive=${s.accretive} robust=${s.robust} ergonomic=${s.ergonomic}`;
+            }
+            if (idea.rationale) line += `\n   _${idea.rationale}_`;
+            return line;
+          }
         )
         .join("\n\n");
 
