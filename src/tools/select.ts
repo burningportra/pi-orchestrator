@@ -1,0 +1,192 @@
+import { Type } from "@sinclair/typebox";
+import { Text } from "@mariozechner/pi-tui";
+import type { OrchestratorContext } from "../types.js";
+import { formatRepoProfile, beadCreationPrompt } from "../prompts.js";
+import { runGoalRefinement, extractConstraints } from "../goal-refinement.js";
+
+export function registerSelectTool(oc: OrchestratorContext) {
+  oc.pi.registerTool({
+    name: "orch_select",
+    label: "Select Idea",
+    description:
+      "Present the discovered ideas to the user and let them select one (or enter a custom goal). Returns the selected goal string.",
+    promptSnippet: "Present ideas to user for selection",
+    parameters: Type.Object({}),
+
+    async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+      if (!oc.state.candidateIdeas || oc.state.candidateIdeas.length === 0) {
+        throw new Error("No ideas available. Call orch_discover first.");
+      }
+
+      // Group ideas by tier for display
+      const topIdeas = oc.state.candidateIdeas.filter((i) => i.tier === "top");
+      const honorableIdeas = oc.state.candidateIdeas.filter((i) => i.tier === "honorable" || !i.tier);
+      const hasMixedTiers = topIdeas.length > 0 && honorableIdeas.length > 0;
+
+      // Build display options — ideas in tier order, each with rationale subtitle
+      const orderedIdeas = hasMixedTiers ? [...topIdeas, ...honorableIdeas] : oc.state.candidateIdeas;
+      const options: string[] = [];
+
+      for (let i = 0; i < orderedIdeas.length; i++) {
+        const idea = orderedIdeas[i];
+        const rationaleSnippet = idea.rationale
+          ? `\n     → ${idea.rationale.length > 120 ? idea.rationale.slice(0, 117) + "..." : idea.rationale}`
+          : "";
+        // Add tier header as a visual separator
+        if (hasMixedTiers && i === 0) {
+          options.push(`── Top Picks ──`);
+        }
+        if (hasMixedTiers && i === topIdeas.length) {
+          options.push(`── Also Worth Considering ──`);
+        }
+        options.push(
+          `[${idea.category}] ${idea.title} (effort: ${idea.effort}, impact: ${idea.impact})${rationaleSnippet}`
+        );
+      }
+      options.push("✏️  Enter a custom goal");
+
+      let choice: string | undefined;
+      try {
+        choice = await ctx.ui.select(
+          "🎯 Select a project idea to implement:",
+          options
+        );
+      } catch (err) {
+        ctx.ui.notify(`Select failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+        oc.orchestratorActive = false;
+        oc.setPhase("idle", ctx);
+        oc.persistState();
+        return {
+          content: [{ type: "text", text: `Selection dialog failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: { selected: false, error: true },
+        };
+      }
+
+      if (choice === undefined) {
+        oc.orchestratorActive = false;
+        oc.setPhase("idle", ctx);
+        oc.persistState();
+        return {
+          content: [
+            { type: "text", text: "User cancelled selection. Orchestration stopped." },
+          ],
+          details: { selected: false },
+        };
+      }
+
+      let goal: string;
+      let refinementUsed = false;
+      if (choice === "✏️  Enter a custom goal") {
+        const custom = await ctx.ui.input(
+          "Enter your goal:",
+          "e.g., Add API rate limiting with Redis"
+        );
+        if (!custom) {
+          oc.orchestratorActive = false;
+          oc.setPhase("idle", ctx);
+          oc.persistState();
+          return {
+            content: [
+              { type: "text", text: "No goal entered. Orchestration stopped." },
+            ],
+            details: { selected: false },
+          };
+        }
+
+        // Refine the goal via LLM-generated questionnaire
+        const refinement = await runGoalRefinement(custom, oc.state.repoProfile!, oc.pi, ctx);
+        goal = refinement.enrichedGoal;
+        refinementUsed = !refinement.skipped;
+
+        if (refinementUsed) {
+          oc.state.constraints = extractConstraints(refinement.answers);
+        }
+      } else if (choice.startsWith("──")) {
+        // User selected a tier header — treat as no selection
+        oc.orchestratorActive = false;
+        oc.setPhase("idle", ctx);
+        oc.persistState();
+        return {
+          content: [{ type: "text", text: "No idea selected. Orchestration stopped." }],
+          details: { selected: false },
+        };
+      } else {
+        // Map selected option back to the idea in orderedIdeas
+        const choiceIndex = options.indexOf(choice);
+        // Count how many tier headers precede this choice
+        const headersBefore = options.slice(0, choiceIndex).filter((o) => o.startsWith("──")).length;
+        const ideaIndex = choiceIndex - headersBefore;
+        const idea = orderedIdeas[ideaIndex];
+        goal = `${idea.title}: ${idea.description}`;
+
+        // Offer to refine the system-provided idea
+        const refineChoice = await ctx.ui.select(
+          `🎯 Selected: ${idea.title}\n\nWould you like to refine this idea?`,
+          [
+            "▶️  Continue — use as-is",
+            "🎯 Refine — answer clarifying questions to sharpen the goal",
+          ]
+        );
+
+        if (refineChoice?.startsWith("🎯")) {
+          const refinement = await runGoalRefinement(goal, oc.state.repoProfile!, oc.pi, ctx);
+          goal = refinement.enrichedGoal;
+          refinementUsed = !refinement.skipped;
+
+          if (refinementUsed) {
+            oc.state.constraints = extractConstraints(refinement.answers);
+          }
+        }
+      }
+
+      oc.state.selectedGoal = goal;
+      oc.setPhase("planning", ctx);
+      oc.persistState();
+
+      // Ask for constraints only if refinement didn't already capture them
+      if (!refinementUsed) {
+        const constraintInput = await ctx.ui.input(
+          "Any constraints? (comma-separated, or leave empty)",
+          "e.g., no new dependencies, keep backward compat"
+        );
+        oc.state.constraints = constraintInput
+          ? constraintInput.split(",").map((c) => c.trim()).filter(Boolean)
+          : [];
+      }
+      oc.persistState();
+
+      const repoContext = oc.state.repoProfile ? formatRepoProfile(oc.state.repoProfile) : "";
+      const instructions = beadCreationPrompt(goal, repoContext, oc.state.constraints);
+
+      oc.setPhase("creating_beads", ctx);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `**NEXT: Create beads for this goal using \`br create\` and \`br dep add\` in bash NOW.**\n\nGoal: "${goal}"${oc.state.constraints.length > 0 ? `\nConstraints: ${oc.state.constraints.join(", ")}` : ""}\n\n---\n\n${instructions}`,
+          },
+        ],
+        details: { selected: true, goal, constraints: oc.state.constraints },
+      };
+    },
+
+    renderCall(_args, theme) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold("orch_select ")) +
+          theme.fg("dim", "awaiting user selection..."),
+        0, 0
+      );
+    },
+
+    renderResult(result, _options, theme) {
+      const d = result.details as any;
+      if (!d?.selected) return new Text(theme.fg("warning", "🚫 Selection cancelled"), 0, 0);
+      return new Text(
+        theme.fg("success", `🎯 Selected: `) +
+          theme.fg("accent", d.goal?.slice(0, 80) ?? ""),
+        0, 0
+      );
+    },
+  });
+}
