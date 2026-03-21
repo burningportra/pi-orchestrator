@@ -60,11 +60,43 @@ export function amRpcCmd(tool: string, args: Record<string, unknown>): string {
 }
 
 /**
+ * Build a bash helper script that wraps agent-mail calls.
+ * Sub-agents source this to get am_send, am_inbox, am_release functions
+ * with their agent name and project key baked in — no manual substitution needed.
+ */
+function amHelperScript(cwd: string, threadId: string): string {
+  return `
+# ── Agent Mail helper functions (source these) ──────────────
+AM_URL="${AGENT_MAIL_URL}"
+AM_PROJECT="${cwd}"
+AM_THREAD="${threadId}"
+
+am_rpc() {
+  local tool="$1" args="$2"
+  curl -s -X POST "$AM_URL/api" \\
+    -H 'Content-Type: application/json' \\
+    -d "{\\"jsonrpc\\":\\"2.0\\",\\"id\\":1,\\"method\\":\\"tools/call\\",\\"params\\":{\\"name\\":\\"$tool\\",\\"arguments\\":$args}}"
+}
+
+am_send() {
+  local subject="$1" body="$2"
+  am_rpc "send_message" "{\\"project_key\\":\\"$AM_PROJECT\\",\\"sender_name\\":\\"$AM_AGENT_NAME\\",\\"to\\":[],\\"broadcast\\":true,\\"subject\\":\\"$subject\\",\\"body_md\\":\\"$body\\",\\"thread_id\\":\\"$AM_THREAD\\"}"
+}
+
+am_inbox() {
+  am_rpc "fetch_inbox" "{\\"project_key\\":\\"$AM_PROJECT\\",\\"agent_name\\":\\"$AM_AGENT_NAME\\",\\"limit\\":10,\\"include_bodies\\":true}"
+}
+
+am_release() {
+  am_rpc "release_file_reservations" "{\\"project_key\\":\\"$AM_PROJECT\\",\\"agent_name\\":\\"$AM_AGENT_NAME\\"}"
+}
+`.trim();
+}
+
+/**
  * Generates an agent-mail bootstrap preamble for a parallel sub-agent's task.
- * Uses curl commands against the JSON-RPC HTTP endpoint (pi has no MCP).
- *
- * macro_start_session handles registration + file reservations in one call.
- * The agent parses its auto-assigned name from the response for subsequent calls.
+ * Uses a bash helper script approach — sub-agents get am_send/am_inbox/am_release
+ * functions with correct field names baked in. No manual JSON construction needed.
  */
 export function agentMailTaskPreamble(
   cwd: string,
@@ -73,7 +105,7 @@ export function agentMailTaskPreamble(
   artifacts: string[],
   threadId: string
 ): string {
-  const safeDesc = stepDesc.replace(/"/g, '\\"').replace(/`/g, '\\`');
+  const safeDesc = stepDesc.replace(/"/g, '\\"').replace(/`/g, '\\`').replace(/\n/g, '\\n');
 
   const startSessionCmd = amRpcCmd("macro_start_session", {
     human_key: cwd, program: "pi-subagent", model: "auto",
@@ -82,49 +114,53 @@ export function agentMailTaskPreamble(
     inbox_limit: 5,
   });
 
-  return `## Agent Mail Coordination
-You are coordinating with other parallel agents via agent-mail (HTTP at ${AGENT_MAIL_URL}).
-Run these bash commands. **This is required, not optional.**
+  const helperScript = amHelperScript(cwd, threadId);
 
-**⚠️ CRITICAL: Use EXACT field names below. Common mistakes that will cause errors:**
-- Use \`sender_name\` NOT \`sender\`
-- Use \`body_md\` NOT \`body\`
-- Use \`project_key\` NOT \`project\`
-- For broadcast: use \`"to": [], "broadcast": true\` NOT \`"to": ["all"]\`
+  return `## Agent Mail Coordination — MANDATORY
+You are coordinating with other parallel agents via agent-mail.
+You MUST follow ALL steps below. Do NOT skip any.
 
-**1. Bootstrap session + reserve files (run FIRST, before any work):**
+### Step 1: Bootstrap (run FIRST, before ANY work)
 \`\`\`bash
-${startSessionCmd}
+BOOTSTRAP_RESULT=$(${startSessionCmd})
+echo "$BOOTSTRAP_RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['structuredContent']['agent']['name'])" 2>/dev/null
 \`\`\`
-This registers you, reserves your files, and fetches your inbox in one call.
-Parse the JSON response: your agent name is at \`result.structuredContent.agent.name\` (e.g. "VioletLantern").
-Save it in a variable — you need it for the remaining calls. Example:
+Copy the agent name from the output (e.g. "VioletLantern") and set it:
 \`\`\`bash
-export MY_AGENT_NAME="<name from response>"
+export AM_AGENT_NAME="<paste your agent name here>"
 \`\`\`
 
-**2. Announce start** (use your actual agent name):
+### Step 2: Set up helper functions
 \`\`\`bash
-${amRpcCmd("send_message", {
-    project_key: cwd, sender_name: "YOUR_AGENT_NAME", to: [],
-    subject: `[${threadId}] Starting: ${safeDesc.slice(0, 60)}`,
-    body_md: `Working on: ${safeDesc}\\nFiles: ${artifacts.join(", ")}`,
-    thread_id: threadId, broadcast: true,
-  })}
+${helperScript}
 \`\`\`
 
-**3. When DONE — send summary + release** (replace YOUR_AGENT_NAME and YOUR_SUMMARY):
+### Step 3: Announce start
 \`\`\`bash
-${amRpcCmd("send_message", {
-    project_key: cwd, sender_name: "YOUR_AGENT_NAME", to: [],
-    subject: `[${threadId}] Done`,
-    body_md: "YOUR_SUMMARY_HERE",
-    thread_id: threadId, broadcast: true,
-  })}
-${amRpcCmd("release_file_reservations", {
-    project_key: cwd, agent_name: "YOUR_AGENT_NAME",
-  })}
+am_send "Starting: ${safeDesc.slice(0, 60)}" "Working on: ${safeDesc.slice(0, 100)}. Files: ${artifacts.join(", ")}"
 \`\`\`
+
+### Step 4: Check inbox (do this BEFORE starting work)
+\`\`\`bash
+am_inbox | python3 -c "import json,sys; d=json.load(sys.stdin); msgs=d.get('result',{}).get('structuredContent',{}).get('messages',[]); [print(f'FROM {m[\"sender_name\"]}: {m[\"subject\"]}') for m in msgs]" 2>/dev/null
+\`\`\`
+If there are messages from other agents, read and acknowledge them before proceeding.
+
+### Step 5: Do your work (implement the bead)
+
+### Step 6: Check inbox again BEFORE finishing
+\`\`\`bash
+am_inbox | python3 -c "import json,sys; d=json.load(sys.stdin); msgs=d.get('result',{}).get('structuredContent',{}).get('messages',[]); [print(f'FROM {m[\"sender_name\"]}: {m[\"subject\"]}\\n  {m.get(\"body_md\",\"\")[:200]}') for m in msgs]" 2>/dev/null
+\`\`\`
+Respond to any messages that need a response.
+
+### Step 7: Send completion summary + release reservations
+\`\`\`bash
+am_send "Done: ${safeDesc.slice(0, 60)}" "YOUR_SUMMARY_HERE — replace this with what you actually did"
+am_release
+\`\`\`
+
+---
 
 `;
 }
