@@ -177,79 +177,82 @@ export default function (pi: ExtensionAPI) {
   }
 
   /**
+   * Build a JSON-RPC curl command string for agent-mail.
+   */
+  function amRpcCmd(tool: string, args: Record<string, unknown>): string {
+    const body = JSON.stringify({
+      jsonrpc: "2.0", id: 1,
+      method: "tools/call",
+      params: { name: tool, arguments: args },
+    });
+    return `curl -s -X POST ${AGENT_MAIL_URL}/api -H 'Content-Type: application/json' -d '${body.replace(/'/g, "'\\''")}'`;
+  }
+
+  /**
    * Generates an agent-mail bootstrap preamble for a parallel sub-agent's task.
-   * Uses curl commands that agents can run via bash (pi has no MCP support).
+   * Uses curl commands against the JSON-RPC HTTP endpoint (pi has no MCP).
+   *
+   * The agent must:
+   * 1. Call macro_start_session to register and get its auto-assigned name
+   * 2. Parse the name from the response
+   * 3. Use that name for all subsequent calls (reservations, messages)
    */
   function agentMailTaskPreamble(
     cwd: string,
-    agentName: string,
+    _agentName: string,
     stepDesc: string,
     artifacts: string[],
     threadId: string
   ): string {
     const safeDesc = stepDesc.replace(/"/g, '\\"').replace(/`/g, '\\`');
 
-    // Build the JSON-RPC curl commands agents will run
-    const rpcCall = (tool: string, args: Record<string, unknown>) => {
-      const body = JSON.stringify({
-        jsonrpc: "2.0", id: 1,
-        method: "tools/call",
-        params: { name: tool, arguments: args },
-      });
-      // Escape for bash single-quote wrapping
-      return `curl -s -X POST ${AGENT_MAIL_URL}/api -H 'Content-Type: application/json' -d '${body.replace(/'/g, "'\\''")}'`;
-    };
-
-    const registerCmd = rpcCall("register_agent", {
-      project_key: cwd, program: "pi-subagent", model: "auto",
-      task_description: safeDesc, name: agentName,
-    });
-    const reserveCmd = rpcCall("file_reservation_paths", {
-      project_key: cwd, agent_name: agentName,
-      paths: artifacts, ttl_seconds: 3600, exclusive: true, reason: threadId,
-    });
-    const announceCmd = rpcCall("send_message", {
-      project_key: cwd, sender_name: agentName, to: "all",
-      subject: `[${threadId}] Starting: ${safeDesc.slice(0, 60)}`,
-      body_md: `Working on: ${safeDesc}\\nFiles: ${artifacts.join(", ")}`,
-      thread_id: threadId,
-    });
-    const doneCmd = rpcCall("send_message", {
-      project_key: cwd, sender_name: agentName, to: "all",
-      subject: `[${threadId}] Done`,
-      body_md: "REPLACE_WITH_YOUR_SUMMARY",
-      thread_id: threadId,
-    });
-    const releaseCmd = rpcCall("release_file_reservations", {
-      project_key: cwd, agent_name: agentName,
+    const startSessionCmd = amRpcCmd("macro_start_session", {
+      human_key: cwd, program: "pi-subagent", model: "auto",
+      task_description: safeDesc,
     });
 
     return `## Agent Mail Coordination
-Run these bash commands to coordinate with other parallel agents:
+You are coordinating with other parallel agents via agent-mail (HTTP JSON-RPC at ${AGENT_MAIL_URL}/api).
 
-**1. Register yourself (run first):**
+**Step 1 — Bootstrap session (run FIRST, before any work):**
 \`\`\`bash
-${registerCmd}
+${startSessionCmd}
+\`\`\`
+Parse the JSON response to get your assigned agent name from \`result.structuredContent.agent.name\` (e.g. "VioletLantern"). Save it — you need it for ALL subsequent calls.
+
+**Step 2 — Reserve your files** (replace YOUR_AGENT_NAME with the name from step 1):
+\`\`\`bash
+${amRpcCmd("file_reservation_paths", {
+      project_key: cwd, agent_name: "YOUR_AGENT_NAME",
+      paths: artifacts, ttl_seconds: 3600, exclusive: true, reason: threadId,
+    })}
 \`\`\`
 
-**2. Reserve your files:**
+**Step 3 — Announce start** (replace YOUR_AGENT_NAME):
 \`\`\`bash
-${reserveCmd}
+${amRpcCmd("send_message", {
+      project_key: cwd, sender_name: "YOUR_AGENT_NAME", to: ["all"],
+      subject: `[${threadId}] Starting: ${safeDesc.slice(0, 60)}`,
+      body_md: `Working on: ${safeDesc}`,
+      thread_id: threadId,
+    })}
 \`\`\`
 
-**3. Announce start:**
+**Step 4 — When done, send summary** (replace YOUR_AGENT_NAME and summary):
 \`\`\`bash
-${announceCmd}
+${amRpcCmd("send_message", {
+      project_key: cwd, sender_name: "YOUR_AGENT_NAME", to: ["all"],
+      subject: `[${threadId}] Done`,
+      body_md: "YOUR_SUMMARY_HERE",
+      thread_id: threadId,
+    })}
 \`\`\`
 
-**4. When done, send summary** (replace REPLACE_WITH_YOUR_SUMMARY with actual summary):
+**Step 5 — Release reservations** (replace YOUR_AGENT_NAME):
 \`\`\`bash
-${doneCmd}
-\`\`\`
-
-**5. Release reservations:**
-\`\`\`bash
-${releaseCmd}
+${amRpcCmd("release_file_reservations", {
+      project_key: cwd, agent_name: "YOUR_AGENT_NAME",
+    })}
 \`\`\`
 
 `;
