@@ -164,10 +164,38 @@ Before starting work, bootstrap your agent-mail session:
 `;
   }
 
+  /**
+   * Check whether all steps in a parallel group have disjoint artifact sets.
+   * If true, agents can safely work in the same directory with file reservations.
+   */
+  function groupArtifactsAreDisjoint(group: number[], steps: import("./types.js").PlanStep[]): boolean {
+    const seen = new Set<string>();
+    for (const idx of group) {
+      const step = steps.find((s) => s.index === idx);
+      if (!step) return false;
+      for (const artifact of step.artifacts) {
+        if (seen.has(artifact)) return false;
+        seen.add(artifact);
+      }
+    }
+    return true;
+  }
+
   let hasSophia = false;
   let sophiaCRResult: PlanToCRResult | undefined;
   let worktreePool: WorktreePool | undefined;
   let parallelAnalysis: ParallelAnalysis | undefined;
+  /** Tracks which groups used same-dir mode (agent-mail reservations, no worktrees) */
+  let sameDirGroups = new Set<number>();
+
+  /** Check if a step belongs to a same-dir group (no worktree merge needed) */
+  function isSameDirStep(stepIndex: number): boolean {
+    if (!parallelAnalysis || sameDirGroups.size === 0) return false;
+    for (const gi of sameDirGroups) {
+      if (parallelAnalysis.groups[gi]?.includes(stepIndex)) return true;
+    }
+    return false;
+  }
   let swarmTender: import("./tender.js").SwarmTender | undefined;
 
   function setPhase(phase: OrchestratorPhase, ctx: ExtensionContext) {
@@ -1327,45 +1355,79 @@ Before starting work, bootstrap your agent-mail session:
       const { groups, mergeOrder } = analysis;
       const hasParallel = groups.some((g) => g.length > 1);
 
-      // Create worktree pool for parallel steps
+      // Determine isolation strategy for each parallel group:
+      // - beads+agentmail with disjoint artifacts → same-dir + file reservations (cheaper)
+      // - overlapping artifacts OR no agent-mail → git worktrees (safe isolation)
+      const useBeadsAgentMail = state.coordinationStrategy === "beads+agentmail";
+      sameDirGroups = new Set<number>();
       let worktreeInfo = "";
-      if (hasParallel) {
-        try {
-          const branchResult = await pi.exec("git", ["branch", "--show-current"], { timeout: 3000, cwd: ctx.cwd });
-          const currentBranch = branchResult.stdout.trim() || "main";
-          worktreePool = new WorktreePool(pi, ctx.cwd, currentBranch);
 
-          // Pre-create worktrees for all parallel steps
-          const parallelSteps = groups.filter((g) => g.length > 1).flat();
-          const createdPaths: string[] = [];
-          for (const stepIdx of parallelSteps) {
-            const result = await worktreePool.acquire(stepIdx);
-            if (result.ok && result.data) {
-              createdPaths.push(`  Step ${stepIdx}: \`${result.data}\``);
+      if (hasParallel) {
+        // Classify each parallel group
+        const parallelGroups = groups.filter((g) => g.length > 1);
+        const needsWorktreeSteps: number[] = [];
+
+        for (let gi = 0; gi < groups.length; gi++) {
+          const g = groups[gi];
+          if (g.length <= 1) continue;
+          if (useBeadsAgentMail && groupArtifactsAreDisjoint(g, plan.steps)) {
+            sameDirGroups.add(gi);
+          } else {
+            needsWorktreeSteps.push(...g);
+          }
+        }
+
+        // Only create worktrees for groups that actually need them
+        if (needsWorktreeSteps.length > 0) {
+          try {
+            const branchResult = await pi.exec("git", ["branch", "--show-current"], { timeout: 3000, cwd: ctx.cwd });
+            const currentBranch = branchResult.stdout.trim() || "main";
+            worktreePool = new WorktreePool(pi, ctx.cwd, currentBranch);
+
+            const createdPaths: string[] = [];
+            for (const stepIdx of needsWorktreeSteps) {
+              const result = await worktreePool.acquire(stepIdx);
+              if (result.ok && result.data) {
+                createdPaths.push(`  Step ${stepIdx}: \`${result.data}\``);
+              }
             }
+            if (createdPaths.length > 0) {
+              worktreeInfo = `\n\n**Worktrees created** (overlapping artifacts):\n${createdPaths.join("\n")}`;
+            }
+          } catch {
+            worktreeInfo = "\n\n⚠️ Worktree creation failed — falling back to sequential execution.";
+            worktreePool = undefined;
+            if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
           }
-          if (createdPaths.length > 0) {
-            worktreeInfo = `\n\n**Worktrees created:**\n${createdPaths.join("\n")}`;
-          }
-        } catch {
-          worktreeInfo = "\n\n⚠️ Worktree creation failed — falling back to sequential execution.";
-          worktreePool = undefined;
-          if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
+        }
+
+        if (sameDirGroups.size > 0) {
+          const sameDirGroupNums = [...sameDirGroups].map((gi) => `Group ${gi + 1}`).join(", ");
+          worktreeInfo += `\n\n**Same-dir mode** (disjoint artifacts + agent-mail reservations): ${sameDirGroupNums}`;
         }
       }
 
       const parallelInfo = hasParallel
-        ? `\n\n**Parallel execution plan:**\n${groups.map((g, i) => `  Group ${i + 1}: Steps ${g.join(", ")}${g.length > 1 ? " (can run in parallel via parallel_subagents)" : ""}`).join("\n")}\n  Merge order: ${mergeOrder.join(" → ")}${worktreeInfo}`
+        ? `\n\n**Parallel execution plan:**\n${groups.map((g, i) => {
+            if (g.length <= 1) return `  Group ${i + 1}: Step ${g.join(", ")}`;
+            const mode = sameDirGroups.has(i) ? "same-dir + reservations" : "worktrees";
+            return `  Group ${i + 1}: Steps ${g.join(", ")} (parallel via ${mode})`;
+          }).join("\n")}\n  Merge order: ${mergeOrder.join(" → ")}${worktreeInfo}`
         : "";
 
       const firstGroup = groups[0];
-      const firstGroupIsParallel = firstGroup.length > 1 && worktreePool;
+      const firstGroupIdx = 0;
+      const firstGroupIsParallel = firstGroup.length > 1 &&
+        (sameDirGroups.has(firstGroupIdx) || worktreePool);
 
       if (firstGroupIsParallel) {
+        const isSameDir = sameDirGroups.has(firstGroupIdx);
+
         // Build explicit parallel_subagents call for the first group
         const agentConfigs = firstGroup.map((stepIdx) => {
           const step = plan.steps.find((s) => s.index === stepIdx)!;
-          const wtPath = worktreePool!.getPath(stepIdx);
+          const wtPath = isSameDir ? undefined : worktreePool?.getPath(stepIdx);
+          const workDir = wtPath ?? ctx.cwd;
           const agentName = `step-${stepIdx}`;
           const threadId = state.beadIds?.[stepIdx] ?? `step-${stepIdx}`;
           const preamble = state.coordinationBackend?.agentMail
@@ -1373,17 +1435,14 @@ Before starting work, bootstrap your agent-mail session:
             : "";
           return {
             name: agentName,
-            task: `${preamble}You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${step.description}\n\n### Acceptance Criteria\n${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${step.artifacts.join(", ")}\n\n⚠️ SCOPE CONSTRAINT: You MUST NOT create or modify any files outside the list above. If you believe additional files need changes, note them in your summary but DO NOT modify them.\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step.\n\nWhen done implementing, STOP and do a fresh-eyes review: carefully read over ALL the new code you just wrote and any existing code you modified, looking super carefully for any obvious bugs, errors, problems, issues, or confusion. Fix anything you uncover.\n\nThen COMMIT your changes:\n\`\`\`bash\ncd ${wtPath ?? ctx.cwd}\ngit add ${step.artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "step ${stepIdx}: ${step.description.slice(0, 60)}"\n\`\`\`\n\nThen summarize what you did and what the fresh-eyes review found.`,
+            task: `${preamble}You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${step.description}\n\n### Acceptance Criteria\n${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${step.artifacts.join(", ")}\n\n⚠️ SCOPE CONSTRAINT: You MUST NOT create or modify any files outside the list above. If you believe additional files need changes, note them in your summary but DO NOT modify them.\n\n### Working Directory\ncd to: ${workDir}\n${isSameDir ? "\n🤝 **Same-dir mode**: Other agents are working in this directory too. Your file reservations via agent-mail protect your files. Do NOT touch files outside your artifact list.\n" : ""}\nImplement the step.\n\nWhen done implementing, STOP and do a fresh-eyes review: carefully read over ALL the new code you just wrote and any existing code you modified, looking super carefully for any obvious bugs, errors, problems, issues, or confusion. Fix anything you uncover.\n\nThen COMMIT your changes:\n\`\`\`bash\ncd ${workDir}\ngit add ${step.artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "step ${stepIdx}: ${step.description.slice(0, 60)}"\n\`\`\`\n\nThen summarize what you did and what the fresh-eyes review found.`,
           };
         });
 
-        // Include parallel launch instruction directly in tool result —
-        // NOT via sendUserMessage followUp, which arrives late and causes
-        // duplicate instructions if the LLM already acted on the tool result.
         const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
 
-        // Start swarm tender to monitor parallel agents
-        if (worktreePool) {
+        // Start swarm tender to monitor parallel agents (only for worktree groups)
+        if (worktreePool && !isSameDir) {
           const { SwarmTender } = await import("./tender.js");
           const worktreeInfos = firstGroup
             .map((idx) => ({ path: worktreePool!.getPath(idx)!, stepIndex: idx }))
@@ -1401,14 +1460,18 @@ Before starting work, bootstrap your agent-mail session:
           }
         }
 
+        const modeLabel = isSameDir
+          ? "🤝 Same-dir mode — agents coordinate via agent-mail file reservations."
+          : "🔄 Swarm tender active — monitoring agent health every 60s.";
+
         return {
           content: [
             {
               type: "text",
-              text: `**NEXT: Call \`parallel_subagents\` NOW to launch Group 1 (Steps ${firstGroup.join(", ")}).**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each step with the sub-agent's summary.\n\n---\n\nPlan approved! ${plan.steps.length} steps to execute.${beadsInfo}${sophiaInfo}${parallelInfo}\n\n🔄 Swarm tender active — monitoring agent health every 60s.`,
+              text: `**NEXT: Call \`parallel_subagents\` NOW to launch Group 1 (Steps ${firstGroup.join(", ")}).**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each step with the sub-agent's summary.\n\n---\n\nPlan approved! ${plan.steps.length} steps to execute.${beadsInfo}${sophiaInfo}${parallelInfo}\n\n${modeLabel}`,
             },
           ],
-          details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr, launchingParallel: true },
+          details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr, launchingParallel: true, sameDirMode: isSameDir },
         };
       }
 
@@ -1866,7 +1929,8 @@ Before starting work, bootstrap your agent-mail session:
         }
 
         // Merge worktree changes back if this step used a worktree
-        if (worktreePool) {
+        // (same-dir steps commit directly to the main branch — no merge needed)
+        if (worktreePool && !isSameDirStep(params.stepIndex)) {
           const wtBranch = worktreePool.getBranch(params.stepIndex);
           const wtPath = worktreePool.getPath(params.stepIndex);
           if (wtBranch) {
@@ -2110,10 +2174,10 @@ Before starting work, bootstrap your agent-mail session:
 
           if (stillUnreviewed.length > 0) {
             // Check if these steps were already implemented in a parallel group
-            // (they have worktrees or were part of a parallel_subagents call)
+            // (they have worktrees, or were in a same-dir group)
             // If so, tell the agent to call orch_review for them, not implement them.
             const alreadyImplemented = stillUnreviewed.filter(
-              (s) => worktreePool?.getPath(s.index) || worktreePool?.getBranch(s.index)
+              (s) => worktreePool?.getPath(s.index) || worktreePool?.getBranch(s.index) || isSameDirStep(s.index)
             );
 
             if (alreadyImplemented.length > 0) {
@@ -2152,11 +2216,16 @@ Before starting work, bootstrap your agent-mail session:
                 if (nextGroupIdx < parallelAnalysis.groups.length) {
                   const nextGroup = parallelAnalysis.groups[nextGroupIdx];
 
-                  if (nextGroup.length > 1 && worktreePool) {
+                  const nextGroupIsSameDir = sameDirGroups.has(nextGroupIdx);
+                  const nextGroupCanParallel = nextGroup.length > 1 &&
+                    (nextGroupIsSameDir || worktreePool);
+
+                  if (nextGroupCanParallel) {
                     // Launch next parallel group
                     const agentConfigs = nextGroup.map((stepIdx) => {
                       const s = state.plan!.steps.find((st) => st.index === stepIdx)!;
-                      const wtPath = worktreePool!.getPath(stepIdx);
+                      const wtPath = nextGroupIsSameDir ? undefined : worktreePool?.getPath(stepIdx);
+                      const workDir = wtPath ?? ctx.cwd;
                       const agentName = `step-${stepIdx}`;
                       const threadId = state.beadIds?.[stepIdx] ?? `step-${stepIdx}`;
                       const preamble = state.coordinationBackend?.agentMail
@@ -2164,12 +2233,13 @@ Before starting work, bootstrap your agent-mail session:
                         : "";
                       return {
                         name: agentName,
-                        task: `${preamble}You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${s.description}\n\n### Acceptance Criteria\n${s.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${s.artifacts.join(", ")}\n\n⚠️ SCOPE CONSTRAINT: You MUST NOT create or modify any files outside the list above.\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step.\n\nWhen done, do a fresh-eyes review then COMMIT:\n\`\`\`bash\ncd ${wtPath ?? ctx.cwd}\ngit add ${s.artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "step ${stepIdx}: ${s.description.slice(0, 60)}"\n\`\`\`\n\nSummarize what you did.`,
+                        task: `${preamble}You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${s.description}\n\n### Acceptance Criteria\n${s.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${s.artifacts.join(", ")}\n\n⚠️ SCOPE CONSTRAINT: You MUST NOT create or modify any files outside the list above.\n\n### Working Directory\ncd to: ${workDir}\n${nextGroupIsSameDir ? "\n🤝 **Same-dir mode**: Other agents are working in this directory too. Your file reservations via agent-mail protect your files. Do NOT touch files outside your artifact list.\n" : ""}\nImplement the step.\n\nWhen done, do a fresh-eyes review then COMMIT:\n\`\`\`bash\ncd ${workDir}\ngit add ${s.artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "step ${stepIdx}: ${s.description.slice(0, 60)}"\n\`\`\`\n\nSummarize what you did.`,
                       };
                     });
 
                     const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
-                    ctx.ui.notify(`✅ Group ${currentGroupIdx + 1} complete! Launching Group ${nextGroupIdx + 1} (steps ${nextGroup.join(", ")}).`, "info");
+                    const modeLabel = nextGroupIsSameDir ? "same-dir + reservations" : "worktrees";
+                    ctx.ui.notify(`✅ Group ${currentGroupIdx + 1} complete! Launching Group ${nextGroupIdx + 1} (steps ${nextGroup.join(", ")}, ${modeLabel}).`, "info");
 
                     return {
                       content: [
@@ -2178,7 +2248,7 @@ Before starting work, bootstrap your agent-mail session:
                           text: `✅ Step ${params.stepIndex} passed. Group ${currentGroupIdx + 1} complete!\n\n**NEXT: Call \`parallel_subagents\` NOW to launch Group ${nextGroupIdx + 1} (Steps ${nextGroup.join(", ")}).**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each step.`,
                         },
                       ],
-                      details: { review, nextGroup: nextGroup, launchingParallel: true },
+                      details: { review, nextGroup: nextGroup, launchingParallel: true, sameDirMode: nextGroupIsSameDir },
                     };
                   }
                 }
