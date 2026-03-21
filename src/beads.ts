@@ -205,10 +205,11 @@ export async function syncBeads(
 export async function validateBeads(
   pi: ExtensionAPI,
   cwd: string
-): Promise<{ ok: boolean; orphaned: string[]; cycles: boolean; warnings: string[] }> {
+): Promise<{ ok: boolean; orphaned: string[]; cycles: boolean; warnings: string[]; shallowBeads: { id: string; reason: string }[] }> {
   let cycles = false;
   let orphaned: string[] = [];
   const warnings: string[] = [];
+  const shallowBeads: { id: string; reason: string }[] = [];
 
   // Try bv insights first for richer analysis
   const insights = await bvInsights(pi, cwd);
@@ -264,7 +265,104 @@ export async function validateBeads(
     }
   }
 
-  return { ok: !cycles && orphaned.length === 0, orphaned, cycles, warnings };
+  // Detect shallow beads
+  try {
+    const allBeads = insights ? await readBeads(pi, cwd) : [];
+    const beadsToCheck = insights ? allBeads : await readBeads(pi, cwd);
+    for (const bead of beadsToCheck) {
+      if (bead.status !== "open" && bead.status !== "in_progress") continue;
+      const desc = bead.description ?? "";
+      if (desc.length === 0) {
+        shallowBeads.push({ id: bead.id, reason: "Empty description" });
+      } else if (desc.length < 50) {
+        shallowBeads.push({ id: bead.id, reason: `Description too short (${desc.length} chars)` });
+      } else if (!desc.includes("### Files:") && !/^[-*]\s+(?:src|lib|test|tests|dist|docs)\/\S+/m.test(desc)) {
+        shallowBeads.push({ id: bead.id, reason: "Missing ### Files: section" });
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  return { ok: !cycles && orphaned.length === 0, orphaned, cycles, warnings, shallowBeads };
+}
+
+/**
+ * Quality check result for a single bead.
+ */
+export interface QualityFailure {
+  beadId: string;
+  check: string;
+  reason: string;
+}
+
+/**
+ * Validates each open bead against automated quality checks:
+ * 1. Has substance (description >= 100 chars)
+ * 2. Has file scope (### Files: with paths)
+ * 3. Has acceptance criteria (- [ ] checkboxes)
+ * 4. Not oversimplified (word count >= 50)
+ * 5. No cycles (via validateBeads)
+ * 6. Dependencies connected (has deps, is depended on, or is sole bead)
+ */
+export async function qualityCheckBeads(
+  pi: ExtensionAPI,
+  cwd: string
+): Promise<{ passed: boolean; failures: QualityFailure[] }> {
+  const failures: QualityFailure[] = [];
+  const allBeads = await readBeads(pi, cwd);
+  const openBeads = allBeads.filter((b) => b.status === "open" || b.status === "in_progress");
+
+  if (openBeads.length === 0) return { passed: true, failures };
+
+  // Check cycles
+  const validation = await validateBeads(pi, cwd);
+  if (validation.cycles) {
+    failures.push({ beadId: "*", check: "no-cycles", reason: "Dependency cycles detected in bead graph" });
+  }
+
+  // Build dep graph for connectivity check
+  const hasDeps = new Set<string>();
+  const isDependedOn = new Set<string>();
+  for (const bead of openBeads) {
+    const deps = await beadDeps(pi, cwd, bead.id);
+    if (deps.length > 0) {
+      hasDeps.add(bead.id);
+      for (const dep of deps) isDependedOn.add(dep);
+    }
+  }
+
+  for (const bead of openBeads) {
+    const desc = bead.description ?? "";
+
+    // 1. Has substance
+    if (desc.length < 100) {
+      failures.push({ beadId: bead.id, check: "has-substance", reason: `Description too short (${desc.length} chars, need >= 100)` });
+    }
+
+    // 2. Has file scope
+    if (!desc.includes("### Files:") && !/^[-*]\s+(?:src|lib|test|tests|dist|docs)\/\S+/m.test(desc)) {
+      failures.push({ beadId: bead.id, check: "has-file-scope", reason: "No file scope found (missing ### Files: section or file paths)" });
+    }
+
+    // 3. Has acceptance criteria
+    if (!desc.includes("- [ ]")) {
+      failures.push({ beadId: bead.id, check: "has-acceptance-criteria", reason: "No acceptance criteria (missing - [ ] checkboxes)" });
+    }
+
+    // 4. Not oversimplified
+    const wordCount = desc.split(/\s+/).filter(Boolean).length;
+    if (wordCount < 50) {
+      failures.push({ beadId: bead.id, check: "not-oversimplified", reason: `Description too brief (${wordCount} words, need >= 50)` });
+    }
+
+    // 6. Dependencies connected (skip for single-bead plans)
+    if (openBeads.length > 1 && !hasDeps.has(bead.id) && !isDependedOn.has(bead.id)) {
+      failures.push({ beadId: bead.id, check: "deps-connected", reason: "Bead is disconnected — no dependencies and not depended on by any bead" });
+    }
+  }
+
+  return { passed: failures.length === 0, failures };
 }
 
 /**

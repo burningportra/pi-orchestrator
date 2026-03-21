@@ -13,6 +13,7 @@ import {
   bvInsights,
   bvNext,
   resetBvCache,
+  qualityCheckBeads,
 } from "./beads.js";
 import type { Bead } from "./types.js";
 
@@ -383,5 +384,120 @@ describe("validateBeads with bv insights", () => {
     const result = await validateBeads(pi, CWD);
     expect(result.ok).toBe(true);
     expect(result.warnings).toEqual([]);
+  });
+});
+
+// ─── qualityCheckBeads ───────────────────────────────────────
+
+describe("qualityCheckBeads", () => {
+  beforeEach(() => resetBvCache());
+
+  const validDescription = `This bead implements the widget feature with proper error handling and tests.
+
+## What to implement
+Add a new widget component that handles user input validation and displays results.
+
+### Files: src/widget.ts, src/widget.test.ts
+
+## Acceptance criteria
+- [ ] Widget renders correctly
+- [ ] Input validation works
+- [ ] Tests pass`;
+
+  it("passes for a well-formed bead", async () => {
+    const beads = [makeBead({ id: "good-1", description: validDescription })];
+    const pi = {
+      exec: vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "which") throw new Error("not found"); // no bv
+        if (cmd === "br" && args[0] === "list") return { code: 0, stdout: JSON.stringify(beads), stderr: "" };
+        if (cmd === "br" && args[0] === "dep" && args[1] === "cycles") return { code: 0, stdout: "OK", stderr: "" };
+        if (cmd === "br" && args[0] === "dep" && args[1] === "list") return { code: 0, stdout: "", stderr: "" };
+        return { code: 0, stdout: "[]", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    const result = await qualityCheckBeads(pi, CWD);
+    expect(result.passed).toBe(true);
+    expect(result.failures).toEqual([]);
+  });
+
+  it("fails for empty description", async () => {
+    const beads = [makeBead({ id: "empty-1", description: "" })];
+    const pi = {
+      exec: vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "which") throw new Error("not found");
+        if (cmd === "br" && args[0] === "list") return { code: 0, stdout: JSON.stringify(beads), stderr: "" };
+        if (cmd === "br" && args[0] === "dep" && args[1] === "cycles") return { code: 0, stdout: "OK", stderr: "" };
+        if (cmd === "br" && args[0] === "dep" && args[1] === "list") return { code: 0, stdout: "", stderr: "" };
+        return { code: 0, stdout: "[]", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    const result = await qualityCheckBeads(pi, CWD);
+    expect(result.passed).toBe(false);
+    const checks = result.failures.map((f) => f.check);
+    expect(checks).toContain("has-substance");
+    expect(checks).toContain("has-file-scope");
+    expect(checks).toContain("has-acceptance-criteria");
+    expect(checks).toContain("not-oversimplified");
+  });
+
+  it("fails for missing files section", async () => {
+    const desc = "A".repeat(100) + "\n" + "word ".repeat(50) + "\n- [ ] criterion";
+    const beads = [makeBead({ id: "nofiles-1", description: desc })];
+    const pi = {
+      exec: vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "which") throw new Error("not found");
+        if (cmd === "br" && args[0] === "list") return { code: 0, stdout: JSON.stringify(beads), stderr: "" };
+        if (cmd === "br" && args[0] === "dep" && args[1] === "cycles") return { code: 0, stdout: "OK", stderr: "" };
+        if (cmd === "br" && args[0] === "dep" && args[1] === "list") return { code: 0, stdout: "", stderr: "" };
+        return { code: 0, stdout: "[]", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    const result = await qualityCheckBeads(pi, CWD);
+    expect(result.passed).toBe(false);
+    expect(result.failures.some((f) => f.check === "has-file-scope")).toBe(true);
+  });
+
+  it("fails for missing acceptance criteria", async () => {
+    const desc = "A".repeat(100) + "\n" + "word ".repeat(50) + "\n### Files: src/foo.ts";
+    const beads = [makeBead({ id: "nocrit-1", description: desc })];
+    const pi = {
+      exec: vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "which") throw new Error("not found");
+        if (cmd === "br" && args[0] === "list") return { code: 0, stdout: JSON.stringify(beads), stderr: "" };
+        if (cmd === "br" && args[0] === "dep" && args[1] === "cycles") return { code: 0, stdout: "OK", stderr: "" };
+        if (cmd === "br" && args[0] === "dep" && args[1] === "list") return { code: 0, stdout: "", stderr: "" };
+        return { code: 0, stdout: "[]", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    const result = await qualityCheckBeads(pi, CWD);
+    expect(result.passed).toBe(false);
+    expect(result.failures.some((f) => f.check === "has-acceptance-criteria")).toBe(true);
+  });
+});
+
+// ─── validateBeads shallowBeads ──────────────────────────────
+
+describe("validateBeads shallowBeads", () => {
+  beforeEach(() => resetBvCache());
+
+  it("returns shallowBeads for empty descriptions", async () => {
+    const beads = [makeBead({ id: "shallow-1", description: "short" })];
+    const pi = {
+      exec: vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "which") throw new Error("not found");
+        if (cmd === "br" && args[0] === "dep" && args[1] === "cycles") return { code: 0, stdout: "OK", stderr: "" };
+        if (cmd === "br" && args[0] === "list") return { code: 0, stdout: JSON.stringify(beads), stderr: "" };
+        return { code: 0, stdout: "[]", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    const result = await validateBeads(pi, CWD);
+    expect(result.shallowBeads).toHaveLength(1);
+    expect(result.shallowBeads[0].id).toBe("shallow-1");
+    expect(result.shallowBeads[0].reason).toContain("too short");
   });
 });

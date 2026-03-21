@@ -132,9 +132,19 @@ export function registerApproveTool(oc: OrchestratorContext) {
       const beadListText = beadListParts.join("\n\n");
 
       const bvWarnings = validation.warnings?.length ? `\n⚠️ ${validation.warnings.join("\n⚠️ ")}` : "";
+      const shallowWarning = validation.shallowBeads?.length
+        ? `\n📝 Shallow beads: ${validation.shallowBeads.map((s) => `${s.id} (${s.reason})`).join(", ")}`
+        : "";
       const validationWarning = (!validation.ok
         ? `\n\n⚠️ Validation issues: ${validation.cycles ? "dependency cycles detected" : ""} ${validation.orphaned.length > 0 ? `orphaned: ${validation.orphaned.join(", ")}` : ""}`
-        : "") + bvWarnings;
+        : "") + bvWarnings + shallowWarning;
+
+      // Quality summary
+      const { qualityCheckBeads: qcBeads } = await import("../beads.js");
+      const qualityPreview = await qcBeads(oc.pi, ctx.cwd);
+      const qualitySummary = qualityPreview.passed
+        ? `\n✅ ${beads.length}/${beads.length} beads pass quality checks`
+        : `\n⚠️ ${beads.length - new Set(qualityPreview.failures.map((f) => f.beadId)).size}/${beads.length} pass — ${new Set(qualityPreview.failures.map((f) => f.beadId)).size} issues found`;
 
       // ── Build UI options based on polish state ──
       const round = oc.state.polishRound;
@@ -171,7 +181,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
       }
 
       const choice = await ctx.ui.select(
-        `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}\n\n${beadListText}${validationWarning}`,
+        `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}\n\n${beadListText}${validationWarning}`,
         options
       );
 
@@ -253,7 +263,39 @@ export function registerApproveTool(oc: OrchestratorContext) {
         };
       }
 
-      // "▶️ Start implementing" — reset polish snapshot
+      // "▶️ Start implementing" — run quality gate first
+      const { qualityCheckBeads } = await import("../beads.js");
+      const qualityResult = await qualityCheckBeads(oc.pi, ctx.cwd);
+      if (!qualityResult.passed) {
+        const failureLines = qualityResult.failures.map(
+          (f) => `- ${f.beadId}: ${f.check} — ${f.reason}`
+        );
+        const qualityChoice = await ctx.ui.select(
+          `⚠️ Quality issues found:\n${failureLines.join("\n")}`,
+          [
+            "🔍 Go back to polish",
+            "▶️  Proceed anyway",
+          ]
+        );
+
+        if (qualityChoice?.startsWith("🔍")) {
+          oc.setPhase("refining_beads", ctx);
+          oc.persistState();
+          await syncBeads(oc.pi, ctx.cwd);
+          const { beadRefinementPrompt } = await import("../prompts.js");
+          return {
+            content: [
+              {
+                type: "text",
+                text: `**Quality gate failed. Fix these issues, then call \`orch_approve_beads\` again.**\n\n⚠️ Issues:\n${failureLines.join("\n")}\n\n---\n\n${beadRefinementPrompt(round, oc.state.polishChanges)}\n\n---\n\nCurrent beads:\n\n${beadListText}`,
+              },
+            ],
+            details: { approved: false, refining: true, qualityGateFailed: true, beadCount: beads.length },
+          };
+        }
+      }
+
+      // Reset polish snapshot
       _lastBeadSnapshot = undefined;
 
       // ── Approved — launch execution ──────────────────────────
