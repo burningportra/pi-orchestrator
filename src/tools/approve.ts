@@ -1,8 +1,47 @@
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
-import type { OrchestratorContext } from "../types.js";
+import type { OrchestratorContext, Bead } from "../types.js";
 import { implementerInstructions } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
+
+// ─── Module-level bead snapshot for change detection ─────────
+type BeadSnapshot = Map<string, { title: string; descHash: string }>;
+let _lastBeadSnapshot: BeadSnapshot | undefined;
+
+/** Cheap content hash: length + first 50 chars. */
+function descHash(desc: string): string {
+  return `${desc.length}:${desc.slice(0, 50)}`;
+}
+
+function snapshotBeads(beads: Bead[]): BeadSnapshot {
+  const snap: BeadSnapshot = new Map();
+  for (const b of beads) {
+    snap.set(b.id, { title: b.title, descHash: descHash(b.description) });
+  }
+  return snap;
+}
+
+function countChanges(prev: BeadSnapshot, curr: BeadSnapshot): number {
+  let changes = 0;
+  // Added beads
+  for (const id of curr.keys()) {
+    if (!prev.has(id)) changes++;
+  }
+  // Removed beads
+  for (const id of prev.keys()) {
+    if (!curr.has(id)) changes++;
+  }
+  // Modified beads
+  for (const [id, entry] of curr) {
+    const old = prev.get(id);
+    if (old && (old.title !== entry.title || old.descHash !== entry.descHash)) {
+      changes++;
+    }
+  }
+  return changes;
+}
+
+const MAX_POLISH_ROUNDS = 12;
 
 export function registerApproveTool(oc: OrchestratorContext) {
   oc.pi.registerTool({
@@ -66,6 +105,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
         if (choice?.startsWith("🔍")) {
           oc.setPhase("refining_beads", ctx);
           oc.persistState();
+          await syncBeads(oc.pi, ctx.cwd);
           return {
             content: [
               {

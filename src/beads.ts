@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Bead } from "./types.js";
+import type { Bead, BvInsights, BvNextPick } from "./types.js";
 
 // ─── Beads Integration ────────────────────────────────────────
 
@@ -150,6 +150,32 @@ export async function validateBeads(
     const cycleResult = await pi.exec("br", ["dep", "cycles"], { timeout: 10000, cwd });
     if (cycleResult.stdout.toLowerCase().includes("cycle")) {
       cycles = true;
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // Detect orphaned open beads — open beads with no dependencies and not depended on by anyone
+  try {
+    const allBeads = await readBeads(pi, cwd);
+    const openBeads = allBeads.filter((b) => b.status === "open");
+    if (openBeads.length > 1) {
+      // Build dependency graph: which beads have deps, which are depended upon
+      const hasDeps = new Set<string>();
+      const isDependedOn = new Set<string>();
+      for (const bead of openBeads) {
+        const deps = await beadDeps(pi, cwd, bead.id);
+        if (deps.length > 0) {
+          hasDeps.add(bead.id);
+          for (const dep of deps) isDependedOn.add(dep);
+        }
+      }
+      // Orphaned = open bead that neither has deps nor is depended upon
+      for (const bead of openBeads) {
+        if (!hasDeps.has(bead.id) && !isDependedOn.has(bead.id)) {
+          orphaned.push(bead.id);
+        }
+      }
     }
   } catch {
     // Non-fatal

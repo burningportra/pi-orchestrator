@@ -74,9 +74,9 @@ export function registerCommands(oc: OrchestratorContext) {
 
   // ─── Command: /memory ──────────────────────────────────────────
   pi.registerCommand("memory", {
-    description: "Manage compound memory: stats, view, search, add, prune",
+    description: "Manage CASS memory: stats, view, search, add, mark harmful",
     handler: async (args, ctx) => {
-      const { listMemoryEntries, searchMemory, pruneMemoryEntries, getMemoryStats, appendMemory } = await import("./memory.js");
+      const { listMemoryEntries, searchMemory, getMemoryStats, appendMemory, markRule } = await import("./memory.js");
       const parts = (args ?? "").trim().split(/\s+/);
       const subcommand = parts[0]?.toLowerCase() || "stats";
 
@@ -87,10 +87,10 @@ export function registerCommands(oc: OrchestratorContext) {
           ctx.ui.notify("📭 No memory entries yet. Use `/memory add <text>` to create one.", "info");
           return;
         }
-        const sizeKB = (stats.totalBytes / 1024).toFixed(1);
+        const statusLine = stats.overallStatus ? ` (${stats.overallStatus})` : "";
+        const versionLine = stats.version ? ` · cm v${stats.version}` : "";
         ctx.ui.notify(
-          `🧠 Memory: ${stats.entryCount} entries, ${sizeKB} KB\n` +
-          `📅 ${stats.oldest} → ${stats.newest}`,
+          `🧠 CASS Memory: ${stats.entryCount} rules${statusLine}${versionLine}`,
           "info"
         );
         return;
@@ -104,14 +104,14 @@ export function registerCommands(oc: OrchestratorContext) {
           return;
         }
         const choices = entries.map((e) =>
-          `${e.index}: [${e.timestamp}] ${e.content.slice(0, 60).replace(/\n/g, " ")}${e.content.length > 60 ? "…" : ""}`
+          `${e.index}: [${e.id}] (${e.category}) ${e.content.slice(0, 60).replace(/\n/g, " ")}${e.content.length > 60 ? "…" : ""}`
         );
         const selected = await ctx.ui.select("Select a memory entry to view:", choices);
         if (selected == null) return;
         const idx = parseInt(selected, 10);
         const entry = entries.find((e) => e.index === idx);
         if (entry) {
-          ctx.ui.notify(`## ${entry.timestamp}\n\n${entry.content}`, "info");
+          ctx.ui.notify(`## ${entry.id} (${entry.category})\n\n${entry.content}`, "info");
         }
         return;
       }
@@ -129,7 +129,7 @@ export function registerCommands(oc: OrchestratorContext) {
           return;
         }
         const summary = results
-          .map((e) => `**[${e.timestamp}]** ${e.content.slice(0, 80).replace(/\n/g, " ")}${e.content.length > 80 ? "…" : ""}`)
+          .map((e) => `**[${e.id}]** (${e.category}) ${e.content.slice(0, 80).replace(/\n/g, " ")}${e.content.length > 80 ? "…" : ""}`)
           .join("\n");
         ctx.ui.notify(`🔍 ${results.length} match(es) for "${query}":\n\n${summary}`, "info");
         return;
@@ -159,24 +159,26 @@ export function registerCommands(oc: OrchestratorContext) {
           return;
         }
         const choices = entries.map((e) =>
-          `${e.index}: [${e.timestamp}] ${e.content.slice(0, 60).replace(/\n/g, " ")}${e.content.length > 60 ? "…" : ""}`
+          `${e.index}: [${e.id}] (${e.category}) ${e.content.slice(0, 60).replace(/\n/g, " ")}${e.content.length > 60 ? "…" : ""}`
         );
-        const selected = await ctx.ui.select("Select entry to prune:", choices);
+        const selected = await ctx.ui.select("Select entry to mark as harmful:", choices);
         if (selected == null) {
           ctx.ui.notify("Prune cancelled.", "info");
           return;
         }
-        const indices = [parseInt(selected, 10)];
+        const idx = parseInt(selected, 10);
+        const entry = entries.find((e) => e.index === idx);
+        if (!entry) { ctx.ui.notify("Entry not found.", "warning"); return; }
         const confirmed = await ctx.ui.confirm(
-          "Confirm Prune",
-          `Delete ${indices.length} memory entry/entries? This cannot be undone.`
+          "Confirm Mark Harmful",
+          `Mark rule ${entry.id} as harmful? This downgrades the rule.`
         );
         if (!confirmed) {
           ctx.ui.notify("Prune cancelled.", "info");
           return;
         }
-        const deleted = pruneMemoryEntries(ctx.cwd, indices);
-        ctx.ui.notify(`🗑️ Pruned ${deleted} entry/entries.`, "info");
+        const ok = markRule(entry.id, false, "pruned via /memory command");
+        ctx.ui.notify(ok ? `🗑️ Marked ${entry.id} as harmful.` : "❌ Failed to mark rule.", ok ? "info" : "error");
         return;
       }
 

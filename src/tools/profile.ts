@@ -64,11 +64,12 @@ export function registerProfileTool(oc: OrchestratorContext) {
         ? `🤝 Coordination: ${coordParts.join(" + ")} → strategy: **${coordStrategy}**`
         : "🤝 Coordination: bare worktrees (no beads/agent-mail/sophia detected)";
 
-      // Read compound memory from prior orchestrations
+      // Read CASS memory context for this repo/goal
       const { readMemory } = await import("../memory.js");
-      const memory = readMemory(ctx.cwd);
+      const taskHint = oc.state.selectedGoal || `orchestration session for ${profile.name || "this repo"}`;
+      const memory = readMemory(ctx.cwd, taskHint);
       const memoryContext = memory
-        ? `\n\n### Prior Context (compound memory; secondary to live codebase scan)\n${memory}`
+        ? `\n\n### Prior Context (CASS memory; secondary to live codebase scan)\n${memory}`
         : "";
 
       const discoveryMode = await ctx.ui.select(

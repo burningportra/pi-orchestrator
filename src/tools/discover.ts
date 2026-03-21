@@ -11,7 +11,7 @@ export function registerDiscoverTool(oc: OrchestratorContext) {
     name: "orch_discover",
     label: "Discover Ideas",
     description:
-      "Generate 3–7 high-leverage project ideas based on the repo profile. You must call orch_profile first. Returns ideas as structured data AND instructions for you to present them. After generating ideas, call orch_select to let the user choose.",
+      "Generate 3–7 concrete project ideas based on the repo profile. Call orch_profile first. Returns structured ideas. After generating, call orch_select for user selection.",
     promptSnippet: "Generate project ideas from the repo profile",
     parameters: Type.Object({
       ideas: Type.Array(
@@ -38,7 +38,7 @@ export function registerDiscoverTool(oc: OrchestratorContext) {
           risks: Type.Optional(Type.Array(Type.String(), { description: "known downsides" })),
           synergies: Type.Optional(Type.Array(Type.String(), { description: "ids of complementary ideas" })),
         }),
-        { description: "3-7 project ideas based on the repo profile", minItems: 3, maxItems: 7 }
+        { description: "3-15 project ideas based on the repo profile", minItems: 3, maxItems: 15 }
       ),
     }),
 

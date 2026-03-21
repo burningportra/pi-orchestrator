@@ -337,9 +337,13 @@ export async function createCRFromPlan(
   ];
   await setCRContract(pi, cwd, cr.id, {
     why: goal,
-    scope: allArtifacts.length > 20
-      ? (console.warn(`[sophia] CR scope truncated: ${allArtifacts.length} artifacts → 20 (sophia arg limit)`), allArtifacts.slice(0, 20))
-      : allArtifacts,
+    scope: (() => {
+      if (allArtifacts.length > 20) {
+        console.warn(`[sophia] CR scope truncated: ${allArtifacts.length} artifacts → 20 (sophia arg limit)`);
+        return allArtifacts.slice(0, 20);
+      }
+      return allArtifacts;
+    })(),
     invariants: constraints,
     testPlan: "All acceptance criteria met per step",
     rollbackPlan: "git revert CR merge commit",

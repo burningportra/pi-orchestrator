@@ -10,3 +10,6 @@ dist/
 .DS_Store
 .cocoindex_code/
 .pi/suggester/
+
+# bv (beads viewer) local config and caches
+.bv/

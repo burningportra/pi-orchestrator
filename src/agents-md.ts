@@ -35,7 +35,7 @@ Common pitfalls
 
 ## Integrating with Beads (dependency-aware task planning)
 
-Beads provides a lightweight, dependency-aware issue database and a CLI (\`bd\`) for selecting "ready work," setting priorities, and tracking status. It complements MCP Agent Mail's messaging, audit trail, and file-reservation signals. Project: [steveyegge/beads](https://github.com/steveyegge/beads)
+Beads provides a lightweight, dependency-aware issue database and a CLI (\`br\`) for selecting "ready work," setting priorities, and tracking status. It complements MCP Agent Mail's messaging, audit trail, and file-reservation signals. Project: [steveyegge/beads](https://github.com/steveyegge/beads)
 
 Recommended conventions
 - **Single source of truth**: Use **Beads** for task status/priority/dependencies; use **Agent Mail** for conversation, decisions, and attachments (audit).
@@ -44,7 +44,7 @@ Recommended conventions
 
 Typical flow (agents)
 1) **Pick ready work** (Beads)
-   - \`bd ready --json\` → choose one item (highest priority, no blockers)
+   - \`br ready --json\` → choose one item (highest priority, no blockers)
 2) **Reserve edit surface** (Mail)
    - \`file_reservation_paths(project_key, agent_name, ["src/**"], ttl_seconds=3600, exclusive=true, reason="bd-123")\`
 3) **Announce start** (Mail)
@@ -52,7 +52,7 @@ Typical flow (agents)
 4) **Work and update**
    - Reply in-thread with progress and attach artifacts/images; keep the discussion in one thread per issue id
 5) **Complete and release**
-   - \`bd close bd-123 --reason "Completed"\` (Beads is status authority)
+   - \`br close bd-123 --reason "Completed"\` (Beads is status authority)
    - \`release_file_reservations(project_key, agent_name, paths=["src/**"])\`
    - Final Mail reply: \`[bd-123] Completed\` with summary and links
 
@@ -63,15 +63,45 @@ Mapping cheat-sheet
 - **Commit messages (optional)**: include \`bd-###\` for traceability
 
 Event mirroring (optional automation)
-- On \`bd update --status blocked\`, send a high-importance Mail message in thread \`bd-###\` describing the blocker.
-- On Mail "ACK overdue" for a critical decision, add a Beads label (e.g., \`needs-ack\`) or bump priority to surface it in \`bd ready\`.
+- On \`br update --status blocked\`, send a high-importance Mail message in thread \`bd-###\` describing the blocker.
+- On Mail "ACK overdue" for a critical decision, add a Beads label (e.g., \`needs-ack\`) or bump priority to surface it in \`br ready\`.
 
 Pitfalls to avoid
 - Don't create or manage tasks in Mail; treat Beads as the single task queue.
 - Always include \`bd-###\` in message \`thread_id\` to avoid ID drift across tools.
 `;
 
+const CASS_MEMORY_SECTION = `
+## Memory System: cass-memory
+
+The Cass Memory System (cm) is a tool for giving agents an effective memory based on the ability to quickly search across previous coding agent sessions across an array of different coding agent tools (e.g., Claude Code, Codex, Gemini-CLI, Cursor, etc) and projects (and even across multiple machines, optionally) and then reflect on what they find and learn in new sessions to draw out useful lessons and takeaways; these lessons are then stored and can be queried and retrieved later, much like how human memory works.
+
+The \`cm onboard\` command guides you through analyzing historical sessions and extracting valuable rules.
+
+### Quick Start
+
+\`\`\`bash
+# 1. Check status and see recommendations
+cm onboard status
+
+# 2. Get sessions to analyze (filtered by gaps in your playbook)
+cm onboard sample --fill-gaps
+
+# 3. Read a session with rich context
+cm onboard read /path/to/session.jsonl --template
+
+# 4. Add extracted rules (one at a time or batch)
+cm playbook add "Your rule content" --category "debugging"
+# Or batch add:
+cm playbook add --file rules.json
+
+# 5. Mark session as processed
+cm onboard mark-done /path/to/session.jsonl
+\`\`\`
+`;
+
 const SECTION_MARKER = "## MCP Agent Mail";
+const CASS_SECTION_MARKER = "## Memory System: cass-memory";
 
 const DEFAULT_HEADER = `# AGENTS.md
 
@@ -83,16 +113,18 @@ export async function ensureAgentMailSection(cwd: string): Promise<void> {
   const agentsMdPath = join(cwd, "AGENTS.md");
 
   if (!existsSync(agentsMdPath)) {
-    writeFileSync(agentsMdPath, DEFAULT_HEADER + AGENT_MAIL_SECTION.trimStart(), "utf-8");
+    writeFileSync(agentsMdPath, DEFAULT_HEADER + AGENT_MAIL_SECTION.trimStart() + "\n" + CASS_MEMORY_SECTION.trimStart(), "utf-8");
     return;
   }
 
-  const content = readFileSync(agentsMdPath, "utf-8");
-  if (content.includes(SECTION_MARKER)) {
-    // Already has the section — idempotent
-    return;
+  let content = readFileSync(agentsMdPath, "utf-8");
+
+  if (!content.includes(SECTION_MARKER)) {
+    appendFileSync(agentsMdPath, "\n" + AGENT_MAIL_SECTION.trimStart(), "utf-8");
+    content += "\n" + AGENT_MAIL_SECTION.trimStart();
   }
 
-  // Append the section
-  appendFileSync(agentsMdPath, "\n" + AGENT_MAIL_SECTION.trimStart(), "utf-8");
+  if (!content.includes(CASS_SECTION_MARKER)) {
+    appendFileSync(agentsMdPath, "\n" + CASS_MEMORY_SECTION.trimStart(), "utf-8");
+  }
 }

@@ -11,7 +11,7 @@ Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
 ```
 /orchestrate
   │
-  ├─► orch_profile     — Scan repo + load compound memory from prior runs
+  ├─► orch_profile     — Scan repo + load CASS memory from prior runs
   │     └─ Discovery mode: 📋 Standard or 🚀 Creative (broader ideation, return 7)
   │
   ├─► orch_discover    — LLM generates 3–7 ideas (minimum enforced)
@@ -51,7 +51,7 @@ Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
         🔍 Self-review → 👥 Peer review (4 agents) →
         🧪 Test coverage → 📦 Commit → 🚀 Ship it → ✅ Done
         │
-        └─► 🧠 Compound memory: extract learnings for future runs
+        └─► 🧠 CASS memory: extract learnings for future runs
 ```
 
 ## Scan Contract
@@ -83,13 +83,13 @@ When scan data is rendered into prompts and tool output, the orchestrator now tr
 1. **Live codebase scan** — ccc summary, recommendations, and structural insights
 2. **Repo profile details** — languages, frameworks, entrypoints, tests, docs, CI
 3. **Recent commits and TODOs** — useful but secondary signals
-4. **Compound memory / prior history** — enrichment only, never the primary driver
+4. **CASS memory / prior history** — enrichment only, never the primary driver
 
 ## Phases
 
 ### 1. Discovery
 
-The workflow begins with `orch_profile`, which scans the repository and loads compound memory from prior runs. Discovery supports three modes:
+The workflow begins with `orch_profile`, which scans the repository and loads CASS memory from prior runs. Discovery supports three modes:
 
 - **📋 Standard** — straightforward repo analysis, 3-7 practical ideas
 - **🧠 Idea Wizard** — structured ideation with rubric ranking. The LLM generates 25-30 candidates internally, scores each against 5 axes (useful, pragmatic, accretive, robust, ergonomic), winnows and merges overlaps, then returns 10-15 tiered ideas (5 top + 5-10 honorable mentions) with rationale and source evidence
@@ -200,16 +200,16 @@ Every review action includes auto-commit instructions.
 
 ### 5. Completion
 
-#### Compound Memory
+#### CASS Memory
 
-`.pi-orchestrator/memory.md` carries learnings across orchestration runs:
+The orchestrator uses [CASS](https://github.com/Dicklesworthstone/cass_memory_system) (cm CLI) for procedural memory across runs:
 
-- **Read**: injected into `orch_profile` result as context
-- **Write**: completion prompts the LLM to extract decisions, gotchas, and patterns
-- **Truncation**: last 10KB on read to protect the context window
-- **Format**: timestamped markdown sections
+- **Read**: `cm context` returns relevance-scored rules, anti-patterns, and history snippets — injected into `orch_profile`
+- **Write**: completion prompts the LLM to add learnings via `cm add`
+- **Feedback**: rules can be marked helpful/harmful via `cm mark`, improving future relevance scoring
+- **Search**: `cm similar` finds related rules by semantic similarity
 
-The system compounds knowledge — each run benefits from prior learnings.
+When cm is not installed, memory gracefully degrades to no-op (empty results).
 
 #### Sophia Integration
 
@@ -251,7 +251,7 @@ src/
 ├── sophia.ts          # Sophia CLI wrapper + dependency analysis + merge
 ├── worktree.ts        # WorktreePool + autoCommitWorktree
 ├── tender.ts          # SwarmTender: agent health + conflict detection
-├── memory.ts          # Compound memory: read/append .pi-orchestrator/memory.md
+├── memory.ts          # CASS memory: wraps cm CLI for rules, context, and feedback
 └── deep-plan.ts       # Direct pi CLI spawning helpers
 ```
 

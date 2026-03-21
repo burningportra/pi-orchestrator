@@ -24,7 +24,7 @@ pi
 
 ## ccc Codebase Scanning (Optional, Recommended)
 
-pi-orchestrator now prefers ccc for the first scan because it gives richer live codebase context than the legacy built-in profiler alone. The orchestrator still preserves the old workflow contract by pairing ccc findings with the existing repo profile shape.
+pi-orchestrator tries ccc first because it provides more detailed codebase context than the built-in profiler. ccc findings are paired with the existing repo profile shape so the rest of the workflow keeps working.
 
 ### What ccc changes
 
@@ -100,15 +100,22 @@ Parallel agent features (deep planning, creative brainstorm) require access to m
 
 ## Optional Configuration
 
-### Compound memory
+### CASS Memory (Optional, Recommended)
 
-The orchestrator stores learnings from each session (gotchas, patterns, decisions) in `.pi-orchestrator/memory.md` inside your project. This file is automatically read at the start of every future session so the orchestrator avoids repeating mistakes. No setup required — it creates itself on first use.
-
-To reset accumulated learnings:
+The orchestrator uses [CASS](https://github.com/Dicklesworthstone/cass_memory_system) (cm CLI) for procedural memory — relevance-scored rules, anti-pattern tracking, and cross-session learning.
 
 ```bash
-rm .pi-orchestrator/memory.md
+npm install -g cass-memory
+cm init --starter typescript
+cm doctor --json  # verify setup
 ```
+
+Once installed, the orchestrator automatically:
+- Queries relevant rules at the start of each session via `cm context`
+- Prompts the LLM to add learnings via `cm add` at completion
+- Supports rule feedback via `cm mark` (helpful/harmful)
+
+> **No cm CLI?** Memory is skipped silently. Everything else works the same.
 
 ### Development mode
 

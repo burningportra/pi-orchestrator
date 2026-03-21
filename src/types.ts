@@ -129,6 +129,29 @@ export interface TodoItem {
   type: "TODO" | "FIXME" | "HACK" | "XXX";
 }
 
+// ─── bv (beads-viewer) types ─────────────────────────────────
+
+export interface BvBottleneck {
+  ID: string;
+  Value: number;
+}
+
+export interface BvInsights {
+  Bottlenecks: BvBottleneck[];
+  Cycles: string[][] | null;
+  Orphans: string[];
+  Articulation: string[];
+  Slack: { ID: string; Value: number }[];
+}
+
+export interface BvNextPick {
+  id: string;
+  title: string;
+  score: number;
+  reasons: string[];
+  unblocks: string[];
+}
+
 // ─── Beads (br CLI types) ────────────────────────────────────
 
 /** Mirrors br list --json output for a single bead/issue. */
@@ -248,9 +271,9 @@ export interface OrchestratorState {
   /** Bead IDs created for this orchestration (ordered). */
   activeBeadIds?: string[];
   /** Results keyed by bead ID. */
-  beadResults?: Record<string, import("./types.js").BeadResult>;
+  beadResults?: Record<string, BeadResult>;
   /** Review verdicts keyed by bead ID. */
-  beadReviews?: Record<string, import("./types.js").BeadReview[]>;
+  beadReviews?: Record<string, BeadReview[]>;
   /** Currently executing bead ID. */
   currentBeadId?: string | null;
   /** Hit-me triggered per bead ID. */
@@ -259,6 +282,14 @@ export interface OrchestratorState {
   beadHitMeCompleted?: Record<string, boolean>;
   /** Review pass counts per bead ID. */
   beadReviewPassCounts?: Record<string, number>;
+
+  // ─── Polish loop state ─────────────────────────────────────
+  /** Current polish round (0-indexed). */
+  polishRound: number;
+  /** Change count per round (beads added, removed, or modified). */
+  polishChanges: number[];
+  /** True when 0 changes detected for 2 consecutive rounds. */
+  polishConverged: boolean;
 }
 
 export function createInitialState(): OrchestratorState {
@@ -270,6 +301,9 @@ export function createInitialState(): OrchestratorState {
     maxReviewPasses: 2,
     iterationRound: 0,
     currentGateIndex: 0,
+    polishRound: 0,
+    polishChanges: [],
+    polishConverged: false,
   };
 }
 

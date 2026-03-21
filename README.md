@@ -30,7 +30,7 @@ You: /orchestrate
 - **Multi-model planning** — Have 3 different AI models compete on your plan, then synthesize the best parts
 - **Bead-based execution** — Tasks created as beads with dependency tracking via br CLI
 - **4-agent review** — Fresh-eyes, polish, ergonomics, and reality-check reviewers run in parallel
-- **Compound memory** — Each run learns from previous runs in the same repo
+- **CASS memory** — Procedural memory via [cm CLI](https://github.com/Dicklesworthstone/cass_memory_system) — relevance-scored rules, anti-patterns, and cross-session learning
 - **Coordination backends** — Beads (br CLI), Sophia, and agent-mail for multi-agent coordination
 
 ## Prerequisites

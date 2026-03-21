@@ -603,7 +603,7 @@ export function parseQuestionsJSON(output: string): RefinementQuestion[] {
         options: [
           { value: "minimal", label: "Minimal — smallest possible change" },
           { value: "standard", label: "Standard — balanced approach" },
-          { value: "comprehensive", label: "Comprehensive — thorough implementation" },
+          { value: "thorough", label: "Thorough — cover all cases and edge conditions" },
         ],
         allowOther: true,
       },

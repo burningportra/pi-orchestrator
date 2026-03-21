@@ -145,9 +145,12 @@ After all beads and reviews pass, the orchestrator offers:
 - **Commit strategy**: Group changes into logical commits with detailed messages
 - **Skill extraction**: Check if the work product should become a reusable skill
 
-## Compound Memory
-- Use \`/memory\` to view, search, and prune learnings from prior orchestrations
-- Use \`orch_memory\` tool to search memory programmatically during implementation
+## CASS Memory
+- Use \`orch_memory\` tool with action \`context\` to get task-relevant rules and anti-patterns
+- Use \`orch_memory\` tool with action \`mark\` to give feedback on rules (\`helpful\` or \`harmful\`)
+- Use \`/memory\` command to view, search, add rules, or mark rules as harmful
+- When a CASS rule helps you, mark it: \`orch_memory\` action=mark query=<bulletId> helpful=true
+- When a rule leads you astray, mark it: \`orch_memory\` action=mark query=<bulletId> helpful=false reason="explanation"
 
 ## Rules
 - Follow the workflow in order. Do not skip steps.
@@ -236,7 +239,7 @@ For each idea, provide:
   }
 
   // Standard mode — lightweight, backward-compatible
-  return `Analyze this repository profile and suggest 3–7 high-leverage, concrete project ideas.
+  return `Analyze this repository profile and suggest 3–7 concrete, actionable project ideas.
 
 ${repoContext}
 
@@ -245,7 +248,7 @@ ${repoContext}
 - Use commits, TODOs, and prior history as secondary enrichment only.
 - Each idea should be executable in a few hours to a couple of days
 - Avoid trivial tasks — aim for meaningful improvements
-- Ground ideas in the actual repo state (don't suggest "add tests" if tests are comprehensive)
+- Ground ideas in the actual repo state (don't suggest "add tests" if tests already cover the codebase well)
 - Cover a mix of categories when possible
 - Consider: features, refactors, docs, DX, performance, reliability, security, testing
 
@@ -268,7 +271,7 @@ export function beadCreationPrompt(
 ): string {
   return `## Create Beads for Goal
 
-Take the selected goal and create a comprehensive set of beads using the br CLI.
+Take the selected goal and create beads (tasks) using the br CLI. Cover all required work.
 
 ### Goal
 ${goal}
@@ -296,22 +299,38 @@ Set dependencies between beads:
 br dep add <child-id> <parent-id>
 \`\`\`
 
+For complex beads that would take more than a few hours, break them into subtasks:
+\`\`\`
+br create "Subtask title" -t task -p <priority> --description "..."
+br dep add <subtask-id> <parent-id> --type parent-child
+\`\`\`
+
+Each subtask should be a single coherent unit of work that one agent can complete independently.
+
 ### Requirements
 - Make beads self-documenting — include background, reasoning, and anything a future agent needs
+- The beads should be so detailed that a fresh agent never needs to consult back to the original goal. Include relevant background, reasoning/justification, considerations — anything a future agent needs about goals, intentions, and thought process.
 - Each bead MUST include a \`### Files:\` section listing files to create/modify
 - Order by priority: foundations first, integration last
 - Set dependency edges so \`br ready\` returns the correct parallel groups
 - Acceptance criteria should be specific and testable
 - Include test beads where appropriate
 
-Verify with \`br list\` and \`br dep cycles\` (must show no cycles).`;
+Verify with \`br list\` and \`br dep cycles\` (must show no cycles).
+
+Use ultrathink.`;
 }
 
 // ─── Bead Refinement Prompt ──────────────────────────────────
-export function beadRefinementPrompt(): string {
+export function beadRefinementPrompt(roundNumber?: number, priorChanges?: number[]): string {
+  const roundInfo = roundNumber != null ? `This is polish round ${roundNumber + 1}.\n\n` : "";
+  const changesInfo = priorChanges && priorChanges.length > 0
+    ? `Prior rounds: ${priorChanges.map((n, i) => `Round ${i + 1}: ${n} change${n !== 1 ? "s" : ""}`).join(", ")}.\n\n`
+    : "";
+
   return `## Bead Refinement Pass
 
-Check over each bead super carefully via \`br list\` and \`br show <id>\`.
+${roundInfo}${changesInfo}Check over each bead super carefully via \`br list\` and \`br show <id>\`.
 
 ### Questions to ask for each bead:
 1. Are you sure this makes sense? Is it optimal?
@@ -320,6 +339,8 @@ Check over each bead super carefully via \`br list\` and \`br show <id>\`.
 4. Are the acceptance criteria specific and testable?
 5. Is the \`### Files:\` section accurate and complete?
 6. Are dependencies correct? Would \`br ready\` return the right parallel groups?
+7. Are any beads too large? Could they be split into 2-3 subtasks for better parallelism and clearer scope?
+7. Could a fresh agent implement this bead without ANY external context? If not, what background/reasoning is missing?
 
 ### Actions
 - Revise with \`br update <id> --description "..."\` for any improvements
@@ -327,10 +348,12 @@ Check over each bead super carefully via \`br list\` and \`br show <id>\`.
 
 ### Rules
 - DO NOT OVERSIMPLIFY. DO NOT LOSE FEATURES.
-- Include comprehensive tests in the beads.
+- Include test beads that cover the new functionality.
 - Every bead must be self-contained and self-documenting.
 - If you find missing beads, create them with \`br create\`.
-- If you find redundant beads, remove them with \`br rm <id>\`.`;
+- If you find redundant beads, remove them with \`br rm <id>\`.
+
+Use ultrathink.`;
 }
 
 // ─── Deep Planning Synthesis Prompt ──────────────────────────
@@ -341,7 +364,7 @@ ${plans.length} independent planners produced the plans above. Synthesize them i
 
 1. Identify the strongest ideas from each plan
 2. Where plans contradict, pick the approach with better justification
-3. Ensure coverage of: architecture, constraints, testing, and error handling
+3. Cover architecture, constraints, testing, and error handling
 4. Make the result detailed enough for a fresh agent to execute without guessing
 
 Then create beads via \`br create\` in bash with the synthesized plan.`;
@@ -546,7 +569,7 @@ ${goal}
 ${artifacts.map((a) => `- ${a}`).join("\n")}
 
 ### What to fix:
-1. **Remove AI slop** — generic phrases like "leverage", "robust", "comprehensive", unnecessary caveats
+1. **Remove AI slop** — generic filler ("leverage", "utilize", "comprehensive"), unnecessary caveats, hollow qualifiers
 2. **Improve clarity** — rename vague variables, simplify convoluted logic, add comments only where non-obvious
 3. **Maximize ergonomics** — make this the code YOU would want to read if coming in fresh
 4. **Consistent style** — match the project's existing conventions

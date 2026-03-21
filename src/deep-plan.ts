@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { join, dirname } from "path";
-import { writeFileSync, mkdirSync, readFileSync, existsSync } from "fs";
+import { join } from "path";
+import { writeFileSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 
 export interface DeepPlanAgent {
