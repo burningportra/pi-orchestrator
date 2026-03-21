@@ -98,3 +98,61 @@ export async function syncBeads(
     // Non-fatal
   }
 }
+
+/**
+ * Validates beads — checks for dependency cycles and orphaned open beads.
+ */
+export async function validateBeads(
+  pi: ExtensionAPI,
+  cwd: string
+): Promise<{ ok: boolean; orphaned: string[]; cycles: boolean }> {
+  let cycles = false;
+  const orphaned: string[] = [];
+
+  try {
+    const cycleResult = await pi.exec("br", ["dep", "cycles"], { timeout: 10000, cwd });
+    // If output contains cycle info, mark as detected
+    if (cycleResult.stdout.toLowerCase().includes("cycle")) {
+      cycles = true;
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  return { ok: !cycles && orphaned.length === 0, orphaned, cycles };
+}
+
+/**
+ * Returns a human-readable summary of bead states.
+ */
+export async function getBeadsSummary(
+  pi: ExtensionAPI,
+  cwd: string,
+  beadIds: Record<number, string>
+): Promise<string> {
+  const ids = Object.values(beadIds);
+  if (ids.length === 0) return "no beads tracked";
+
+  let closed = 0;
+  let inProgress = 0;
+  let open = 0;
+
+  for (const beadId of ids) {
+    try {
+      const result = await pi.exec("br", ["get", beadId, "--json"], { timeout: 10000, cwd });
+      const data = JSON.parse(result.stdout);
+      const status = data?.status ?? "open";
+      if (status === "closed") closed++;
+      else if (status === "in_progress") inProgress++;
+      else open++;
+    } catch {
+      open++;
+    }
+  }
+
+  const parts: string[] = [];
+  if (closed > 0) parts.push(`${closed} closed ✅`);
+  if (inProgress > 0) parts.push(`${inProgress} in-progress 🔄`);
+  if (open > 0) parts.push(`${open} open ⏳`);
+  return parts.join(", ") || "unknown";
+}

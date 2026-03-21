@@ -2212,6 +2212,16 @@ Before starting work, bootstrap your agent-mail session:
         // All steps done — enter guided review gates directly
         // (don't ask the agent to make another orch_review call — it may not follow through)
         {
+          // Run beads validation if beads coordination is active
+          let beadsReviewInfo = "";
+          if (state.coordinationBackend?.beads && state.beadIds) {
+            const { validateBeads, getBeadsSummary, syncBeads } = await import("./beads.js");
+            await syncBeads(pi, ctx.cwd);
+            const validation = await validateBeads(pi, ctx.cwd);
+            const summary = await getBeadsSummary(pi, ctx.cwd, state.beadIds);
+            beadsReviewInfo = `\n\n**Beads:** ${summary}${!validation.ok ? `\n⚠️ ${validation.cycles ? "Cycles detected" : ""} ${validation.orphaned.length > 0 ? `Orphaned: ${validation.orphaned.join(", ")}` : ""}` : ""}`;
+          }
+
           // Run sophia validate/review if available
           let sophiaReviewInfo = "";
           if (hasSophia && sophiaCRResult) {
@@ -2239,7 +2249,7 @@ Before starting work, bootstrap your agent-mail session:
 
           // Fall through directly into the guided gate flow
           // (reuse the sentinel handler inline instead of asking agent to call back)
-          return await runGuidedGates(state, ctx, sophiaReviewInfo);
+          return await runGuidedGates(state, ctx, beadsReviewInfo + sophiaReviewInfo);
         }
       } else {
         // Failed — retry
