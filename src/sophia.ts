@@ -1,5 +1,12 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { PlanStep } from "./types.js";
+/** Local type — sophia owns its own step interface for CR creation. */
+interface PlanStep {
+  index: number;
+  description: string;
+  acceptanceCriteria: string[];
+  artifacts: string[];
+  dependsOn?: number[];
+}
 
 // ─── Types ─────────────────────────────────────────────────────
 

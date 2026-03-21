@@ -244,7 +244,7 @@ export default function (pi: ExtensionAPI) {
           state.coordinationBackend = freshBackend;
           state.coordinationStrategy = selectStrategy(freshBackend);
         }
-        if (state.sophiaCRId && state.sophiaTaskIds) {
+        if (state.sophiaCRId) {
           // Try to rebuild full CR state from sophia if available
           if (state.coordinationBackend?.sophia) {
             const { getCRStatus } = await import("./sophia.js");
@@ -256,26 +256,18 @@ export default function (pi: ExtensionAPI) {
                   branch: crStatus.data.branch,
                   title: crStatus.data.title,
                 },
-                taskIds: new Map(
-                  Object.entries(state.sophiaTaskIds).map(([k, v]) => [Number(k), v])
-                ),
+                taskIds: new Map(),
               };
             } else {
-              // Fallback to persisted state
               sophiaCRResult = {
                 cr: { id: state.sophiaCRId, branch: state.sophiaCRBranch ?? "", title: state.sophiaCRTitle ?? "" },
-                taskIds: new Map(
-                  Object.entries(state.sophiaTaskIds).map(([k, v]) => [Number(k), v])
-                ),
+                taskIds: new Map(),
               };
             }
           } else {
-            // No sophia — use persisted values
             sophiaCRResult = {
               cr: { id: state.sophiaCRId, branch: state.sophiaCRBranch ?? "", title: state.sophiaCRTitle ?? "" },
-              taskIds: new Map(
-                Object.entries(state.sophiaTaskIds).map(([k, v]) => [Number(k), v])
-              ),
+              taskIds: new Map(),
             };
           }
         }
@@ -309,7 +301,7 @@ export default function (pi: ExtensionAPI) {
       state.sophiaCRId = sophiaCRResult.cr.id;
       state.sophiaCRBranch = sophiaCRResult.cr.branch;
       state.sophiaCRTitle = sophiaCRResult.cr.title;
-      state.sophiaTaskIds = Object.fromEntries(sophiaCRResult.taskIds) as Record<number, number>;
+      // sophiaTaskIds removed — task mapping now lives in sophia CR
     }
     // Deep copy via JSON to create a true snapshot — prevents shared array
     // references between appended entries and the live in-memory state
@@ -1215,7 +1207,7 @@ export default function (pi: ExtensionAPI) {
       ? allBeads.filter((b) => st.activeBeadIds!.includes(b.id))
       : allBeads;
     const allArtifacts = [...new Set(activeBeads.flatMap((b) => extractBeadArtifacts(b)))];
-    const goal = st.selectedGoal ?? st.plan?.goal ?? "Unknown goal";
+    const goal = st.selectedGoal ?? "Unknown goal";
     const beadResults = Object.values(st.beadResults ?? {});
     const polish = polishInstructions(goal, allArtifacts);
     const summaryText = summaryInstructions(goal, activeBeads, beadResults);
@@ -1340,7 +1332,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `## 🧪 Test Coverage Check — Round ${round}\n\nDo we have full unit test coverage without using mocks or fake stuff? What about complete e2e integration test scripts with great, detailed logging?\n\nReview the current state:\n- Goal: ${st.plan!.goal}\n- Files: ${allArtifacts.join(", ")}\n\nIf test coverage is incomplete, create a comprehensive and granular set of tasks for all missing tests, with subtasks and dependency structure, with detailed comments so the whole thing is totally self-contained and self-documenting.\n\nFor unit tests: test real behavior, not mocked interfaces. For e2e: full integration scripts with detailed logging at each stage.${callbackHint}`,
+            text: `## 🧪 Test Coverage Check — Round ${round}\n\nDo we have full unit test coverage without using mocks or fake stuff? What about complete e2e integration test scripts with great, detailed logging?\n\nReview the current state:\n- Goal: ${goal}\n- Files: ${allArtifacts.join(", ")}\n\nIf test coverage is incomplete, create a comprehensive and granular set of tasks for all missing tests, with subtasks and dependency structure, with detailed comments so the whole thing is totally self-contained and self-documenting.\n\nFor unit tests: test real behavior, not mocked interfaces. For e2e: full integration scripts with detailed logging at each stage.${callbackHint}`,
           },
         ],
         details: { iterating: true, round, testCoverage: true },
@@ -1579,12 +1571,9 @@ export default function (pi: ExtensionAPI) {
         state.beadReviewPassCounts[params.beadId] = prevPassCount + 1;
         persistState();
 
-        // Sophia checkpointing commented out for now (uses step indices)
-        // TODO: re-enable with bead ID mapping
+        // Sophia checkpointing disabled (legacy step-index API removed)
 
-        // Merge worktree changes back if this bead used a worktree
-        // (keep worktree merge logic keyed by bead ID where possible)
-        // TODO: worktree pool currently keyed by step index — will be updated later
+        // Worktree merge disabled (legacy step-index pool removed)
 
         setPhase("reviewing", ctx);
 

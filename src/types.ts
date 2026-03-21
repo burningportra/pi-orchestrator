@@ -198,42 +198,6 @@ export type IdeaCategory =
   | "security"
   | "testing";
 
-// ─── Planning ────────────────────────────────────────────────
-export interface Plan {
-  goal: string;
-  constraints: string[];
-  steps: PlanStep[];
-}
-
-export interface PlanStep {
-  index: number;
-  description: string;
-  acceptanceCriteria: string[];
-  artifacts: string[]; // file paths expected to be created/modified
-  /**
-   * Logical execution dependencies — step indices that must complete before this step runs.
-   * - omitted: implicitly depends on the previous step (sequential by default)
-   * - []: explicitly independent, can run in parallel
-   * - [1, 3]: depends on steps 1 and 3
-   */
-  dependsOn?: number[];
-}
-
-// ─── Implementation ──────────────────────────────────────────
-export interface StepResult {
-  stepIndex: number;
-  status: "success" | "partial" | "blocked";
-  summary: string;
-}
-
-// ─── Review ──────────────────────────────────────────────────
-export interface ReviewVerdict {
-  stepIndex: number;
-  passed: boolean;
-  feedback: string;
-  revisionInstructions?: string;
-}
-
 // ─── Session State ───────────────────────────────────────────
 export type OrchestratorPhase =
   | "idle"
@@ -257,19 +221,9 @@ export interface OrchestratorState {
   candidateIdeas?: CandidateIdea[];
   selectedGoal?: string;
   constraints: string[];
-  plan?: Plan;
-  stepResults: StepResult[];
-  reviewVerdicts: ReviewVerdict[];
-  currentStepIndex: number;
   retryCount: number;
   maxRetries: number;
   maxReviewPasses: number;
-  /** Tracks how many passing reviews each step has completed. Key: stepIndex, Value: pass count */
-  reviewPassCounts: Record<number, number>;
-  /** Tracks whether hit-me review agents were triggered for a step. Prevents bypass via double orch_review calls. */
-  hitMeTriggered: Record<number, boolean>;
-  /** Tracks whether hit-me review agents have completed and returned results. Only set true by the orchestrator after agents finish. */
-  hitMeCompleted: Record<number, boolean>;
   iterationRound: number;
   /** Index into the guided gates array — tracks which gate to show next */
   currentGateIndex: number;
@@ -278,19 +232,15 @@ export interface OrchestratorState {
     baseBranch: string;
     worktrees: { path: string; branch: string; stepIndex: number }[];
   };
-  hasSophia: boolean;
   sophiaCRId?: number;
   sophiaCRBranch?: string;
   sophiaCRTitle?: string;
-  sophiaTaskIds?: Record<number, number>;
 
   // ─── Coordination backend state ────────────────────────────
   /** Detected coordination backends (beads, agentMail, sophia) */
   coordinationBackend?: import("./coordination.js").CoordinationBackend;
   /** Selected coordination strategy based on available backends */
   coordinationStrategy?: import("./coordination.js").CoordinationStrategy;
-  /** Bead IDs mapped from plan step indices (when using beads coordination) */
-  beadIds?: Record<number, string>;
   /** Whether agent-mail session was bootstrapped for this orchestration */
   agentMailSessionActive?: boolean;
 
@@ -315,17 +265,10 @@ export function createInitialState(): OrchestratorState {
   return {
     phase: "idle",
     constraints: [],
-    stepResults: [],
-    reviewVerdicts: [],
-    currentStepIndex: 0,
     retryCount: 0,
     maxRetries: 3,
     maxReviewPasses: 2,
-    reviewPassCounts: {},
-    hitMeTriggered: {},
-    hitMeCompleted: {},
     iterationRound: 0,
     currentGateIndex: 0,
-    hasSophia: false,
   };
 }
