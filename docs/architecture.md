@@ -179,7 +179,7 @@ Starts on parallel launch, stops on completion.
 
 After each bead's self-review passes:
 
-- **🔥 Hit me** — 4 parallel review agents (fresh-eyes / polish / ergonomics / reality-check)
+- **🔥 Hit me** — 5 parallel review agents (fresh-eyes / polish / ergonomics / reality-check / random-exploration)
 - **✅ Looks good** — mark bead done, advance to next ready bead
 
 After hit-me agents finish, the workflow auto-advances (no re-prompt). Only the first round shows the menu.
@@ -193,8 +193,10 @@ After all steps pass, a sequential gate flow runs (each gate offers: do it / ⏭
 | 🔍 Self-review | LLM reads all new code with fresh eyes, fixes issues |
 | 👥 Peer review | 4 parallel agents: bugs, polish, ergonomics, reality-check |
 | 🧪 Test coverage | Check unit tests + e2e, create tasks for gaps |
+| ✏️ De-slopify | Remove AI writing patterns from docs (auto-skips if no docs changed) |
 | 📦 Commit | Logical groupings with detailed messages, push |
 | 🚀 Ship it | Tag, release, deploy, monitor CI, checksums |
+| 🛬 Landing | Session completion checklist: verify resumability |
 
 Every review action includes auto-commit instructions.
 
@@ -233,6 +235,18 @@ When [Sophia](https://github.com/sophialab/sophia) is initialized:
 | `polishInstructions` | De-slopify | Peer review |
 | `commitStrategyInstructions` | Logical commit grouping | Commit gate |
 | `planToTasksInstructions` | "So detailed you never consult the plan" | Task creation |
+| `freshContextRefinementPrompt` | Fresh sub-agent bead review (no anchoring) | Bead polish |
+| `computeConvergenceScore` | Weighted convergence (velocity + size + streak) | Bead polish |
+| `strategicDriftCheckInstructions` | "Do we actually have the thing?" (proactive) | Drift detection |
+| `blunderHuntInstructions` | Overshoot mismatch: "at least 80 errors" | Bead polish |
+| `randomExplorationInstructions` | Explore files NOT in the change set | Per-bead review |
+| `deSlopifyInstructions` | Remove AI writing patterns (extensible catalogue) | De-slop gate |
+| `landingChecklistInstructions` | Session completion verification | Landing gate |
+| `swarmMarchingOrders` | Canonical swarm kickoff prompt | Swarm launch |
+| `beadQualityScoringPrompt` | WHAT/WHY/HOW evaluation (1-5 each) | Bead polish |
+| `researchInvestigatePrompt` | Study external project, propose reimagined ideas | Research workflow |
+| `researchDeepenPrompt` | Push past conservative suggestions | Research workflow |
+| `researchInversionPrompt` | What can WE do that THEY cannot? | Research workflow |
 
 ## Project Structure
 
