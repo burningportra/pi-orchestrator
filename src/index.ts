@@ -1254,6 +1254,22 @@ export default function (pi: ExtensionAPI) {
       }
 
       // Now that polishing is done and user committed to implementing,
+      // create beads for each plan step (if beads backend is active)
+      let beadsInfo = "";
+      if (state.coordinationBackend?.beads) {
+        try {
+          const { createBeadsFromPlan } = await import("./beads.js");
+          const beadIds = await createBeadsFromPlan(pi, ctx.cwd, plan.steps);
+          state.beadIds = beadIds;
+          const count = Object.keys(beadIds).length;
+          if (count > 0) {
+            beadsInfo = `\n\n**Beads created:** ${count} beads for plan steps.`;
+          }
+        } catch {
+          // Non-fatal: beads creation failed silently
+        }
+      }
+
       // create Sophia CR with the FINAL plan steps
       let sophiaInfo = "";
       if (hasSophia) {
@@ -1354,7 +1370,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `**NEXT: Call \`parallel_subagents\` NOW to launch Group 1 (Steps ${firstGroup.join(", ")}).**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each step with the sub-agent's summary.\n\n---\n\nPlan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n🔄 Swarm tender active — monitoring agent health every 60s.`,
+              text: `**NEXT: Call \`parallel_subagents\` NOW to launch Group 1 (Steps ${firstGroup.join(", ")}).**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each step with the sub-agent's summary.\n\n---\n\nPlan approved! ${plan.steps.length} steps to execute.${beadsInfo}${sophiaInfo}${parallelInfo}\n\n🔄 Swarm tender active — monitoring agent health every 60s.`,
             },
           ],
           details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr, launchingParallel: true },
@@ -1363,6 +1379,14 @@ export default function (pi: ExtensionAPI) {
 
       // Sequential: start with step 1
       const firstStep = plan.steps[0];
+
+      // Mark first step's bead as in_progress
+      const firstBeadId = state.beadIds?.[firstStep.index];
+      if (firstBeadId) {
+        const { updateBeadStatus } = await import("./beads.js");
+        await updateBeadStatus(pi, ctx.cwd, firstBeadId, "in_progress");
+      }
+
       const implInstr = implementerInstructions(
         firstStep,
         state.repoProfile!,
@@ -1373,7 +1397,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `**NEXT: Implement Step 1 NOW, then call \`orch_review\` when done.**\n\nPlan approved! ${plan.steps.length} steps to execute.${sophiaInfo}${parallelInfo}\n\n---\n\n${implInstr}`,
+            text: `**NEXT: Implement Step 1 NOW, then call \`orch_review\` when done.**\n\nPlan approved! ${plan.steps.length} steps to execute.${beadsInfo}${sophiaInfo}${parallelInfo}\n\n---\n\n${implInstr}`,
           },
         ],
         details: { approved: true, plan, parallelGroups: groups, sophiaCR: sophiaCRResult?.cr },
@@ -1757,6 +1781,14 @@ export default function (pi: ExtensionAPI) {
       persistState();
 
       if (params.verdict === "pass") {
+        // Update bead status to closed if beads coordination is active
+        const passBeadId = state.beadIds?.[params.stepIndex];
+        if (passBeadId) {
+          const { updateBeadStatus, syncBeads } = await import("./beads.js");
+          await updateBeadStatus(pi, ctx.cwd, passBeadId, "closed");
+          await syncBeads(pi, ctx.cwd);
+        }
+
         // Checkpoint via sophia if available
         if (hasSophia && sophiaCRResult) {
           const taskId = sophiaCRResult.taskIds.get(params.stepIndex);
@@ -2088,6 +2120,13 @@ export default function (pi: ExtensionAPI) {
             state.retryCount = 0;
             setPhase("implementing", ctx);
             persistState();
+
+            // Mark next step's bead as in_progress
+            const nextBeadId = state.beadIds?.[actualNextStep.index];
+            if (nextBeadId) {
+              const { updateBeadStatus } = await import("./beads.js");
+              await updateBeadStatus(pi, ctx.cwd, nextBeadId, "in_progress");
+            }
 
             const implInstr = implementerInstructions(
               actualNextStep,
