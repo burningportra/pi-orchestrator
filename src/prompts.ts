@@ -942,6 +942,49 @@ ${description}
 \`\`\``;
 }
 
+// ─── Research & Reimagine Workflow ───────────────────────────
+// Derived from Agent Flywheel Section 6: "Major Features: Research and Reimagine"
+/**
+ * Step 1: Investigate an external project and propose reimagined ideas.
+ */
+export function researchInvestigatePrompt(externalUrl: string, projectName: string, cwd: string): string {
+  return `## Research & Reimagine — Step 1: Investigate
+
+Clone or scrape ${externalUrl} and investigate it thoroughly. Look for useful ideas that we can take and reimagine in highly accretive ways on top of ${projectName}'s existing capabilities.
+
+Write up a proposal document that:
+1. Summarizes the external project's architecture and key ideas
+2. Identifies the strongest patterns and design decisions
+3. Proposes how to reimagine each through the lens of ${projectName}'s unique strengths
+4. Creates something neither project could achieve alone
+
+Make the proposal genuinely innovative, not a shallow port. Use ultrathink.
+
+cd ${cwd}`;
+}
+
+/**
+ * Step 2: Iterative deepening — push past conservative initial suggestions.
+ */
+export function researchDeepenPrompt(): string {
+  return `## Research & Reimagine — Step 2: Deepen
+
+That's a decent start, but you barely scratched the surface. Go way deeper and think more profoundly, with more ambition and boldness. Come up with ideas that are legitimately "radically innovative" and disruptive because they are so compelling, useful, and accretive.
+
+Push past the conservative initial suggestions. Use ultrathink.`;
+}
+
+/**
+ * Step 3: Inversion analysis — what can WE do that THEY cannot?
+ */
+export function researchInversionPrompt(projectName: string, externalName: string): string {
+  return `## Research & Reimagine — Step 3: Inversion Analysis
+
+Now "invert" the analysis: what are things that ${projectName} can do because of its unique primitives/capabilities that ${externalName} simply could never do even if they wanted to, because they are working from less rich primitives?
+
+This surfaces the highest-value integration points: capabilities that are genuinely novel rather than reimplementations. Use ultrathink.`;
+}
+
 // ─── Goal Refinement Prompt ──────────────────────────────────
 export function goalRefinementPrompt(goal: string, profile: RepoProfile): string {
   return `## Goal Refinement

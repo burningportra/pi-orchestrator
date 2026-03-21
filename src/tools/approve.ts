@@ -192,6 +192,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
           `🔍 Polish again (round ${round + 1})`,
           `🧠 Fresh-agent refinement (round ${round + 1})`,
           `🔨 Blunder hunt (5x overshoot)`,
+          `🔗 Dedup check`,
         );
         // Cross-model review available after at least 1 polish round
         if (round >= 1) {
@@ -264,6 +265,38 @@ export function registerApproveTool(oc: OrchestratorContext) {
             },
           ],
           details: { approved: false, refining: true, blunderHunt: true, beadCount: beads.length, polishRound: round },
+        };
+      }
+
+      if (choice?.startsWith("🔗")) {
+        // Bead deduplication check
+        // Flywheel Section 5: "Check over ALL open beads. Make sure none are duplicative."
+        oc.setPhase("refining_beads", ctx);
+        oc.persistState();
+        await syncBeads(oc.pi, ctx.cwd);
+
+        const dedupPrompt = `## Bead Deduplication Check
+
+Check over ALL open beads via \`br list --json\`. Make sure none are duplicative or excessively overlapping.
+
+For each pair of similar beads:
+1. Identify which is the better "survivor" (richer description, better test specs, higher priority)
+2. Merge by updating the survivor with the best content from both
+3. Close the duplicate with \`br update <id> --status closed\`
+4. Transfer all dependencies from the closed bead to the survivor
+
+Report what you found and what you merged. Use ultrathink.
+
+cd ${ctx.cwd}`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `**NEXT: Run the dedup check, then call \`orch_approve_beads\` again.**\n\n${dedupPrompt}`,
+            },
+          ],
+          details: { approved: false, refining: true, dedup: true, beadCount: beads.length, polishRound: round },
         };
       }
 
