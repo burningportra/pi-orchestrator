@@ -38,10 +38,8 @@ import {
   isSophiaAvailable,
   isSophiaInitialized,
   createCRFromPlan,
-  analyzeParallelGroups,
   mergeWorktreeChanges,
   type PlanToCRResult,
-  type ParallelAnalysis,
 } from "./sophia.js";
 import {
   detectCoordinationBackend,
@@ -57,7 +55,6 @@ import {
   ensureAgentMailProject as _ensureAgentMailProject,
   amRpcCmd,
   agentMailTaskPreamble,
-  groupArtifactsAreDisjoint,
   type ExecFn,
 } from "./agent-mail.js";
 
@@ -162,18 +159,6 @@ export default function (pi: ExtensionAPI) {
   let hasSophia = false;
   let sophiaCRResult: PlanToCRResult | undefined;
   let worktreePool: WorktreePool | undefined;
-  let parallelAnalysis: ParallelAnalysis | undefined;
-  /** Tracks which groups used same-dir mode (agent-mail reservations, no worktrees) */
-  let sameDirGroups = new Set<number>();
-
-  /** Check if a step belongs to a same-dir group (no worktree merge needed) */
-  function isSameDirStep(stepIndex: number): boolean {
-    if (!parallelAnalysis || sameDirGroups.size === 0) return false;
-    for (const gi of sameDirGroups) {
-      if (parallelAnalysis.groups[gi]?.includes(stepIndex)) return true;
-    }
-    return false;
-  }
   let swarmTender: import("./tender.js").SwarmTender | undefined;
 
   function setPhase(phase: OrchestratorPhase, ctx: ExtensionContext) {

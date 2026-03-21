@@ -1,4 +1,4 @@
-import type { PlanStep } from "./types.js";
+
 
 /**
  * Minimal exec function signature — avoids depending on the full ExtensionAPI.
@@ -129,19 +129,3 @@ ${amRpcCmd("release_file_reservations", {
 `;
 }
 
-/**
- * Check whether all steps in a parallel group have disjoint artifact sets.
- * If true, agents can safely work in the same directory with file reservations.
- */
-export function groupArtifactsAreDisjoint(group: number[], steps: PlanStep[]): boolean {
-  const seen = new Set<string>();
-  for (const idx of group) {
-    const step = steps.find((s) => s.index === idx);
-    if (!step) return false;
-    for (const artifact of step.artifacts) {
-      if (seen.has(artifact)) return false;
-      seen.add(artifact);
-    }
-  }
-  return true;
-}
