@@ -162,8 +162,12 @@ export function registerApproveTool(oc: OrchestratorContext) {
         options.push(
           startLabel,
           `🔍 Polish again (round ${round + 1})`,
-          "❌ Reject"
         );
+        // Cross-model review available after at least 1 polish round
+        if (round >= 1) {
+          options.push("🔀 Cross-model review");
+        }
+        options.push("❌ Reject");
       }
 
       const choice = await ctx.ui.select(

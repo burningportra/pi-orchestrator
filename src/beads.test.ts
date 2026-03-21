@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   readBeads,
@@ -209,5 +209,179 @@ describe("getBeadsSummary", () => {
 
   it("returns 'no beads tracked' for empty array", () => {
     expect(getBeadsSummary([])).toBe("no beads tracked");
+  });
+});
+
+// ─── detectBv ────────────────────────────────────────────────
+
+describe("detectBv", () => {
+  beforeEach(() => resetBvCache());
+
+  it("returns true when bv is found", async () => {
+    const pi = makePi(async () => ({ code: 0, stdout: "/usr/local/bin/bv\n", stderr: "" }));
+    expect(await detectBv(pi)).toBe(true);
+  });
+
+  it("returns false when bv is not found", async () => {
+    const pi = makePi(async () => { throw new Error("not found"); });
+    expect(await detectBv(pi)).toBe(false);
+  });
+
+  it("caches the result", async () => {
+    const pi = makePi(async () => ({ code: 0, stdout: "/usr/local/bin/bv\n", stderr: "" }));
+    await detectBv(pi);
+    await detectBv(pi);
+    expect((pi as any).exec).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── bvInsights ──────────────────────────────────────────────
+
+describe("bvInsights", () => {
+  beforeEach(() => resetBvCache());
+
+  it("parses bv --robot-insights output", async () => {
+    const insightsData = {
+      Bottlenecks: [{ ID: "bead-x", Value: 8.5 }],
+      Cycles: null,
+      Orphans: [],
+      Articulation: ["bead-y"],
+      Slack: [{ ID: "bead-z", Value: 2 }],
+    };
+    const pi = makePi(async (_cmd, args) => {
+      if (args[0] === "bv") return { code: 0, stdout: "/usr/local/bin/bv", stderr: "" };
+      return { code: 0, stdout: JSON.stringify(insightsData), stderr: "" };
+    });
+    // Mock: which bv → found, bv --robot-insights → JSON
+    const pi2 = {
+      exec: vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "which") return { code: 0, stdout: "/usr/local/bin/bv\n", stderr: "" };
+        return { code: 0, stdout: JSON.stringify(insightsData), stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    const result = await bvInsights(pi2, CWD);
+    expect(result).not.toBeNull();
+    expect(result!.Bottlenecks).toHaveLength(1);
+    expect(result!.Bottlenecks[0].ID).toBe("bead-x");
+    expect(result!.Articulation).toEqual(["bead-y"]);
+  });
+
+  it("returns null when bv is unavailable", async () => {
+    const pi = makePi(async () => { throw new Error("not found"); });
+    expect(await bvInsights(pi, CWD)).toBeNull();
+  });
+});
+
+// ─── bvNext ──────────────────────────────────────────────────
+
+describe("bvNext", () => {
+  beforeEach(() => resetBvCache());
+
+  it("returns the optimal next bead pick", async () => {
+    const pickData = {
+      id: "bead-abc",
+      title: "Do the thing",
+      score: 0.85,
+      reasons: ["high unblock potential"],
+      unblocks: ["bead-def"],
+    };
+    const pi = {
+      exec: vi.fn(async (cmd: string) => {
+        if (cmd === "which") return { code: 0, stdout: "/usr/local/bin/bv\n", stderr: "" };
+        return { code: 0, stdout: JSON.stringify(pickData), stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    const result = await bvNext(pi, CWD);
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe("bead-abc");
+    expect(result!.score).toBe(0.85);
+    expect(result!.unblocks).toEqual(["bead-def"]);
+  });
+
+  it("returns null when no actionable items", async () => {
+    const pi = {
+      exec: vi.fn(async (cmd: string) => {
+        if (cmd === "which") return { code: 0, stdout: "/usr/local/bin/bv\n", stderr: "" };
+        return { code: 0, stdout: "", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    expect(await bvNext(pi, CWD)).toBeNull();
+  });
+
+  it("returns null when bv unavailable", async () => {
+    const pi = makePi(async () => { throw new Error("not found"); });
+    expect(await bvNext(pi, CWD)).toBeNull();
+  });
+});
+
+// ─── validateBeads with bv ───────────────────────────────────
+
+describe("validateBeads with bv insights", () => {
+  beforeEach(() => resetBvCache());
+
+  it("uses bv insights for validation when available", async () => {
+    const insightsData = {
+      Bottlenecks: [{ ID: "bead-hot", Value: 10.2 }],
+      Cycles: null,
+      Orphans: [],
+      Articulation: ["bead-critical"],
+      Slack: [],
+    };
+    const pi = {
+      exec: vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "which") return { code: 0, stdout: "/usr/local/bin/bv\n", stderr: "" };
+        if (cmd === "bv") return { code: 0, stdout: JSON.stringify(insightsData), stderr: "" };
+        return { code: 0, stdout: "[]", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    const result = await validateBeads(pi, CWD);
+    expect(result.ok).toBe(true);
+    expect(result.cycles).toBe(false);
+    expect(result.warnings).toContain("bead bead-hot is a bottleneck (betweenness=10.2) — consider splitting");
+    expect(result.warnings).toContain("bead bead-critical is a single point of failure in the dep graph");
+  });
+
+  it("detects cycles from bv insights", async () => {
+    const insightsData = {
+      Bottlenecks: [],
+      Cycles: [["a", "b", "a"]],
+      Orphans: ["orphan-1"],
+      Articulation: [],
+      Slack: [],
+    };
+    const pi = {
+      exec: vi.fn(async (cmd: string) => {
+        if (cmd === "which") return { code: 0, stdout: "/usr/local/bin/bv\n", stderr: "" };
+        if (cmd === "bv") return { code: 0, stdout: JSON.stringify(insightsData), stderr: "" };
+        return { code: 0, stdout: "[]", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    const result = await validateBeads(pi, CWD);
+    expect(result.ok).toBe(false);
+    expect(result.cycles).toBe(true);
+    expect(result.orphaned).toEqual(["orphan-1"]);
+  });
+
+  it("falls back to manual detection when bv unavailable", async () => {
+    const pi = {
+      exec: vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "which") throw new Error("not found");
+        // br dep cycles
+        if (cmd === "br" && args[0] === "dep" && args[1] === "cycles") {
+          return { code: 0, stdout: "All dependency checks passed.", stderr: "" };
+        }
+        // br list --json
+        return { code: 0, stdout: JSON.stringify([]), stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    const result = await validateBeads(pi, CWD);
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
   });
 });
