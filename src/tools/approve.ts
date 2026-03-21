@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { OrchestratorContext, Bead } from "../types.js";
-import { implementerInstructions } from "../prompts.js";
+import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 
 // ─── Module-level bead snapshot for change detection ─────────
@@ -80,6 +80,11 @@ export function registerApproveTool(oc: OrchestratorContext) {
           const changes = countChanges(_lastBeadSnapshot, currentSnapshot);
           oc.state.polishChanges.push(changes);
         }
+        // Track output size (total description length) for convergence scoring
+        const totalDescSize = beads.reduce((sum, b) => sum + b.description.length, 0);
+        if (!oc.state.polishOutputSizes) oc.state.polishOutputSizes = [];
+        oc.state.polishOutputSizes.push(totalDescSize);
+
         oc.state.polishRound++;
         _lastBeadSnapshot = currentSnapshot;
 
@@ -146,6 +151,14 @@ export function registerApproveTool(oc: OrchestratorContext) {
         ? `\n✅ ${beads.length}/${beads.length} beads pass quality checks`
         : `\n⚠️ ${beads.length - new Set(qualityPreview.failures.map((f) => f.beadId)).size}/${beads.length} pass — ${new Set(qualityPreview.failures.map((f) => f.beadId)).size} issues found`;
 
+      // ── Compute convergence score ──
+      const convergenceScore = oc.state.polishChanges.length >= 3
+        ? computeConvergenceScore(oc.state.polishChanges, oc.state.polishOutputSizes)
+        : undefined;
+      if (convergenceScore !== undefined) {
+        oc.state.polishConvergenceScore = convergenceScore;
+      }
+
       // ── Build UI options based on polish state ──
       const round = oc.state.polishRound;
       const maxReached = round >= MAX_POLISH_ROUNDS;
@@ -155,8 +168,11 @@ export function registerApproveTool(oc: OrchestratorContext) {
       const changesInfo = oc.state.polishChanges.length > 0
         ? `\n📊 Polish history: ${oc.state.polishChanges.map((n, i) => `R${i + 1}: ${n} change${n !== 1 ? "s" : ""}`).join(", ")}`
         : "";
+      const convergenceInfo = convergenceScore !== undefined
+        ? `\n📈 Convergence: ${(convergenceScore * 100).toFixed(0)}%${convergenceScore >= 0.90 ? " (diminishing returns)" : convergenceScore >= 0.75 ? " (ready to implement)" : ""}`
+        : "";
       const roundHeader = round > 0
-        ? `\n🔄 Polish round ${round}${changesInfo}${converged ? "\n✅ Steady-state reached (0 changes for 2 consecutive rounds)" : ""}`
+        ? `\n🔄 Polish round ${round}${changesInfo}${convergenceInfo}${converged ? "\n✅ Steady-state reached (0 changes for 2 consecutive rounds)" : ""}`
         : "";
 
       const options: string[] = [];
@@ -168,10 +184,13 @@ export function registerApproveTool(oc: OrchestratorContext) {
       } else {
         const startLabel = converged
           ? "▶️  Start implementing (steady-state reached ✅)"
+          : convergenceScore !== undefined && convergenceScore >= 0.75
+          ? `▶️  Start implementing (convergence ${(convergenceScore * 100).toFixed(0)}% ✅)`
           : "▶️  Start implementing";
         options.push(
           startLabel,
           `🔍 Polish again (round ${round + 1})`,
+          `🧠 Fresh-agent refinement (round ${round + 1})`,
         );
         // Cross-model review available after at least 1 polish round
         if (round >= 1) {
@@ -197,6 +216,30 @@ export function registerApproveTool(oc: OrchestratorContext) {
             },
           ],
           details: { approved: false, refining: true, beadCount: beads.length, polishRound: round },
+        };
+      }
+
+      if (choice?.startsWith("🧠 Fresh-agent")) {
+        // Fresh-context refinement: spawn a sub-agent with NO prior context
+        // Flywheel Section 5: "Fresh conversations prevent the model from anchoring on its own prior output."
+        oc.setPhase("refining_beads", ctx);
+        oc.persistState();
+        await syncBeads(oc.pi, ctx.cwd);
+
+        const freshPrompt = freshContextRefinementPrompt(ctx.cwd, oc.state.selectedGoal!, round);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `**NEXT: Spawn a fresh sub-agent for bead refinement, then call \`orch_approve_beads\` again.**\n\nUse \`subagent\` with these parameters:\n\`\`\`json\n${JSON.stringify({
+                name: `fresh-refine-r${round + 1}`,
+                task: freshPrompt,
+                interactive: false,
+                cwd: ctx.cwd,
+              }, null, 2)}\n\`\`\`\n\nThe sub-agent has NO prior conversation context — this is deliberate. Fresh eyes catch what anchored reviewers miss.\n\nAfter the sub-agent completes, call \`orch_approve_beads\` to see the changes.`,
+            },
+          ],
+          details: { approved: false, refining: true, freshAgent: true, beadCount: beads.length, polishRound: round },
         };
       }
 

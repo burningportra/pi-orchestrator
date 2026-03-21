@@ -356,6 +356,76 @@ ${roundInfo}${changesInfo}Check over each bead super carefully via \`br list\` a
 Use ultrathink.`;
 }
 
+/**
+ * Fresh-context refinement prompt for sub-agent bead review.
+ * Derived from Agent Flywheel Section 5: "Check your beads N times, implement once."
+ * Fresh conversations prevent the model from anchoring on its own prior output.
+ */
+export function freshContextRefinementPrompt(cwd: string, goal: string, roundNumber: number): string {
+  return `## Fresh-Context Bead Refinement (Round ${roundNumber + 1})
+
+You are reviewing beads for a project with NO prior context. This is deliberate — fresh eyes catch what anchored reviewers miss.
+
+**Goal:** ${goal}
+
+### Instructions
+1. Run \`br list --json\` to read all open beads
+2. For each bead, evaluate:
+   - Does it make sense as a self-contained work unit?
+   - Is the description detailed enough for a fresh agent to implement without guessing?
+   - Are acceptance criteria specific and testable?
+   - Are dependencies correct?
+   - Could the architecture be improved?
+3. Make improvements directly via \`br update <id> --description "..."\`
+4. Check for missing beads and create them with \`br create\`
+5. Run \`br dep cycles\` to verify no cycles
+
+### Rules
+- DO NOT OVERSIMPLIFY. DO NOT LOSE FEATURES OR FUNCTIONALITY.
+- Every bead must be self-contained and self-documenting.
+- Include comprehensive test expectations in each bead.
+
+Use ultrathink.
+
+cd ${cwd}`;
+}
+
+/**
+ * Compute convergence score (0-1) from polish round history.
+ * Weights: change velocity (40%), output size delta (30%), consecutive zero-change rounds (30%).
+ * Score ≥ 0.75 means ready to implement; ≥ 0.90 means diminishing returns.
+ */
+export function computeConvergenceScore(
+  changes: number[],
+  outputSizes?: number[]
+): number {
+  if (changes.length < 3) return 0;
+
+  // Change velocity: ratio of recent changes to peak changes
+  const peak = Math.max(...changes, 1);
+  const recent = changes[changes.length - 1];
+  const velocityScore = 1 - (recent / peak);
+
+  // Output size delta: are outputs shrinking? (convergence signal)
+  let sizeScore = 0.5; // neutral if no data
+  if (outputSizes && outputSizes.length >= 2) {
+    const lastTwo = outputSizes.slice(-2);
+    const delta = Math.abs(lastTwo[1] - lastTwo[0]);
+    const maxSize = Math.max(...outputSizes, 1);
+    sizeScore = 1 - Math.min(delta / maxSize, 1);
+  }
+
+  // Consecutive zero-change rounds
+  let zeroStreak = 0;
+  for (let i = changes.length - 1; i >= 0; i--) {
+    if (changes[i] === 0) zeroStreak++;
+    else break;
+  }
+  const zeroScore = Math.min(zeroStreak / 2, 1); // 2 consecutive zeros = 1.0
+
+  return velocityScore * 0.4 + sizeScore * 0.3 + zeroScore * 0.3;
+}
+
 // ─── Deep Planning Synthesis Prompt ──────────────────────────
 export function synthesisInstructions(plans: { name: string; model: string; plan: string }[]): string {
   return `## Synthesis Instructions

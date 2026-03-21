@@ -290,6 +290,10 @@ export interface OrchestratorState {
   polishChanges: number[];
   /** True when 0 changes detected for 2 consecutive rounds. */
   polishConverged: boolean;
+  /** Output size (chars) per refinement round for convergence tracking. */
+  polishOutputSizes?: number[];
+  /** Convergence score (0-1) computed after 3+ rounds. */
+  polishConvergenceScore?: number;
 }
 
 export function createInitialState(): OrchestratorState {
