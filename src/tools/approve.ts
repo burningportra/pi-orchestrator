@@ -190,6 +190,59 @@ export function registerApproveTool(oc: OrchestratorContext) {
         };
       }
 
+      if (choice?.startsWith("🔀")) {
+        // Cross-model review: send beads to alternative model
+        const { crossModelBeadReview } = await import("../bead-review.js");
+        const reviewResult = await crossModelBeadReview(
+          oc.pi, ctx.cwd, beads, oc.state.selectedGoal!, undefined
+        );
+
+        if (reviewResult.suggestions.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `**Cross-model review (${reviewResult.model}):** No specific suggestions — beads look solid.\n\nCall \`orch_approve_beads\` again to continue.`,
+            }],
+            details: { approved: false, crossModelReview: true, model: reviewResult.model },
+          };
+        }
+
+        const suggestionsText = reviewResult.suggestions.map((s, i) => `${i + 1}. ${s}`).join("\n");
+        const applyChoice = await ctx.ui.select(
+          `**Cross-model review (${reviewResult.model}) — ${reviewResult.suggestions.length} suggestions:**\n\n${suggestionsText}`,
+          [
+            "✅ Apply suggestions (send to next polish round)",
+            "⏭️  Ignore and continue",
+          ]
+        );
+
+        if (applyChoice?.startsWith("✅")) {
+          // Inject suggestions into next polish round — increment polishRound, set phase to refining
+          oc.state.polishRound++;
+          oc.setPhase("refining_beads", ctx);
+          oc.persistState();
+          _lastBeadSnapshot = snapshotBeads(beads);
+
+          const injectedPrompt = beadRefinementPrompt(oc.state.polishRound - 1, oc.state.polishChanges);
+          return {
+            content: [{
+              type: "text",
+              text: `**NEXT: Apply these cross-model suggestions, then call \`orch_approve_beads\` again.**\n\n### Cross-model suggestions to apply:\n${suggestionsText}\n\n---\n\n${injectedPrompt}\n\n---\n\nCurrent beads:\n\n${beadListText}`,
+            }],
+            details: { approved: false, refining: true, crossModelApplied: true, beadCount: beads.length, polishRound: oc.state.polishRound },
+          };
+        }
+
+        // Ignored — return to approval screen
+        return {
+          content: [{
+            type: "text",
+            text: "Cross-model suggestions ignored. Call `orch_approve_beads` again to continue.",
+          }],
+          details: { approved: false, crossModelReview: true, ignored: true },
+        };
+      }
+
       if (!choice || choice.startsWith("❌")) {
         oc.orchestratorActive = false;
         oc.setPhase("idle", ctx);
