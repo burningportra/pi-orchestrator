@@ -1,69 +1,105 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { PlanStep } from "./types.js";
+import type { Bead } from "./types.js";
 
 // ─── Beads Integration ────────────────────────────────────────
 
 /**
- * Creates beads for each plan step and sets up dependency edges.
- * Returns a map of stepIndex → beadId.
+ * Reads all beads via `br list --json`.
  */
-export async function createBeadsFromPlan(
+export async function readBeads(
+  pi: ExtensionAPI,
+  cwd: string
+): Promise<Bead[]> {
+  try {
+    const result = await pi.exec("br", ["list", "--json"], { timeout: 10000, cwd });
+    const data = JSON.parse(result.stdout);
+    return (data?.issues ?? []) as Bead[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Reads ready beads (unblocked) via `br ready --json`.
+ */
+export async function readyBeads(
+  pi: ExtensionAPI,
+  cwd: string
+): Promise<Bead[]> {
+  try {
+    const result = await pi.exec("br", ["ready", "--json"], { timeout: 10000, cwd });
+    const stdout = result.stdout.trim();
+    if (!stdout) return [];
+    const data = JSON.parse(stdout);
+    return (data?.issues ?? []) as Bead[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Gets a single bead by ID via `br show <id> --json`.
+ */
+export async function getBeadById(
   pi: ExtensionAPI,
   cwd: string,
-  steps: PlanStep[]
-): Promise<Record<number, string>> {
-  const beadIds: Record<number, string> = {};
+  id: string
+): Promise<Bead | null> {
+  try {
+    const result = await pi.exec("br", ["show", id, "--json"], { timeout: 10000, cwd });
+    const data = JSON.parse(result.stdout);
+    return (data as Bead) ?? null;
+  } catch {
+    return null;
+  }
+}
 
-  // Create a bead for each step
-  for (const step of steps) {
-    const acText = step.acceptanceCriteria.length > 0
-      ? step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")
-      : "See plan step description.";
-    const description = `Acceptance criteria:\n${acText}`;
-    const title = `Step ${step.index}: ${step.description}`;
+/**
+ * Lists dependency IDs for a bead via `br dep list <id>`.
+ */
+export async function beadDeps(
+  pi: ExtensionAPI,
+  cwd: string,
+  id: string
+): Promise<string[]> {
+  try {
+    const result = await pi.exec("br", ["dep", "list", id], { timeout: 10000, cwd });
+    const lines = result.stdout.trim().split("\n").filter(Boolean);
+    // Each line typically contains a bead ID; extract first token
+    return lines.map((line) => line.trim().split(/\s+/)[0]).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
 
-    try {
-      const result = await pi.exec("br", [
-        "create", title,
-        "-t", "feature",
-        "-p", "1",
-        "--description", description,
-      ], { timeout: 10000, cwd });
+/**
+ * Extracts artifact file paths from a bead's description.
+ * Looks for a '### Files:' section or lines starting with '- src/', '- lib/', etc.
+ */
+export function extractArtifacts(bead: Bead): string[] {
+  const desc = bead.description ?? "";
+  const paths: string[] = [];
 
-      // Parse bead ID from output: "✓ Created <id>: <title>"
-      const match = result.stdout.match(/Created\s+([^\s:]+)/);
-      if (match) {
-        beadIds[step.index] = match[1];
+  // Match lines like "- src/foo.ts" or "- lib/bar.js"
+  const linePattern = /^[-*]\s+((?:src|lib|test|tests|dist|docs)\/\S+)/gm;
+  let match: RegExpExecArray | null;
+  while ((match = linePattern.exec(desc)) !== null) {
+    paths.push(match[1]);
+  }
+
+  // Also check for a ### Files: section with indented paths
+  const filesSection = desc.match(/###\s*Files:\s*\n([\s\S]*?)(?:\n###|\n\n|$)/);
+  if (filesSection) {
+    const sectionLines = filesSection[1].split("\n");
+    for (const line of sectionLines) {
+      const trimmed = line.replace(/^[-*\s]+/, "").trim();
+      if (trimmed && /^[\w./]/.test(trimmed) && trimmed.includes("/")) {
+        if (!paths.includes(trimmed)) paths.push(trimmed);
       }
-    } catch {
-      // Non-fatal: skip this bead
     }
   }
 
-  // Add dependency edges
-  for (const step of steps) {
-    if (!step.dependsOn || step.dependsOn.length === 0) continue;
-    const childBeadId = beadIds[step.index];
-    if (!childBeadId) continue;
-
-    for (const parentStepIndex of step.dependsOn) {
-      const parentBeadId = beadIds[parentStepIndex];
-      if (!parentBeadId) continue;
-      try {
-        await pi.exec("br", ["dep", "add", childBeadId, parentBeadId], {
-          timeout: 10000,
-          cwd,
-        });
-      } catch {
-        // Non-fatal: skip this dependency
-      }
-    }
-  }
-
-  // Persist
-  await syncBeads(pi, cwd);
-
-  return beadIds;
+  return paths;
 }
 
 /**
@@ -111,7 +147,6 @@ export async function validateBeads(
 
   try {
     const cycleResult = await pi.exec("br", ["dep", "cycles"], { timeout: 10000, cwd });
-    // If output contains cycle info, mark as detected
     if (cycleResult.stdout.toLowerCase().includes("cycle")) {
       cycles = true;
     }
@@ -125,34 +160,26 @@ export async function validateBeads(
 /**
  * Returns a human-readable summary of bead states.
  */
-export async function getBeadsSummary(
-  pi: ExtensionAPI,
-  cwd: string,
-  beadIds: Record<number, string>
-): Promise<string> {
-  const ids = Object.values(beadIds);
-  if (ids.length === 0) return "no beads tracked";
+export function getBeadsSummary(beads: Bead[]): string {
+  if (beads.length === 0) return "no beads tracked";
 
   let closed = 0;
   let inProgress = 0;
   let open = 0;
+  let deferred = 0;
 
-  for (const beadId of ids) {
-    try {
-      const result = await pi.exec("br", ["get", beadId, "--json"], { timeout: 10000, cwd });
-      const data = JSON.parse(result.stdout);
-      const status = data?.status ?? "open";
-      if (status === "closed") closed++;
-      else if (status === "in_progress") inProgress++;
-      else open++;
-    } catch {
-      open++;
-    }
+  for (const bead of beads) {
+    const status = bead.status ?? "open";
+    if (status === "closed") closed++;
+    else if (status === "in_progress") inProgress++;
+    else if (status === "deferred") deferred++;
+    else open++;
   }
 
   const parts: string[] = [];
   if (closed > 0) parts.push(`${closed} closed ✅`);
   if (inProgress > 0) parts.push(`${inProgress} in-progress 🔄`);
   if (open > 0) parts.push(`${open} open ⏳`);
+  if (deferred > 0) parts.push(`${deferred} deferred ⏸️`);
   return parts.join(", ") || "unknown";
 }

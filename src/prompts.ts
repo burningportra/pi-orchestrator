@@ -1,4 +1,4 @@
-import type { RepoProfile, PlanStep, ScanResult, StepResult } from "./types.js";
+import type { RepoProfile, Bead, BeadResult, ScanResult } from "./types.js";
 
 // ─── Repo Profile Formatting ────────────────────────────────
 export function formatRepoProfile(profile: RepoProfile, scanResult?: ScanResult): string {
@@ -82,7 +82,8 @@ export function orchestratorSystemPrompt(
 The orchestrator uses **beads** for task lifecycle and **agent-mail** for inter-agent messaging and file reservations.
 
 ### Beads (task tracking)
-- Plan steps are converted to beads via \`br create\` with dependency edges via \`br dep add\`
+- Create beads via \`br create "Title" -t task -p <priority> --description "..."\` in bash
+- Set dependencies via \`br dep add <child-id> <parent-id>\`
 - Bead status tracks implementation: open → in_progress → closed
 - \`br sync --flush-only\` persists state to .beads/ (git-visible JSONL)
 - Use \`br ready\` to see actionable (unblocked) tasks
@@ -95,27 +96,27 @@ The orchestrator uses **beads** for task lifecycle and **agent-mail** for inter-
 - Release reservations when done: \`release_file_reservations(project_key, agent_name)\`
 
 ### Parallel Execution
-When plan steps have disjoint artifacts and agent-mail is available, agents work in the **same directory** with file reservations (no worktrees needed).
-When artifacts overlap, fall back to git worktree isolation.
+When beads have disjoint files and agent-mail is available, agents work in the **same directory** with file reservations (no worktrees needed).
+When files overlap, fall back to git worktree isolation.
 ${hasSophia ? "\nSophia is also available as a secondary backend for CR/task management." : ""}`;
   } else if (hasSophia) {
     coordinationSection = `
 ## Sophia Integration
-The orchestrator uses Sophia for change request and task management. When \`orch_plan\` is approved:
-- A Sophia CR is created automatically with tasks matching plan steps
+The orchestrator uses Sophia for change request and task management. When beads are created:
+- A Sophia CR is created automatically with tasks matching beads
 - Use \`sophia cr task done <crId> <taskId> --commit-type feat --from-contract\` to checkpoint completed tasks
-- After all steps, \`sophia cr validate\` and \`sophia cr review\` run automatically
+- After all beads, \`sophia cr validate\` and \`sophia cr review\` run automatically
 
 ## Parallel Execution with Worktree Isolation
-When the plan has independent steps (no shared artifacts), use \`parallel_subagents\` with git worktree isolation:
+When beads are independent (no shared files), use \`parallel_subagents\` with git worktree isolation:
 
-1. The orchestrator creates a **WorktreePool** — each parallel step gets its own git worktree checkout
+1. The orchestrator creates a **WorktreePool** — each parallel bead gets its own git worktree checkout
 2. For each parallel group, spawn sub-agents via \`parallel_subagents\`, passing the worktree path as the working directory
-3. Each sub-agent works in isolation — no file conflicts between parallel steps
+3. Each sub-agent works in isolation — no file conflicts between parallel beads
 4. After all agents in a group complete, worktree changes are merged back to the main branch sequentially
 5. Worktrees are cleaned up after merge
 
-The plan result shows which step groups can run in parallel and provides worktree paths.
+Use \`br ready\` to determine which beads can run in parallel.
 If worktree creation fails, the orchestrator falls back to sequential execution in the shared directory.`;
   }
 
@@ -125,21 +126,21 @@ If worktree creation fails, the orchestrator falls back to sequential execution 
 1. Call \`orch_profile\` to scan the repository
 2. Call \`orch_discover\` to generate project ideas from the profile
 3. Call \`orch_select\` to present ideas to the user and get their choice
-4. Call \`orch_plan\` to create a step-by-step plan for the selected goal
-5. For each plan step, implement using code tools (read, write, edit, bash), then call \`orch_review\`
-6. After all steps pass review, the orchestrator runs post-completion checks and offers follow-up actions
+4. Create beads for the selected goal via \`br create\` in bash, setting dependencies with \`br dep add\`
+5. For each bead, implement using code tools (read, write, edit, bash), then call \`orch_review\`
+6. After all beads pass review, the orchestrator runs post-completion checks and offers follow-up actions
 ${coordinationSection}
 
 ## Multi-Pass Review
-Each step goes through multiple review passes:
+Each bead goes through multiple review passes:
 1. **Self-review**: You assess your own work against acceptance criteria via \`orch_review\`
 2. **Adversarial review**: A second pass with fresh eyes checks for bugs, oversights, ergonomics issues
-3. **Cross-agent review**: After ALL steps complete, an independent reviewer sub-agent audits the full diff
+3. **Cross-agent review**: After ALL beads complete, an independent reviewer sub-agent audits the full diff
 
 This mirrors the "check over everything again with fresh eyes" pattern — don't skip it.
 
 ## Post-Completion
-After all steps and reviews pass, the orchestrator offers:
+After all beads and reviews pass, the orchestrator offers:
 - **Polish pass**: De-slopify — improve clarity, remove generic AI patterns, maximize ergonomics
 - **Commit strategy**: Group changes into logical commits with detailed messages
 - **Skill extraction**: Check if the work product should become a reusable skill
@@ -152,11 +153,10 @@ After all steps and reviews pass, the orchestrator offers:
 - Follow the workflow in order. Do not skip steps.
 - **CRITICAL: When a tool result says "NEXT: Call \`tool_name\`", you MUST call that tool IMMEDIATELY in your next response. Do NOT stop to summarize, ask questions, or chat. Just call the tool.**
 - After each tool call, read the result carefully before proceeding.
-- When implementing steps, use the standard code tools (read, write, edit, bash) to make actual changes.
-- If a review fails, re-implement based on the revision instructions, then review again (max 3 retries per step).
+- When implementing beads, use the standard code tools (read, write, edit, bash) to make actual changes.
+- If a review fails, re-implement based on the revision instructions, then review again (max 3 retries per bead).
 - Do NOT add commentary between orchestrator tool calls. The user sees the tool results directly.
-- If orch_select returns no selection, stop gracefully.
-- If orch_plan returns and the user rejects, stop gracefully.`;
+- If orch_select returns no selection, stop gracefully.`;
 }
 
 // ─── Discovery Prompt ────────────────────────────────────────
@@ -260,44 +260,77 @@ For each idea, provide:
 - **tier**: "top" for all ideas`;
 }
 
-// ─── Planner Instructions ────────────────────────────────────
-export function plannerInstructions(
+// ─── Bead Creation Prompt ────────────────────────────────────
+export function beadCreationPrompt(
   goal: string,
-  profile: RepoProfile,
-  constraints: string[],
-  scanResult?: ScanResult
+  repoContext: string,
+  constraints: string[]
 ): string {
-  return `Create a detailed step-by-step plan for the following goal.
+  return `## Create Beads for Goal
 
-## Goal
+Take the selected goal and create a comprehensive set of beads using the br CLI.
+
+### Goal
 ${goal}
 
-${formatRepoProfile(profile, scanResult)}
+### Repository Context
+${repoContext}
 
-## Constraints
+### Constraints
 ${constraints.length > 0 ? constraints.map((c) => `- ${c}`).join("\n") : "None specified."}
 
-## Guidelines
-- Treat live codebase scan findings as the primary signal.
-- Use commits, TODOs, and prior history as secondary enrichment only.
-- Produce 3–7 steps
-- Each step must have clear acceptance criteria
-- List expected artifacts (files to create/modify) for each step
-- Treat user implementation suggestions as soft constraints; justify if you deviate
-- Order steps logically (foundations first, integration last)
+### Instructions
+For each bead, run in bash:
+\`\`\`
+br create "Title" -t task -p <priority 1-5> --description "Detailed description including:
+- What to implement
+- Why it matters
+- Acceptance criteria (as checklist):
+  - [ ] Criterion 1
+  - [ ] Criterion 2
+- ### Files: src/foo.ts, src/bar.ts"
+\`\`\`
 
-## Step Dependencies (dependsOn)
-By default, steps run sequentially (each depends on the previous).
-Use \`dependsOn\` to control parallelism:
-- **Omit dependsOn**: step depends on the previous step (sequential, the default)
-- **dependsOn: []**: step is independent and can run in parallel with others
-- **dependsOn: [1, 3]**: step depends on specific steps 1 and 3
+Set dependencies between beads:
+\`\`\`
+br dep add <child-id> <parent-id>
+\`\`\`
 
-**Self-check**: if your step description says "after", "once", "then", or "when step N is done", you probably need explicit dependsOn.
+### Requirements
+- Make beads self-documenting — include background, reasoning, and anything a future agent needs
+- Each bead MUST include a \`### Files:\` section listing files to create/modify
+- Order by priority: foundations first, integration last
+- Set dependency edges so \`br ready\` returns the correct parallel groups
+- Acceptance criteria should be specific and testable
+- Include test beads where appropriate
 
-Return a structured plan with:
-- **goal**: restated goal
-- **steps**: array of { index, description, acceptanceCriteria[], artifacts[], dependsOn? }`;
+Verify with \`br list\` and \`br dep cycles\` (must show no cycles).`;
+}
+
+// ─── Bead Refinement Prompt ──────────────────────────────────
+export function beadRefinementPrompt(): string {
+  return `## Bead Refinement Pass
+
+Check over each bead super carefully via \`br list\` and \`br show <id>\`.
+
+### Questions to ask for each bead:
+1. Are you sure this makes sense? Is it optimal?
+2. Could we change anything to make it clearer or more actionable?
+3. Does the description contain enough context for a fresh agent to execute without guessing?
+4. Are the acceptance criteria specific and testable?
+5. Is the \`### Files:\` section accurate and complete?
+6. Are dependencies correct? Would \`br ready\` return the right parallel groups?
+
+### Actions
+- Revise with \`br update <id> --description "..."\` for any improvements
+- Validate: \`br dep cycles\` (must show no cycles)
+
+### Rules
+- DO NOT OVERSIMPLIFY. DO NOT LOSE FEATURES.
+- Include comprehensive tests in the beads.
+- Every bead must be self-contained and self-documenting.
+- If you find missing beads, create them with \`br create\`.
+- If you find redundant beads, remove them with \`br rm <id>\`.`;
 }
 
 // ─── Deep Planning Synthesis Prompt ──────────────────────────
@@ -311,32 +344,17 @@ ${plans.length} independent planners produced the plans above. Synthesize them i
 3. Ensure coverage of: architecture, constraints, testing, and error handling
 4. Make the result detailed enough for a fresh agent to execute without guessing
 
-Then call \`orch_plan\` with the synthesized plan.`;
-}
-
-// ─── Plan-to-Tasks Conversion Prompt ─────────────────────────
-export function planToTasksInstructions(goal: string, steps: PlanStep[]): string {
-  return `## Convert Plan to Tasks
-
-Take ALL of the plan below and create a comprehensive and granular set of tasks with subtasks and dependency structure, with detailed comments so the whole thing is totally self-contained and self-documenting.
-
-### Goal
-${goal}
-
-### Steps
-${steps.map((s) => `${s.index}. ${s.description}\n   Criteria: ${s.acceptanceCriteria.join("; ")}\n   Files: ${s.artifacts.join(", ")}`).join("\n\n")}
-
-The tasks should be so detailed that we never need to consult back to the original plan. Each task should carry its own context, reasoning, dependencies, and acceptance criteria.`;
+Then create beads via \`br create\` in bash with the synthesized plan.`;
 }
 
 // ─── Reality Check Prompt ────────────────────────────────────
 export function realityCheckInstructions(
   goal: string,
-  steps: PlanStep[],
-  results: StepResult[]
+  beads: Bead[],
+  results: BeadResult[]
 ): string {
   const done = results.filter((r) => r.status === "success").length;
-  const total = steps.length;
+  const total = beads.length;
 
   return `## Reality Check
 
@@ -346,42 +364,55 @@ Where are we on this project? Do we actually have the thing we are trying to bui
 ${goal}
 
 ### Progress
-${done}/${total} steps completed.
+${done}/${total} beads completed.
 
-${steps.map((s) => {
-  const r = results.find((r) => r.stepIndex === s.index);
-  return `- Step ${s.index}: ${r?.status ?? "not started"} — ${s.description}${r?.summary ? `\n  Summary: ${r.summary}` : ""}`;
+${beads.map((b) => {
+  const r = results.find((r) => r.beadId === b.id);
+  return `- Bead ${b.id}: ${r?.status ?? "not started"} — ${b.title}: ${b.description}${r?.summary ? `\n  Summary: ${r.summary}` : ""}`;
 }).join("\n")}
 
 ### Questions to answer honestly
-1. If we intelligently implement all remaining open tasks, would we close the gap completely? Why or why not?
+1. If we intelligently implement all remaining open beads, would we close the gap completely? Why or why not?
 2. What is actually blocking us right now?
-3. Are there missing tasks or dependencies that the plan didn't account for?
+3. Are there missing beads or dependencies that we didn't account for?
 4. Is any completed work actually broken or incomplete despite being marked done?
 
-Be brutally honest. If the answer is "no, we wouldn't close the gap," the fix is usually to revise the plan or add missing work, not to push harder on implementation.`;
+Be brutally honest. If the answer is "no, we wouldn't close the gap," the fix is usually to revise the beads or add missing work, not to push harder on implementation.`;
 }
 
 // ─── Implementer Instructions ────────────────────────────────
 export function implementerInstructions(
-  step: PlanStep,
+  bead: Bead,
   profile: RepoProfile,
-  previousResults: StepResult[]
+  previousResults: BeadResult[]
 ): string {
   const prevContext =
     previousResults.length > 0
-      ? `\n## Previous Steps Completed\n${previousResults
-          .map((r) => `- Step ${r.stepIndex}: ${r.status} — ${r.summary}`)
+      ? `\n## Previous Beads Completed\n${previousResults
+          .map((r) => `- Bead ${r.beadId}: ${r.status} — ${r.summary}`)
           .join("\n")}`
       : "";
 
-  return `## Implement Step ${step.index}: ${step.description}
+  // Extract acceptance criteria from description (lines starting with - [ ])
+  const criteriaLines = bead.description
+    .split("\n")
+    .filter((line) => line.trim().startsWith("- [ ]"))
+    .map((line) => line.trim());
+
+  // Extract files section from description
+  const filesMatch = bead.description.match(/### Files:\s*(.+?)(?:\n###|\n\n|$)/s);
+  const files = filesMatch ? filesMatch[1].trim() : "See bead description";
+
+  return `## Implement Bead ${bead.id}: ${bead.title}
+
+### Description
+${bead.description}
 
 ### Acceptance Criteria
-${step.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
+${criteriaLines.length > 0 ? criteriaLines.join("\n") : "See bead description for criteria."}
 
-### Expected Artifacts
-${step.artifacts.map((a) => `- ${a}`).join("\n")}
+### Expected Files
+${files}
 
 ### Repo Context
 - **Languages:** ${profile.languages.join(", ")}
@@ -391,9 +422,9 @@ ${prevContext}
 ### Marching Orders
 First read the relevant files to fully understand the code and technical architecture.
 Use \`orch_memory\` to search for relevant learnings from prior orchestrations if applicable.
-Then implement this step using the standard code tools (read, write, edit, bash).
+Then implement this bead using the standard code tools (read, write, edit, bash).
 Work systematically and meticulously. Don't get stuck in analysis — be proactive.
-Make focused, targeted changes. Stay within the plan scope.
+Make focused, targeted changes. Stay within scope.
 
 **After implementing, do a fresh-eyes review:** carefully read over ALL the new code you just wrote and any existing code you modified, looking super carefully for any obvious bugs, errors, problems, issues, or confusion. Fix anything you uncover.
 
@@ -402,14 +433,19 @@ After the fresh-eyes review, call \`orch_review\` with a summary of what you did
 
 // ─── Reviewer Instructions ───────────────────────────────────
 export function reviewerInstructions(
-  step: PlanStep,
+  bead: Bead,
   implementationSummary: string,
   profile: RepoProfile
 ): string {
-  return `## Review Step ${step.index}: ${step.description}
+  const criteriaLines = bead.description
+    .split("\n")
+    .filter((line) => line.trim().startsWith("- [ ]") || line.trim().startsWith("- [x]"))
+    .map((line) => line.trim().replace(/^- \[.\] /, ""));
+
+  return `## Review Bead ${bead.id}: ${bead.title}
 
 ### Acceptance Criteria
-${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}
+${criteriaLines.length > 0 ? criteriaLines.map((c) => `- ${c}`).join("\n") : "See bead description."}
 
 ### Implementation Summary
 ${implementationSummary}
@@ -429,53 +465,25 @@ Determine: **PASS** or **FAIL**
 If FAIL, provide specific revision instructions.`;
 }
 
-// ─── Parallel Execution Instructions ─────────────────────────
-export function parallelExecutionInstructions(
-  group: number[],
-  steps: PlanStep[],
-  worktreePaths: Map<number, string>
-): string {
-  const agentConfigs = group.map((idx) => {
-    const step = steps.find((s) => s.index === idx)!;
-    const wtPath = worktreePaths.get(idx);
-    return `### Step ${idx}: ${step.description}
-- **Working directory:** \`${wtPath ?? "(shared — worktree unavailable)"}\`
-- **Acceptance criteria:**
-${step.acceptanceCriteria.map((c) => `  - ${c}`).join("\n")}
-- **Files:** ${step.artifacts.join(", ")}`;
-  });
-
-  return `## Parallel Execution — Group [Steps ${group.join(", ")}]
-
-Spawn ${group.length} sub-agents to implement these steps concurrently.
-Each agent works in its own git worktree — no conflicts.
-
-${agentConfigs.join("\n\n")}
-
-### Instructions for sub-agents
-Each sub-agent should:
-1. \`cd\` to its assigned worktree path
-2. Implement the step using standard code tools
-3. Commit changes in the worktree
-4. Report completion
-
-After ALL agents complete, changes will be merged back sequentially.`;
-}
-
 // ─── Adversarial Review Instructions ─────────────────────────
 export function adversarialReviewInstructions(
-  step: PlanStep,
+  bead: Bead,
   implementationSummary: string
 ): string {
-  return `## Adversarial "Fresh Eyes" Review — Step ${step.index}
+  const criteriaLines = bead.description
+    .split("\n")
+    .filter((line) => line.trim().startsWith("- [ ]") || line.trim().startsWith("- [x]"))
+    .map((line) => line.trim().replace(/^- \[.\] /, ""));
 
-You are reviewing this step as if you've never seen it before. The first review already passed — your job is to catch what it missed.
+  return `## Adversarial "Fresh Eyes" Review — Bead ${bead.id}
+
+You are reviewing this bead as if you've never seen it before. The first review already passed — your job is to catch what it missed.
 
 ### What was implemented
 ${implementationSummary}
 
 ### Acceptance Criteria
-${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}
+${criteriaLines.length > 0 ? criteriaLines.map((c) => `- ${c}`).join("\n") : "See bead description."}
 
 ### Check specifically for:
 1. **Blunders & bugs** — off-by-one errors, null derefs, race conditions, missing error handling
@@ -491,8 +499,8 @@ If everything is genuinely clean, say so briefly — don't invent problems.`;
 // ─── Cross-Agent Review Instructions ─────────────────────────
 export function crossAgentReviewInstructions(
   goal: string,
-  steps: PlanStep[],
-  results: StepResult[]
+  beads: Bead[],
+  results: BeadResult[]
 ): string {
   return `## Independent Cross-Agent Code Review
 
@@ -502,18 +510,18 @@ You did NOT write this code. Review it with zero assumptions.
 ### Goal
 ${goal}
 
-### Steps Completed
-${steps
-  .map((s) => {
-    const r = results.find((r) => r.stepIndex === s.index);
-    return `- Step ${s.index}: ${s.description} (${r?.status ?? "unknown"})`;
+### Beads Completed
+${beads
+  .map((b) => {
+    const r = results.find((r) => r.beadId === b.id);
+    return `- Bead ${b.id}: ${b.title} (${r?.status ?? "unknown"})`;
   })
   .join("\n")}
 
 ### Your Review Checklist
 1. **Correctness** — Does the implementation actually achieve the stated goal?
-2. **Consistency** — Do all the pieces fit together? Any contradictions between steps?
-3. **Completeness** — Anything missing that the plan promised?
+2. **Consistency** — Do all the pieces fit together? Any contradictions between beads?
+3. **Completeness** — Anything missing that the beads promised?
 4. **Code quality** — Clean, well-structured, follows project conventions?
 5. **Agent ergonomics** — Would another coding agent find this easy to understand and modify?
 6. **Regressions** — Could any change break existing functionality?
@@ -548,28 +556,31 @@ Make targeted edits. Don't rewrite things that are already good.`;
 }
 
 export function commitStrategyInstructions(
-  steps: PlanStep[],
-  results: StepResult[]
+  beads: Bead[],
+  results: BeadResult[]
 ): string {
+  // Extract files from bead descriptions
+  const beadDetails = beads.map((b) => {
+    const r = results.find((r) => r.beadId === b.id);
+    const filesMatch = b.description.match(/### Files:\s*(.+?)(?:\n###|\n\n|$)/s);
+    const files = filesMatch ? filesMatch[1].trim() : "See bead description";
+    return `- Bead ${b.id}: ${b.title}\n  Files: ${files}\n  Summary: ${r?.summary ?? "N/A"}`;
+  });
+
   return `## Commit Strategy
 
 Group the changes from this orchestration into logical commits with detailed messages.
 
-### Steps completed
-${steps
-  .map((s) => {
-    const r = results.find((r) => r.stepIndex === s.index);
-    return `- Step ${s.index}: ${s.description}\n  Files: ${s.artifacts.join(", ")}\n  Summary: ${r?.summary ?? "N/A"}`;
-  })
-  .join("\n\n")}
+### Beads completed
+${beadDetails.join("\n\n")}
 
 ### Rules
-- Group by logical change, NOT by step number (steps may touch the same files)
+- Group by logical change, NOT by bead number (beads may touch the same files)
 - Each commit should be independently understandable
 - Use conventional commit format: type(scope): description
 - First line ≤ 72 chars, then blank line, then detailed body
 - Body explains WHY, not just WHAT
-- Reference step numbers in the body for traceability
+- Reference bead IDs in the body for traceability
 
 Create the commits now using bash (git add -p / git add <files> then git commit).`;
 }
@@ -661,19 +672,19 @@ Return ONLY the JSON array, no surrounding text or markdown fences.`;
 // ─── Summary Instructions ────────────────────────────────────
 export function summaryInstructions(
   goal: string,
-  steps: PlanStep[],
-  results: StepResult[]
+  beads: Bead[],
+  results: BeadResult[]
 ): string {
   return `## Generate Final Summary
 
 ### Goal
 ${goal}
 
-### Steps and Results
-${steps
-  .map((s) => {
-    const result = results.find((r) => r.stepIndex === s.index);
-    return `**Step ${s.index}: ${s.description}**
+### Beads and Results
+${beads
+  .map((b) => {
+    const result = results.find((r) => r.beadId === b.id);
+    return `**Bead ${b.id}: ${b.title}**
 - Status: ${result?.status ?? "not started"}
 - Summary: ${result?.summary ?? "N/A"}`;
   })

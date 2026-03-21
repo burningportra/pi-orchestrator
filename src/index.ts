@@ -1318,12 +1318,10 @@ export default function (pi: ExtensionAPI) {
       let beadsInfo = "";
       if (state.coordinationBackend?.beads) {
         try {
-          const { createBeadsFromPlan } = await import("./beads.js");
-          const beadIds = await createBeadsFromPlan(pi, ctx.cwd, plan.steps);
-          state.beadIds = beadIds;
-          const count = Object.keys(beadIds).length;
-          if (count > 0) {
-            beadsInfo = `\n\n**Beads created:** ${count} beads for plan steps.`;
+          const { readBeads } = await import("./beads.js");
+          const beads = await readBeads(pi, ctx.cwd);
+          if (beads.length > 0) {
+            beadsInfo = `\n\n**Beads found:** ${beads.length} beads tracked.`;
           }
         } catch {
           // Non-fatal: beads creation failed silently
@@ -2297,10 +2295,11 @@ export default function (pi: ExtensionAPI) {
           // Run beads validation if beads coordination is active
           let beadsReviewInfo = "";
           if (state.coordinationBackend?.beads && state.beadIds) {
-            const { validateBeads, getBeadsSummary, syncBeads } = await import("./beads.js");
+            const { validateBeads, getBeadsSummary, syncBeads, readBeads } = await import("./beads.js");
             await syncBeads(pi, ctx.cwd);
             const validation = await validateBeads(pi, ctx.cwd);
-            const summary = await getBeadsSummary(pi, ctx.cwd, state.beadIds);
+            const allBeads = await readBeads(pi, ctx.cwd);
+            const summary = getBeadsSummary(allBeads);
             beadsReviewInfo = `\n\n**Beads:** ${summary}${!validation.ok ? `\n⚠️ ${validation.cycles ? "Cycles detected" : ""} ${validation.orphaned.length > 0 ? `Orphaned: ${validation.orphaned.join(", ")}` : ""}` : ""}`;
           }
 

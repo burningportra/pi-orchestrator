@@ -1,11 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
-  createBeadsFromPlan,
+  readBeads,
+  readyBeads,
+  getBeadById,
+  beadDeps,
+  extractArtifacts,
   updateBeadStatus,
   validateBeads,
+  getBeadsSummary,
 } from "./beads.js";
-import type { PlanStep } from "./types.js";
+import type { Bead } from "./types.js";
 
 function makePi(impl: (cmd: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>) {
   return { exec: vi.fn(impl) } as unknown as ExtensionAPI;
@@ -13,119 +18,145 @@ function makePi(impl: (cmd: string, args: string[]) => Promise<{ code: number; s
 
 const CWD = "/fake/cwd";
 
-// ─── createBeadsFromPlan ─────────────────────────────────────
+function makeBead(overrides: Partial<Bead> = {}): Bead {
+  return {
+    id: "bead-1",
+    title: "Test bead",
+    description: "",
+    status: "open",
+    priority: 1,
+    type: "task",
+    labels: [],
+    ...overrides,
+  };
+}
 
-describe("createBeadsFromPlan", () => {
-  it("creates beads and returns beadIds map", async () => {
-    const pi = makePi(async (cmd, args) => {
-      if (cmd === "br" && args[0] === "create") {
-        return { code: 0, stdout: "✓ Created pi-orchestrator-abc: Step 1: Do something", stderr: "" };
-      }
-      // dep add + sync
-      return { code: 0, stdout: "", stderr: "" };
-    });
+// ─── readBeads ───────────────────────────────────────────────
 
-    const steps: PlanStep[] = [
-      { index: 1, description: "Do something", acceptanceCriteria: ["It works"], artifacts: [] },
-    ];
+describe("readBeads", () => {
+  it("parses br list --json output", async () => {
+    const beads = [makeBead({ id: "b1" }), makeBead({ id: "b2" })];
+    const pi = makePi(async () => ({
+      code: 0,
+      stdout: JSON.stringify({ issues: beads }),
+      stderr: "",
+    }));
 
-    const result = await createBeadsFromPlan(pi, CWD, steps);
-    expect(result[1]).toBe("pi-orchestrator-abc");
+    const result = await readBeads(pi, CWD);
+    expect(result).toHaveLength(2);
+    expect(result[0].id).toBe("b1");
   });
 
-  it("creates multiple beads with dependency edges", async () => {
-    const ids = ["bead-aaa", "bead-bbb"];
-    let createCount = 0;
+  it("returns [] on failure", async () => {
+    const pi = makePi(async () => { throw new Error("br not found"); });
+    const result = await readBeads(pi, CWD);
+    expect(result).toEqual([]);
+  });
+});
 
-    const pi = makePi(async (cmd, args) => {
-      if (cmd === "br" && args[0] === "create") {
-        const id = ids[createCount++];
-        return { code: 0, stdout: `✓ Created ${id}: Step title`, stderr: "" };
-      }
-      if (cmd === "br" && args[0] === "dep" && args[1] === "add") {
-        return { code: 0, stdout: "dep added", stderr: "" };
-      }
-      return { code: 0, stdout: "", stderr: "" };
-    });
+// ─── readyBeads ──────────────────────────────────────────────
 
-    const steps: PlanStep[] = [
-      { index: 1, description: "First step", acceptanceCriteria: [], artifacts: [] },
-      { index: 2, description: "Second step", acceptanceCriteria: [], artifacts: [], dependsOn: [1] },
-    ];
+describe("readyBeads", () => {
+  it("parses br ready --json output", async () => {
+    const beads = [makeBead({ id: "ready-1" })];
+    const pi = makePi(async () => ({
+      code: 0,
+      stdout: JSON.stringify({ issues: beads }),
+      stderr: "",
+    }));
 
-    const result = await createBeadsFromPlan(pi, CWD, steps);
-    expect(result[1]).toBe("bead-aaa");
-    expect(result[2]).toBe("bead-bbb");
-
-    // Verify dep add was called with correct args
-    const depCall = (pi as any).exec.mock.calls.find(
-      ([cmd, args]: [string, string[]]) => cmd === "br" && args[0] === "dep" && args[1] === "add"
-    );
-    expect(depCall).toBeTruthy();
-    expect(depCall[1]).toEqual(["dep", "add", "bead-bbb", "bead-aaa"]);
+    const result = await readyBeads(pi, CWD);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("ready-1");
   });
 
-  it("handles br create failure gracefully (non-fatal)", async () => {
-    const pi = makePi(async (cmd, args) => {
-      if (cmd === "br" && args[0] === "create") {
-        throw new Error("br not found");
-      }
-      return { code: 0, stdout: "", stderr: "" };
-    });
+  it("returns [] on empty output", async () => {
+    const pi = makePi(async () => ({ code: 0, stdout: "", stderr: "" }));
+    const result = await readyBeads(pi, CWD);
+    expect(result).toEqual([]);
+  });
+});
 
-    const steps: PlanStep[] = [
-      { index: 1, description: "Step", acceptanceCriteria: [], artifacts: [] },
-    ];
+// ─── getBeadById ─────────────────────────────────────────────
 
-    // Should not throw
-    const result = await createBeadsFromPlan(pi, CWD, steps);
-    expect(result[1]).toBeUndefined();
+describe("getBeadById", () => {
+  it("returns bead from br show --json", async () => {
+    const bead = makeBead({ id: "abc" });
+    const pi = makePi(async () => ({
+      code: 0,
+      stdout: JSON.stringify(bead),
+      stderr: "",
+    }));
+
+    const result = await getBeadById(pi, CWD, "abc");
+    expect(result?.id).toBe("abc");
   });
 
-  it("calls sync at the end", async () => {
-    const pi = makePi(async (cmd, args) => {
-      if (cmd === "br" && args[0] === "create") {
-        return { code: 0, stdout: "✓ Created bead-xyz: Step", stderr: "" };
-      }
-      return { code: 0, stdout: "", stderr: "" };
+  it("returns null on failure", async () => {
+    const pi = makePi(async () => { throw new Error("not found"); });
+    const result = await getBeadById(pi, CWD, "nope");
+    expect(result).toBeNull();
+  });
+});
+
+// ─── beadDeps ────────────────────────────────────────────────
+
+describe("beadDeps", () => {
+  it("parses dep list output", async () => {
+    const pi = makePi(async () => ({
+      code: 0,
+      stdout: "dep-1\ndep-2\n",
+      stderr: "",
+    }));
+
+    const result = await beadDeps(pi, CWD, "bead-x");
+    expect(result).toEqual(["dep-1", "dep-2"]);
+  });
+
+  it("returns [] on failure", async () => {
+    const pi = makePi(async () => { throw new Error("fail"); });
+    const result = await beadDeps(pi, CWD, "bead-x");
+    expect(result).toEqual([]);
+  });
+});
+
+// ─── extractArtifacts ────────────────────────────────────────
+
+describe("extractArtifacts", () => {
+  it("extracts paths from bullet lines", () => {
+    const bead = makeBead({
+      description: "Some text\n- src/foo.ts\n- src/bar.ts\nMore text",
     });
+    expect(extractArtifacts(bead)).toEqual(["src/foo.ts", "src/bar.ts"]);
+  });
 
-    const steps: PlanStep[] = [
-      { index: 1, description: "Step", acceptanceCriteria: [], artifacts: [] },
-    ];
+  it("extracts from ### Files: section", () => {
+    const bead = makeBead({
+      description: "Intro\n### Files:\n  src/a.ts\n  lib/b.ts\n\nDone",
+    });
+    const result = extractArtifacts(bead);
+    expect(result).toContain("src/a.ts");
+    expect(result).toContain("lib/b.ts");
+  });
 
-    await createBeadsFromPlan(pi, CWD, steps);
-
-    const syncCall = (pi as any).exec.mock.calls.find(
-      ([cmd, args]: [string, string[]]) => cmd === "br" && args[0] === "sync"
-    );
-    expect(syncCall).toBeTruthy();
-    expect(syncCall[1]).toContain("--flush-only");
+  it("returns [] for empty description", () => {
+    expect(extractArtifacts(makeBead())).toEqual([]);
   });
 });
 
 // ─── updateBeadStatus ────────────────────────────────────────
 
 describe("updateBeadStatus", () => {
-  it("calls br update with in_progress status", async () => {
+  it("calls br update with correct args", async () => {
     const pi = makePi(async () => ({ code: 0, stdout: "", stderr: "" }));
     await updateBeadStatus(pi, CWD, "bead-123", "in_progress");
-
-    const calls = (pi as any).exec.mock.calls;
-    expect(calls[0]).toEqual(["br", ["update", "bead-123", "--status", "in_progress"], expect.any(Object)]);
+    expect((pi as any).exec.mock.calls[0]).toEqual([
+      "br", ["update", "bead-123", "--status", "in_progress"], expect.any(Object),
+    ]);
   });
 
-  it("calls br update with closed status", async () => {
-    const pi = makePi(async () => ({ code: 0, stdout: "", stderr: "" }));
-    await updateBeadStatus(pi, CWD, "bead-456", "closed");
-
-    const calls = (pi as any).exec.mock.calls;
-    expect(calls[0]).toEqual(["br", ["update", "bead-456", "--status", "closed"], expect.any(Object)]);
-  });
-
-  it("handles failure gracefully (non-fatal)", async () => {
+  it("handles failure gracefully", async () => {
     const pi = makePi(async () => { throw new Error("br failed"); });
-    // Should not throw
     await expect(updateBeadStatus(pi, CWD, "bead-789", "closed")).resolves.toBeUndefined();
   });
 });
@@ -133,38 +164,46 @@ describe("updateBeadStatus", () => {
 // ─── validateBeads ───────────────────────────────────────────
 
 describe("validateBeads", () => {
-  it("returns ok=true when no cycles detected", async () => {
-    const pi = makePi(async (cmd, args) => {
-      if (cmd === "br" && args[0] === "dep" && args[1] === "cycles") {
-        return { code: 0, stdout: "All dependency checks passed. Nothing to report.", stderr: "" };
-      }
-      return { code: 0, stdout: "", stderr: "" };
-    });
-
+  it("returns ok=true when no cycles", async () => {
+    const pi = makePi(async () => ({
+      code: 0,
+      stdout: "All dependency checks passed.",
+      stderr: "",
+    }));
     const result = await validateBeads(pi, CWD);
     expect(result.ok).toBe(true);
     expect(result.cycles).toBe(false);
-    expect(result.orphaned).toEqual([]);
   });
 
-  it("returns ok=false and cycles=true when cycle info present", async () => {
-    const pi = makePi(async (cmd, args) => {
-      if (cmd === "br" && args[0] === "dep" && args[1] === "cycles") {
-        return { code: 1, stdout: "Detected cycle: bead-a → bead-b → bead-a", stderr: "" };
-      }
-      return { code: 0, stdout: "", stderr: "" };
-    });
-
+  it("detects cycles", async () => {
+    const pi = makePi(async () => ({
+      code: 1,
+      stdout: "Detected cycle: a → b → a",
+      stderr: "",
+    }));
     const result = await validateBeads(pi, CWD);
     expect(result.ok).toBe(false);
     expect(result.cycles).toBe(true);
   });
+});
 
-  it("handles br dep cycles failure gracefully", async () => {
-    const pi = makePi(async () => { throw new Error("br failed"); });
+// ─── getBeadsSummary ─────────────────────────────────────────
 
-    const result = await validateBeads(pi, CWD);
-    // Non-fatal — should still return a result
-    expect(result.cycles).toBe(false);
+describe("getBeadsSummary", () => {
+  it("summarizes bead statuses", () => {
+    const beads = [
+      makeBead({ status: "closed" }),
+      makeBead({ status: "in_progress" }),
+      makeBead({ status: "open" }),
+      makeBead({ status: "open" }),
+    ];
+    const summary = getBeadsSummary(beads);
+    expect(summary).toContain("1 closed");
+    expect(summary).toContain("1 in-progress");
+    expect(summary).toContain("2 open");
+  });
+
+  it("returns 'no beads tracked' for empty array", () => {
+    expect(getBeadsSummary([])).toBe("no beads tracked");
   });
 });
