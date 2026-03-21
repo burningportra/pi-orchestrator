@@ -140,6 +140,29 @@ export default function (pi: ExtensionAPI) {
 
     return { text, diff };
   }
+
+  /**
+   * Generates an agent-mail bootstrap preamble to prepend to a parallel sub-agent's task.
+   * Only called when `state.coordinationBackend?.agentMail` is true.
+   */
+  function agentMailTaskPreamble(
+    cwd: string,
+    agentName: string,
+    stepDesc: string,
+    artifacts: string[],
+    threadId: string
+  ): string {
+    const artifactsJson = JSON.stringify(artifacts);
+    return `## Agent Mail Coordination
+Before starting work, bootstrap your agent-mail session:
+1. Call \`macro_start_session(human_key="${cwd}", program="claude-code", model="your-model", task_description="${stepDesc.replace(/"/g, '\\"')}")\`
+2. Reserve your files: \`file_reservation_paths(project_key="${cwd}", agent_name="${agentName}", paths=${artifactsJson}, ttl_seconds=3600, exclusive=true)\`
+3. Announce in thread: \`send_message(project_key="${cwd}", sender_name="${agentName}", to="all", subject="[${threadId}] Starting...", body_md="Working on: ${stepDesc.replace(/"/g, '\\"')}", thread_id="${threadId}")\`
+4. When done: \`release_file_reservations(project_key="${cwd}", agent_name="${agentName}")\`
+
+`;
+  }
+
   let hasSophia = false;
   let sophiaCRResult: PlanToCRResult | undefined;
   let worktreePool: WorktreePool | undefined;
@@ -1342,9 +1365,14 @@ export default function (pi: ExtensionAPI) {
         const agentConfigs = firstGroup.map((stepIdx) => {
           const step = plan.steps.find((s) => s.index === stepIdx)!;
           const wtPath = worktreePool!.getPath(stepIdx);
+          const agentName = `step-${stepIdx}`;
+          const threadId = state.beadIds?.[stepIdx] ?? `step-${stepIdx}`;
+          const preamble = state.coordinationBackend?.agentMail
+            ? agentMailTaskPreamble(ctx.cwd, agentName, step.description, step.artifacts, threadId)
+            : "";
           return {
-            name: `step-${stepIdx}`,
-            task: `You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${step.description}\n\n### Acceptance Criteria\n${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${step.artifacts.join(", ")}\n\n⚠️ SCOPE CONSTRAINT: You MUST NOT create or modify any files outside the list above. If you believe additional files need changes, note them in your summary but DO NOT modify them.\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step.\n\nWhen done implementing, STOP and do a fresh-eyes review: carefully read over ALL the new code you just wrote and any existing code you modified, looking super carefully for any obvious bugs, errors, problems, issues, or confusion. Fix anything you uncover.\n\nThen COMMIT your changes:\n\`\`\`bash\ncd ${wtPath ?? ctx.cwd}\ngit add ${step.artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "step ${stepIdx}: ${step.description.slice(0, 60)}"\n\`\`\`\n\nThen summarize what you did and what the fresh-eyes review found.`,
+            name: agentName,
+            task: `${preamble}You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${step.description}\n\n### Acceptance Criteria\n${step.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${step.artifacts.join(", ")}\n\n⚠️ SCOPE CONSTRAINT: You MUST NOT create or modify any files outside the list above. If you believe additional files need changes, note them in your summary but DO NOT modify them.\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step.\n\nWhen done implementing, STOP and do a fresh-eyes review: carefully read over ALL the new code you just wrote and any existing code you modified, looking super carefully for any obvious bugs, errors, problems, issues, or confusion. Fix anything you uncover.\n\nThen COMMIT your changes:\n\`\`\`bash\ncd ${wtPath ?? ctx.cwd}\ngit add ${step.artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "step ${stepIdx}: ${step.description.slice(0, 60)}"\n\`\`\`\n\nThen summarize what you did and what the fresh-eyes review found.`,
           };
         });
 
@@ -1514,22 +1542,28 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (chosen.startsWith("👥")) {
+      const peerThreadId = `peer-review-r${round}`;
+      const peerArtifacts = allArtifacts;
+      const peerPreamble = (name: string) =>
+        st.coordinationBackend?.agentMail
+          ? agentMailTaskPreamble(ctx.cwd, name, `Peer review round ${round}`, peerArtifacts, peerThreadId)
+          : "";
       const peerAgents = [
         {
           name: `peer-bugs-r${round}`,
-          task: `Peer reviewer (round ${round}). Review code written by your fellow agents. Check for issues, bugs, errors, inefficiencies, security problems, reliability issues. Diagnose root causes using first-principle analysis. Don't restrict to latest commits — cast a wider net and go super deep!\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
+          task: `${peerPreamble(`peer-bugs-r${round}`)}Peer reviewer (round ${round}). Review code written by your fellow agents. Check for issues, bugs, errors, inefficiencies, security problems, reliability issues. Diagnose root causes using first-principle analysis. Don't restrict to latest commits — cast a wider net and go super deep!\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
         },
         {
           name: `peer-polish-r${round}`,
-          task: `Polish reviewer (round ${round}). De-slopify the code. Remove AI slop, improve clarity, make it agent-friendly.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
+          task: `${peerPreamble(`peer-polish-r${round}`)}Polish reviewer (round ${round}). De-slopify the code. Remove AI slop, improve clarity, make it agent-friendly.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
         },
         {
           name: `peer-ergonomics-r${round}`,
-          task: `Ergonomics reviewer (round ${round}). If you came in fresh with zero context, would you understand this code? Fix anything confusing.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
+          task: `${peerPreamble(`peer-ergonomics-r${round}`)}Ergonomics reviewer (round ${round}). If you came in fresh with zero context, would you understand this code? Fix anything confusing.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
         },
         {
           name: `peer-reality-r${round}`,
-          task: `Reality checker (round ${round}).\n\n${realityCheckInstructions(st.plan!.goal, st.plan!.steps, st.stepResults)}\n\nDo NOT edit code. Just report findings.\n\ncd ${ctx.cwd}`,
+          task: `${peerPreamble(`peer-reality-r${round}`)}Reality checker (round ${round}).\n\n${realityCheckInstructions(st.plan!.goal, st.plan!.steps, st.stepResults)}\n\nDo NOT edit code. Just report findings.\n\ncd ${ctx.cwd}`,
         },
       ];
       const peerJson = JSON.stringify({ agents: peerAgents }, null, 2);
@@ -1581,22 +1615,28 @@ export default function (pi: ExtensionAPI) {
     }
 
     // "🔥 Hit me" — spawn 4 parallel review agents
+    const hitMeThreadId = `hit-me-r${round}`;
+    const hitMeArtifacts = allArtifacts;
+    const hitMePreamble = (name: string) =>
+      st.coordinationBackend?.agentMail
+        ? agentMailTaskPreamble(ctx.cwd, name, `Hit me review round ${round}`, hitMeArtifacts, hitMeThreadId)
+        : "";
     const agentConfigs = [
       {
         name: `fresh-eyes-r${round}`,
-        task: `Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
+        task: `${hitMePreamble(`fresh-eyes-r${round}`)}Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
       },
       {
         name: `polish-r${round}`,
-        task: `Polish/de-slopify reviewer round ${round}.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly — don't just report.\n\ncd ${ctx.cwd}`,
+        task: `${hitMePreamble(`polish-r${round}`)}Polish/de-slopify reviewer round ${round}.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly — don't just report.\n\ncd ${ctx.cwd}`,
       },
       {
         name: `ergonomics-r${round}`,
-        task: `Agent-ergonomics reviewer round ${round}. Make this maximally intuitive for coding agents.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything that fails that test.\n\ncd ${ctx.cwd}`,
+        task: `${hitMePreamble(`ergonomics-r${round}`)}Agent-ergonomics reviewer round ${round}. Make this maximally intuitive for coding agents.\n\nGoal: ${st.plan!.goal}\nFiles: ${allArtifacts.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything that fails that test.\n\ncd ${ctx.cwd}`,
       },
       {
         name: `reality-check-r${round}`,
-        task: `Reality checker round ${round}.\n\n${realityCheckInstructions(st.plan!.goal, st.plan!.steps, st.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+        task: `${hitMePreamble(`reality-check-r${round}`)}Reality checker round ${round}.\n\n${realityCheckInstructions(st.plan!.goal, st.plan!.steps, st.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
       },
     ];
 
@@ -1921,22 +1961,27 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify(`⚠️ Review agents haven't completed yet. Re-presenting spawn instruction.`, "warning");
           // Don't decrement counters — just re-present the spawn instruction
           const round = Math.max(0, prevPassCount - 1);
+          const rePresThreadId = state.beadIds?.[params.stepIndex] ?? `step-${params.stepIndex}`;
+          const rePresPreamble = (name: string) =>
+            state.coordinationBackend?.agentMail
+              ? agentMailTaskPreamble(ctx.cwd, name, step.description, allArtifactsForStep, rePresThreadId)
+              : "";
           const agentConfigs = [
             {
               name: `fresh-eyes-s${params.stepIndex}-r${round}`,
-              task: `Fresh-eyes reviewer for step ${params.stepIndex} (round ${round}). NEVER seen this code.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
+              task: `${rePresPreamble(`fresh-eyes-s${params.stepIndex}-r${round}`)}Fresh-eyes reviewer for step ${params.stepIndex} (round ${round}). NEVER seen this code.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
             },
             {
               name: `polish-s${params.stepIndex}-r${round}`,
-              task: `Polish reviewer for step ${params.stepIndex} (round ${round}). De-slopify.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
+              task: `${rePresPreamble(`polish-s${params.stepIndex}-r${round}`)}Polish reviewer for step ${params.stepIndex} (round ${round}). De-slopify.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
             },
             {
               name: `ergonomics-s${params.stepIndex}-r${round}`,
-              task: `Ergonomics reviewer for step ${params.stepIndex} (round ${round}).\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
+              task: `${rePresPreamble(`ergonomics-s${params.stepIndex}-r${round}`)}Ergonomics reviewer for step ${params.stepIndex} (round ${round}).\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
             },
             {
               name: `reality-check-s${params.stepIndex}-r${round}`,
-              task: `Reality checker for step ${params.stepIndex} (round ${round}).\n\n${realityCheckInstructions(state.plan!.goal, state.plan!.steps, state.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+              task: `${rePresPreamble(`reality-check-s${params.stepIndex}-r${round}`)}Reality checker for step ${params.stepIndex} (round ${round}).\n\n${realityCheckInstructions(state.plan!.goal, state.plan!.steps, state.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
             },
           ];
           const stepReviewJson = JSON.stringify({ agents: agentConfigs }, null, 2);
@@ -1967,22 +2012,27 @@ export default function (pi: ExtensionAPI) {
           persistState();
 
           const round = prevPassCount;
+          const hitMeStepThreadId = state.beadIds?.[params.stepIndex] ?? `step-${params.stepIndex}`;
+          const hitMeStepPreamble = (name: string) =>
+            state.coordinationBackend?.agentMail
+              ? agentMailTaskPreamble(ctx.cwd, name, step.description, allArtifactsForStep, hitMeStepThreadId)
+              : "";
           const agentConfigs = [
             {
               name: `fresh-eyes-s${params.stepIndex}-r${round}`,
-              task: `Fresh-eyes reviewer for step ${params.stepIndex} (round ${round}). NEVER seen this code.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
+              task: `${hitMeStepPreamble(`fresh-eyes-s${params.stepIndex}-r${round}`)}Fresh-eyes reviewer for step ${params.stepIndex} (round ${round}). NEVER seen this code.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
             },
             {
               name: `polish-s${params.stepIndex}-r${round}`,
-              task: `Polish reviewer for step ${params.stepIndex} (round ${round}). De-slopify.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
+              task: `${hitMeStepPreamble(`polish-s${params.stepIndex}-r${round}`)}Polish reviewer for step ${params.stepIndex} (round ${round}). De-slopify.\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
             },
             {
               name: `ergonomics-s${params.stepIndex}-r${round}`,
-              task: `Ergonomics reviewer for step ${params.stepIndex} (round ${round}).\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
+              task: `${hitMeStepPreamble(`ergonomics-s${params.stepIndex}-r${round}`)}Ergonomics reviewer for step ${params.stepIndex} (round ${round}).\n\nStep: ${step.description}\nFiles: ${allArtifactsForStep.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
             },
             {
               name: `reality-check-s${params.stepIndex}-r${round}`,
-              task: `Reality checker for step ${params.stepIndex} (round ${round}).\n\n${realityCheckInstructions(state.plan!.goal, state.plan!.steps, state.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+              task: `${hitMeStepPreamble(`reality-check-s${params.stepIndex}-r${round}`)}Reality checker for step ${params.stepIndex} (round ${round}).\n\n${realityCheckInstructions(state.plan!.goal, state.plan!.steps, state.stepResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
             },
           ];
 
@@ -2097,9 +2147,14 @@ export default function (pi: ExtensionAPI) {
                     const agentConfigs = nextGroup.map((stepIdx) => {
                       const s = state.plan!.steps.find((st) => st.index === stepIdx)!;
                       const wtPath = worktreePool!.getPath(stepIdx);
+                      const agentName = `step-${stepIdx}`;
+                      const threadId = state.beadIds?.[stepIdx] ?? `step-${stepIdx}`;
+                      const preamble = state.coordinationBackend?.agentMail
+                        ? agentMailTaskPreamble(ctx.cwd, agentName, s.description, s.artifacts, threadId)
+                        : "";
                       return {
-                        name: `step-${stepIdx}`,
-                        task: `You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${s.description}\n\n### Acceptance Criteria\n${s.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${s.artifacts.join(", ")}\n\n⚠️ SCOPE CONSTRAINT: You MUST NOT create or modify any files outside the list above.\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step.\n\nWhen done, do a fresh-eyes review then COMMIT:\n\`\`\`bash\ncd ${wtPath ?? ctx.cwd}\ngit add ${s.artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "step ${stepIdx}: ${s.description.slice(0, 60)}"\n\`\`\`\n\nSummarize what you did.`,
+                        name: agentName,
+                        task: `${preamble}You are implementing Step ${stepIdx} of a plan.\n\n## Step ${stepIdx}: ${s.description}\n\n### Acceptance Criteria\n${s.acceptanceCriteria.map((c) => `- ${c}`).join("\n")}\n\n### Files to modify\n${s.artifacts.join(", ")}\n\n⚠️ SCOPE CONSTRAINT: You MUST NOT create or modify any files outside the list above.\n\n### Working Directory\ncd to: ${wtPath ?? ctx.cwd}\n\nImplement the step.\n\nWhen done, do a fresh-eyes review then COMMIT:\n\`\`\`bash\ncd ${wtPath ?? ctx.cwd}\ngit add ${s.artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "step ${stepIdx}: ${s.description.slice(0, 60)}"\n\`\`\`\n\nSummarize what you did.`,
                       };
                     });
 
