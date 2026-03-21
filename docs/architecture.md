@@ -54,6 +54,20 @@ Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
         └─► 🧠 Compound memory: extract learnings for future runs
 ```
 
+## Scan Contract
+
+Repository scanning now has a first-class contract so the orchestrator can evolve its scan providers without breaking the rest of the workflow.
+
+- **`RepoProfile`** remains the legacy shape consumed throughout discovery, planning, and implementation.
+- **`ScanResult`** wraps that profile with scan metadata:
+  - `source` — where the scan came from (`ccc` or `builtin`)
+  - `provider` — provider identifier
+  - `codebaseAnalysis` — normalized recommendation inputs, structural insights, and quality signals
+  - `fallback` — explicit fallback metadata when a provider degrades to the built-in path
+- **`scanRepo()`** is the integration point the orchestrator should call instead of invoking profiling logic directly.
+
+This keeps current behavior stable while making room for richer providers like ccc.
+
 ## Phases
 
 ### 1. Discovery
@@ -204,8 +218,9 @@ When [Sophia](https://github.com/sophialab/sophia) is initialized:
 
 ```
 src/
-├── index.ts      # Extension: 5 tools, commands, state machine
-├── profiler.ts   # Repo scanning (find, git, grep) + detection
+├── index.ts      # Extension: tools, commands, state machine
+├── scan.ts       # Scan contract + provider entrypoint (ccc-first, builtin fallback)
+├── profiler.ts   # Built-in repo profiling (find, git, grep) + detection
 ├── prompts.ts    # Flywheel-derived prompt templates
 ├── sophia.ts     # Sophia CLI wrapper + dependency analysis + merge
 ├── types.ts      # TypeScript types: state, plans, reviews

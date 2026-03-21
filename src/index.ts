@@ -13,9 +13,10 @@ import type {
   StepResult,
   ReviewVerdict,
   OrchestratorPhase,
+  ScanResult,
 } from "./types.js";
 import { createInitialState } from "./types.js";
-import { profileRepo } from "./profiler.js";
+import { scanRepo } from "./scan.js";
 import {
   orchestratorSystemPrompt,
   formatRepoProfile,
@@ -160,7 +161,10 @@ export default function (pi: ExtensionAPI) {
     const lines: string[] = [
       `${PHASE_EMOJI[state.phase]} Phase: ${state.phase}`,
     ];
-    if (state.repoProfile) lines.push(`📁 Repo: ${state.repoProfile.name}`);
+    if (state.repoProfile) {
+      const scanBadge = state.scanResult?.source ? ` (${state.scanResult.source})` : "";
+      lines.push(`📁 Repo: ${state.repoProfile.name}${scanBadge}`);
+    }
     if (state.selectedGoal)
       lines.push(
         `🎯 Goal: ${state.selectedGoal.length > 60 ? state.selectedGoal.slice(0, 57) + "..." : state.selectedGoal}`
@@ -490,7 +494,9 @@ export default function (pi: ExtensionAPI) {
         details: {},
       });
 
-      const profile = await profileRepo(pi, ctx.cwd, signal);
+      const scanResult: ScanResult = await scanRepo(pi, ctx.cwd, signal);
+      const profile = scanResult.profile;
+      state.scanResult = scanResult;
       state.repoProfile = profile;
 
       // Detect sophia availability

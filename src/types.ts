@@ -17,6 +17,70 @@ export interface RepoProfile {
   packageManager?: string;
 }
 
+// ─── Repository Scan Contract ───────────────────────────────
+export type ScanSource = "ccc" | "builtin";
+
+export interface ScanInsight {
+  title: string;
+  detail: string;
+}
+
+export interface ScanQualitySignal {
+  label: string;
+  value: string;
+  detail?: string;
+}
+
+export interface ScanCodebaseAnalysis {
+  /** High-level scan summary suitable for prompt context. */
+  summary?: string;
+  /** Concrete recommendation inputs for discovery/planning. */
+  recommendations: string[];
+  /** Structural findings about architecture, boundaries, or hotspots. */
+  structuralInsights: ScanInsight[];
+  /** Normalized quality signals that providers can attach. */
+  qualitySignals: ScanQualitySignal[];
+}
+
+export interface ScanErrorInfo {
+  code?: string;
+  message: string;
+  recoverable?: boolean;
+}
+
+export interface ScanFallbackInfo {
+  used: boolean;
+  from: ScanSource;
+  to: "builtin";
+  reason: string;
+  error?: ScanErrorInfo;
+}
+
+/**
+ * Normalized repository scan output.
+ *
+ * `profile` intentionally preserves the legacy `RepoProfile` contract so the
+ * existing orchestrator flow can continue to operate unchanged while scan
+ * providers attach richer codebase-analysis metadata around it.
+ */
+export interface ScanResult {
+  source: ScanSource;
+  provider: string;
+  profile: RepoProfile;
+  codebaseAnalysis: ScanCodebaseAnalysis;
+  fallback?: ScanFallbackInfo;
+}
+
+export interface ScanProvider {
+  id: string;
+  label: string;
+  scan(
+    pi: import("@mariozechner/pi-coding-agent").ExtensionAPI,
+    cwd: string,
+    signal?: AbortSignal
+  ): Promise<ScanResult>;
+}
+
 export interface CommitSummary {
   hash: string;
   message: string;
@@ -103,6 +167,7 @@ export type OrchestratorPhase =
 export interface OrchestratorState {
   phase: OrchestratorPhase;
   repoProfile?: RepoProfile;
+  scanResult?: ScanResult;
   candidateIdeas?: CandidateIdea[];
   selectedGoal?: string;
   constraints: string[];
