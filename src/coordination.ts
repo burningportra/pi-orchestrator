@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { existsSync } from "fs";
 import { join } from "path";
+import type { CoordinationMode } from "./types.js";
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -24,13 +25,6 @@ export type CoordinationStrategy =
   | "beads+agentmail"
   | "sophia"
   | "worktrees";
-
-/**
- * Coordination mode determines how agents isolate their work.
- * - "worktree": each agent works in a separate git worktree
- * - "single-branch": all agents work on the same branch (coordinated via agent-mail file reservations)
- */
-export type CoordinationMode = "worktree" | "single-branch";
 
 export function selectStrategy(backend: CoordinationBackend): CoordinationStrategy {
   if (backend.beads && backend.agentMail) return "beads+agentmail";

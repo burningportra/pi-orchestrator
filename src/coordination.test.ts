@@ -43,6 +43,18 @@ describe("selectStrategy", () => {
   });
 });
 
+// ─── selectMode ─────────────────────────────────────────────
+
+describe("selectMode", () => {
+  it("returns single-branch when agentMail is available", () => {
+    expect(selectMode({ beads: false, agentMail: true, sophia: false })).toBe("single-branch");
+  });
+
+  it("returns worktree when agentMail is unavailable", () => {
+    expect(selectMode({ beads: true, agentMail: false, sophia: true })).toBe("worktree");
+  });
+});
+
 // ─── detectCoordinationBackend ──────────────────────────────
 
 describe("detectCoordinationBackend", () => {

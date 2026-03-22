@@ -13,6 +13,7 @@ import { orchestratorSystemPrompt } from "./prompts.js";
 import { type PlanToCRResult } from "./sophia.js";
 import {
   detectCoordinationBackend,
+  selectMode,
   selectStrategy,
   resetDetection,
 } from "./coordination.js";
@@ -214,11 +215,13 @@ export default function (pi: ExtensionAPI) {
           const freshBackend = await detectCoordinationBackend(pi, ctx.cwd);
           state.coordinationBackend = freshBackend;
           state.coordinationStrategy = selectStrategy(freshBackend);
+          state.coordinationMode ??= selectMode(freshBackend);
         } else {
           // Legacy state without coordination backend — detect fresh
           const freshBackend = await detectCoordinationBackend(pi, ctx.cwd);
           state.coordinationBackend = freshBackend;
           state.coordinationStrategy = selectStrategy(freshBackend);
+          state.coordinationMode ??= selectMode(freshBackend);
         }
         if (state.sophiaCRId) {
           // Try to rebuild full CR state from sophia if available

@@ -9,7 +9,7 @@ import {
   beadCreationPrompt,
 } from "../prompts.js";
 import { runGoalRefinement, extractConstraints } from "../goal-refinement.js";
-import { detectCoordinationBackend, selectStrategy } from "../coordination.js";
+import { detectCoordinationBackend, selectMode, selectStrategy } from "../coordination.js";
 
 export function registerProfileTool(oc: OrchestratorContext) {
   oc.pi.registerTool({
@@ -38,6 +38,7 @@ export function registerProfileTool(oc: OrchestratorContext) {
       const coordStrategy = selectStrategy(coordBackend);
       oc.state.coordinationBackend = coordBackend;
       oc.state.coordinationStrategy = coordStrategy;
+      oc.state.coordinationMode ??= selectMode(coordBackend);
       oc.persistState();
 
       oc.setPhase("discovering", ctx);

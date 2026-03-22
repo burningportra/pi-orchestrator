@@ -1,5 +1,18 @@
-import type { OrchestratorContext } from './types.js';
+import type { CoordinationMode, OrchestratorContext } from './types.js';
 import { createInitialState } from './types.js';
+
+function parseOrchestrateArgs(rawArgs?: string): { goalArg?: string; coordinationMode?: CoordinationMode } {
+  const input = rawArgs?.trim();
+  if (!input) return {};
+
+  const modeMatch = input.match(/(?:^|\s)--mode(?:=(worktree|single-branch)|\s+(worktree|single-branch))(?:\s|$)/);
+  const coordinationMode = (modeMatch?.[1] ?? modeMatch?.[2]) as CoordinationMode | undefined;
+  const goalArg = coordinationMode
+    ? input.replace(modeMatch![0], " ").trim() || undefined
+    : input;
+
+  return { goalArg, coordinationMode };
+}
 
 /**
  * Register all slash-commands (/orchestrate, /orchestrate-stop,
@@ -22,10 +35,13 @@ export function registerCommands(oc: OrchestratorContext) {
       }
 
       oc.state = createInitialState();
+      const { goalArg, coordinationMode } = parseOrchestrateArgs(args);
+      if (coordinationMode) {
+        oc.state.coordinationMode = coordinationMode;
+      }
       oc.orchestratorActive = true;
       oc.persistState();
 
-      const goalArg = args?.trim();
       if (goalArg) {
         pi.sendUserMessage(
           `Start the orchestrator workflow for this repo. I want to: ${goalArg}\n\nBegin by calling \`orch_profile\` to scan the repo, then skip discovery and go straight to creating beads with my stated goal.`,

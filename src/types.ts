@@ -237,6 +237,8 @@ export type OrchestratorPhase =
   | "iterating"
   | "complete";
 
+export type CoordinationMode = "worktree" | "single-branch";
+
 export interface OrchestratorState {
   phase: OrchestratorPhase;
   repoProfile?: RepoProfile;
@@ -265,7 +267,7 @@ export interface OrchestratorState {
   /** Selected coordination strategy based on available backends */
   coordinationStrategy?: import("./coordination.js").CoordinationStrategy;
   /** Coordination mode: worktree isolation vs single-branch */
-  coordinationMode?: import("./coordination.js").CoordinationMode;
+  coordinationMode?: CoordinationMode;
   /** Whether agent-mail session was bootstrapped for this orchestration */
   agentMailSessionActive?: boolean;
 
