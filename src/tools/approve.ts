@@ -41,6 +41,86 @@ function countChanges(prev: BeadSnapshot, curr: BeadSnapshot): number {
   return changes;
 }
 
+// ─── Extended snapshot for detailed diff ─────────────────────
+type BeadSnapshotFull = Map<string, { title: string; descLength: number; descHash: string; files: string[] }>;
+
+function snapshotBeadsFull(beads: Bead[], extractArtifacts: (b: Bead) => string[]): BeadSnapshotFull {
+  const snap: BeadSnapshotFull = new Map();
+  for (const b of beads) {
+    snap.set(b.id, { title: b.title, descLength: b.description.length, descHash: descHash(b.description), files: extractArtifacts(b) });
+  }
+  return snap;
+}
+
+export interface DiffSummary {
+  added: { id: string; title: string }[];
+  removed: string[];
+  modified: { id: string; changes: string[] }[];
+  unchangedCount: number;
+}
+
+export function diffBeadSnapshots(prev: BeadSnapshotFull, curr: BeadSnapshotFull): DiffSummary {
+  const added: DiffSummary["added"] = [];
+  const removed: string[] = [];
+  const modified: DiffSummary["modified"] = [];
+  let unchangedCount = 0;
+
+  for (const [id, entry] of curr) {
+    const old = prev.get(id);
+    if (!old) {
+      added.push({ id, title: entry.title });
+      continue;
+    }
+    const changes: string[] = [];
+    if (old.title !== entry.title) changes.push(`title: "${old.title}" → "${entry.title}"`);
+    if (old.descHash !== entry.descHash) {
+      const delta = entry.descLength - old.descLength;
+      changes.push(`description: ${delta >= 0 ? "+" : ""}${delta} chars`);
+    }
+    const addedFiles = entry.files.filter(f => !old.files.includes(f));
+    const removedFiles = old.files.filter(f => !entry.files.includes(f));
+    if (addedFiles.length > 0 || removedFiles.length > 0) {
+      const parts: string[] = [];
+      if (addedFiles.length) parts.push(`+${addedFiles.join(", +")}`);
+      if (removedFiles.length) parts.push(`-${removedFiles.join(", -")}`);
+      changes.push(`files: ${parts.join(", ")}`);
+    }
+    if (changes.length > 0) {
+      modified.push({ id, changes });
+    } else {
+      unchangedCount++;
+    }
+  }
+
+  for (const id of prev.keys()) {
+    if (!curr.has(id)) removed.push(id);
+  }
+
+  return { added, removed, modified, unchangedCount };
+}
+
+export function formatDiffSummary(diff: DiffSummary): string {
+  const lines: string[] = ["📋 **Changes since last round:**"];
+  if (diff.added.length) {
+    lines.push(`  ➕ Added: ${diff.added.map(a => `${a.id} (${a.title})`).join(", ")}`);
+  }
+  if (diff.removed.length) {
+    lines.push(`  ➖ Removed: ${diff.removed.join(", ")}`);
+  }
+  for (const m of diff.modified) {
+    lines.push(`  ✏️  ${m.id}: ${m.changes.join("; ")}`);
+  }
+  if (diff.unchangedCount > 0) {
+    lines.push(`  ⬜ ${diff.unchangedCount} bead${diff.unchangedCount !== 1 ? "s" : ""} unchanged`);
+  }
+  if (diff.added.length === 0 && diff.removed.length === 0 && diff.modified.length === 0) {
+    lines.push("  No changes detected.");
+  }
+  return lines.join("\n");
+}
+
+let _lastBeadSnapshotFull: BeadSnapshotFull | undefined;
+
 const MAX_POLISH_ROUNDS = 12;
 
 export function registerApproveTool(oc: OrchestratorContext) {
@@ -123,18 +203,48 @@ export function registerApproveTool(oc: OrchestratorContext) {
         return `${indent}**${b.id}: ${b.title}**\n${indent}   ${b.description.split("\n").slice(0, 3).join("\n" + indent + "   ")}\n${indent}   📄 ${files.length > 0 ? files.join(", ") : "(no files specified)"}`;
       };
 
+      // Build diff summary for polish rounds >= 1
+      const polishRoundForDisplay = oc.state.polishRound;
+      const currentSnapshotFull = snapshotBeadsFull(beads, extractArtifacts);
+      const diffText = (polishRoundForDisplay >= 1 && _lastBeadSnapshotFull)
+        ? formatDiffSummary(diffBeadSnapshots(_lastBeadSnapshotFull, currentSnapshotFull))
+        : undefined;
+
       const beadListParts: string[] = [];
-      for (const b of beads) {
-        if (childIds.has(b.id)) continue; // rendered under parent
-        beadListParts.push(formatBead(b));
-        const children = childrenByParent.get(b.id);
-        if (children) {
-          for (const child of children) {
-            beadListParts.push(`   ↳ ${formatBead(child, "   ")}`);
+      if (diffText) {
+        // Compact mode: diff summary + abbreviated bead list
+        beadListParts.push(diffText);
+        beadListParts.push("");
+        beadListParts.push("**All beads:**");
+        for (const b of beads) {
+          if (childIds.has(b.id)) continue;
+          beadListParts.push(`• ${b.id}: ${b.title}`);
+          const children = childrenByParent.get(b.id);
+          if (children) {
+            for (const child of children) {
+              beadListParts.push(`  ↳ ${child.id}: ${child.title}`);
+            }
+          }
+        }
+      } else {
+        // Round 0: full detailed format
+        for (const b of beads) {
+          if (childIds.has(b.id)) continue;
+          beadListParts.push(formatBead(b));
+          const children = childrenByParent.get(b.id);
+          if (children) {
+            for (const child of children) {
+              beadListParts.push(`   ↳ ${formatBead(child, "   ")}`);
+            }
           }
         }
       }
-      const beadListText = beadListParts.join("\n\n");
+      const beadListText = diffText
+        ? beadListParts.join("\n")
+        : beadListParts.join("\n\n");
+
+      // Update full snapshot for next round
+      _lastBeadSnapshotFull = currentSnapshotFull;
 
       const bvWarnings = validation.warnings?.length ? `\n⚠️ ${validation.warnings.join("\n⚠️ ")}` : "";
       const shallowWarning = validation.shallowBeads?.length
@@ -444,6 +554,7 @@ cd ${ctx.cwd}`;
 
       if (!choice || choice.startsWith("❌")) {
         _lastBeadSnapshot = undefined;
+        _lastBeadSnapshotFull = undefined;
         oc.orchestratorActive = false;
         oc.setPhase("idle", ctx);
         oc.persistState();
@@ -487,6 +598,7 @@ cd ${ctx.cwd}`;
 
       // Reset polish snapshot
       _lastBeadSnapshot = undefined;
+      _lastBeadSnapshotFull = undefined;
 
       // ── Approved — launch execution ──────────────────────────
       // Reset bead-centric implementation state
