@@ -367,5 +367,26 @@ describe("implementerInstructions", () => {
     };
     const output = implementerInstructions(bead as any, profile as any, []);
     expect(output).toContain("bv --robot-next");
+    expect(output).toContain("br ready");
+  });
+});
+
+describe("learningsExtractionPrompt", () => {
+  it("includes the goal and bead ids", () => {
+    const output = learningsExtractionPrompt("Ship prompt routing", ["pi-orchestrator-3wz", "pi-orchestrator-t8r"]);
+    expect(output).toContain("Ship prompt routing");
+    expect(output).toContain("pi-orchestrator-3wz");
+    expect(output).toContain("pi-orchestrator-t8r");
+  });
+
+  it("includes structured reflection questions and cm add commands", () => {
+    const output = learningsExtractionPrompt("Goal", ["bead-1"]);
+    expect(output).toContain("What architectural decisions were made and why?");
+    expect(output).toContain("What gotchas or surprises were encountered?");
+    expect(output).toContain("What patterns worked well?");
+    expect(output).toContain("What would you do differently next time?");
+    expect(output).toContain("Were there any tool issues or workflow friction?");
+    expect(output).toContain("cm add");
+    expect(output).toContain("3–7 rules");
   });
 });
