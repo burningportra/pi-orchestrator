@@ -119,24 +119,10 @@ export function registerSelectTool(oc: OrchestratorContext) {
         const idea = orderedIdeas[ideaIndex];
         goal = `${idea.title}: ${idea.description}`;
 
-        // Offer to refine the system-provided idea
-        const refineChoice = await ctx.ui.select(
-          `🎯 Selected: ${idea.title}\n\nWould you like to refine this idea?`,
-          [
-            "▶️  Continue — use as-is",
-            "🎯 Refine — answer clarifying questions to sharpen the goal",
-          ]
-        );
-
-        if (refineChoice?.startsWith("🎯")) {
-          const refinement = await runGoalRefinement(goal, oc.state.repoProfile!, oc.pi, ctx);
-          goal = refinement.enrichedGoal;
-          refinementUsed = !refinement.skipped;
-
-          if (refinementUsed) {
-            oc.state.constraints = extractConstraints(refinement.answers);
-          }
-        }
+        // System-generated ideas are already well-defined (title + description + rationale + scoring).
+        // Skip refinement questionnaire — it adds latency without proportional value.
+        // Refinement is still offered for custom goals (the "✏️ Enter a custom goal" path above)
+        // and for "I know what I want" in profile.ts.
       }
 
       oc.state.selectedGoal = goal;

@@ -12,6 +12,7 @@ import {
   researchInvestigatePrompt,
   researchDeepenPrompt,
   researchInversionPrompt,
+  discoveryInstructions,
   AI_SLOP_PATTERNS,
   SWARM_STAGGER_DELAY_MS,
 } from "./prompts.js";
@@ -215,5 +216,65 @@ describe("researchInversionPrompt", () => {
     const prompt = researchInversionPrompt("Alpha", "Beta");
     expect(prompt).toContain("Alpha can do");
     expect(prompt).toContain("Beta simply could never do");
+  });
+});
+
+// ─── discoveryInstructions (S1: unified wizard mode) ────────
+describe("discoveryInstructions", () => {
+  const profile = {
+    name: "test-repo",
+    languages: ["TypeScript"],
+    frameworks: [],
+    structure: "",
+    entrypoints: ["src/index.ts"],
+    recentCommits: [],
+    hasTests: true,
+    hasDocs: false,
+    hasCI: false,
+    todos: [],
+    keyFiles: {},
+  };
+
+  it("contains all 5 scoring axes", () => {
+    const prompt = discoveryInstructions(profile);
+    expect(prompt).toContain("Useful");
+    expect(prompt).toContain("Pragmatic");
+    expect(prompt).toContain("Accretive");
+    expect(prompt).toContain("Robust");
+    expect(prompt).toContain("Ergonomic");
+  });
+
+  it("contains tier instructions", () => {
+    const prompt = discoveryInstructions(profile);
+    expect(prompt).toContain('"top"');
+    expect(prompt).toContain('"honorable"');
+    expect(prompt).toContain("5 top");
+  });
+
+  it("contains the 8-step process", () => {
+    const prompt = discoveryInstructions(profile);
+    expect(prompt).toContain("Ground yourself");
+    expect(prompt).toContain("Generate broadly");
+    expect(prompt).toContain("Score each candidate");
+    expect(prompt).toContain("Cut");
+    expect(prompt).toContain("Rank");
+    expect(prompt).toContain("Merge overlaps");
+    expect(prompt).toContain("Balance");
+    expect(prompt).toContain("Tier");
+  });
+
+  it("includes repo context from profile", () => {
+    const prompt = discoveryInstructions(profile);
+    expect(prompt).toContain("test-repo");
+    expect(prompt).toContain("TypeScript");
+  });
+
+  it("accepts only 2 params (no mode)", () => {
+    // Verify function works with just profile
+    const prompt = discoveryInstructions(profile);
+    expect(prompt.length).toBeGreaterThan(100);
+    // Also works with scanResult
+    const prompt2 = discoveryInstructions(profile, undefined);
+    expect(prompt2.length).toBeGreaterThan(100);
   });
 });

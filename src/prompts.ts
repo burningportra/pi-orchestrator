@@ -163,11 +163,10 @@ After all beads and reviews pass, the orchestrator offers:
 }
 
 // ─── Discovery Prompt ────────────────────────────────────────
-export function discoveryInstructions(profile: RepoProfile, scanResult?: ScanResult, mode?: "standard" | "wizard" | "creative"): string {
+export function discoveryInstructions(profile: RepoProfile, scanResult?: ScanResult): string {
   const repoContext = formatRepoProfile(profile, scanResult);
 
-  if (mode === "wizard") {
-    return `Analyze this repository and generate your best improvement ideas using structured ideation.
+  return `Analyze this repository and generate your best improvement ideas using structured ideation.
 
 ${repoContext}
 
@@ -202,65 +201,6 @@ For each surviving idea, provide:
 - **synergies**: (optional) ids of complementary ideas
 
 Return 10-15 ideas total (5 top + 5-10 honorable).`;
-  }
-
-  if (mode === "creative") {
-    return `Analyze this repository and generate your best, most original improvement ideas.
-
-${repoContext}
-
-## Process (do this internally before outputting)
-1. **Ground yourself** — study the repo profile, scan findings, TODOs, commits carefully
-2. **Think of ONE HUNDRED ideas** — be wildly creative, but stay pragmatic
-3. **Score each candidate** against these 5 axes (1-5 scale):
-   - **Useful** (2× weight) — does it solve a real, frequent pain?
-   - **Pragmatic** (2× weight) — is it realistic to build in hours/days?
-   - **Accretive** (1.5× weight) — does it clearly add value beyond what exists?
-   - **Robust** (1× weight) — will it handle edge cases and work reliably?
-   - **Ergonomic** (1× weight) — does it reduce friction or cognitive load?
-4. **Cut ruthlessly** — remove anything scoring <3 average, anything duplicative, anything boring
-5. **Merge overlaps** — combine variant ideas into stronger unified ones
-6. **Pick your 7 VERY BEST** — the most clever, surprising, and high-value ideas that are still pragmatic
-
-## Output requirements
-For each idea, provide:
-- **id**: unique kebab-case identifier
-- **title**: short descriptive title
-- **description**: 2-3 sentences explaining what to do and why
-- **category**: feature | refactor | docs | dx | performance | reliability | security | testing
-- **effort**: low | medium | high
-- **impact**: low | medium | high
-- **rationale**: 2-3 sentences explaining why this beats alternatives and what repo evidence supports it
-- **tier**: "top" for all 7
-- **sourceEvidence**: array of strings — what repo signals prompted this
-- **scores**: { useful, pragmatic, accretive, robust, ergonomic } — your 1-5 ratings
-- **risks**: (optional) known downsides
-- **synergies**: (optional) ids of complementary ideas`;
-  }
-
-  // Standard mode — lightweight, backward-compatible
-  return `Analyze this repository profile and suggest 3–7 concrete, actionable project ideas.
-
-${repoContext}
-
-## Guidelines
-- Treat live codebase scan findings as the primary signal.
-- Use commits, TODOs, and prior history as secondary enrichment only.
-- Each idea should be executable in a few hours to a couple of days
-- Avoid trivial tasks — aim for meaningful improvements
-- Ground ideas in the actual repo state (don't suggest "add tests" if tests already cover the codebase well)
-- Cover a mix of categories when possible
-- Consider: features, refactors, docs, DX, performance, reliability, security, testing
-
-For each idea, provide:
-- **id**: unique kebab-case identifier
-- **title**: short descriptive title
-- **description**: 2-3 sentences explaining what to do and why
-- **category**: feature | refactor | docs | dx | performance | reliability | security | testing
-- **effort**: low | medium | high
-- **impact**: low | medium | high
-- **rationale**: a brief sentence on why this idea is worth pursuing given the repo state
-- **tier**: "top" for all ideas`;
 }
 
 // ─── Bead Creation Prompt ────────────────────────────────────

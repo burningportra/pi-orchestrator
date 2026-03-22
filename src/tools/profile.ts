@@ -73,11 +73,9 @@ export function registerProfileTool(oc: OrchestratorContext) {
         : "";
 
       const discoveryMode = await ctx.ui.select(
-        "Discovery mode:",
+        "What would you like to do?",
         [
-          "📋 Standard — 3-7 practical ideas",
-          "🚀 Creative — think of 100, tell me your 7 best",
-          "🧠 Idea Wizard — structured ideation with rubric scoring",
+          "💡 Suggest improvements — scan and propose ideas",
           "✏️  I know what I want — enter my own goal",
         ]
       );
@@ -122,20 +120,9 @@ export function registerProfileTool(oc: OrchestratorContext) {
         };
       }
 
-      const isCreative = discoveryMode?.startsWith("🚀");
-      const isWizard = discoveryMode?.startsWith("🧠");
-      const discoveryModeKey: "standard" | "wizard" | "creative" = isWizard ? "wizard" : isCreative ? "creative" : "standard";
+      const modeInstructions = discoveryInstructions(profile, scanResult);
 
-      const modeInstructions = discoveryInstructions(profile, scanResult, discoveryModeKey);
-
-      let discoveryPrompt: string;
-      if (isWizard) {
-        discoveryPrompt = `**NEXT: Call \`orch_discover\` with your top 5 ideas and next 5-10 honorable mentions NOW.**\n\n🧠 Idea Wizard Mode: Use structured ideation with rubric scoring.\n\n${modeInstructions}`;
-      } else if (isCreative) {
-        discoveryPrompt = `**NEXT: Call \`orch_discover\` with your top 7 ideas NOW.**\n\n🚀 Creative Discovery Mode:\n\n${modeInstructions}`;
-      } else {
-        discoveryPrompt = `**NEXT: Call \`orch_discover\` to generate project ideas NOW.**\n\n${modeInstructions}`;
-      }
+      const discoveryPrompt = `**NEXT: Call \`orch_discover\` with your top 5 ideas and next 5-10 honorable mentions NOW.**\n\n${modeInstructions}`;
 
       return {
         content: [
@@ -144,7 +131,7 @@ export function registerProfileTool(oc: OrchestratorContext) {
             text: `${discoveryPrompt}\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}\n\n${formatted}${memoryContext}`,
           },
         ],
-        details: { profile, scanResult, discoveryMode: discoveryModeKey },
+        details: { profile, scanResult },
       };
     },
 
