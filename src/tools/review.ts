@@ -1,10 +1,55 @@
 import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { OrchestratorContext } from "../types.js";
 import { implementerInstructions, realityCheckInstructions, randomExplorationInstructions, SWARM_STAGGER_DELAY_MS } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 import { runGuidedGates } from "../gates.js";
+
+function formatModelRef(model: { provider?: string; id: string }): string {
+  return model.provider ? `${model.provider}/${model.id}` : model.id;
+}
+
+async function getParallelModelAssignments(ctx: ExtensionContext, agentCount: number): Promise<(string | undefined)[]> {
+  if (agentCount < 2) {
+    return Array(agentCount).fill(undefined);
+  }
+
+  const availableModels = ctx.modelRegistry.getAvailable();
+  const orderedModels = availableModels.filter((model, index, models) =>
+    models.findIndex((candidate) => formatModelRef(candidate) === formatModelRef(model)) === index
+  );
+
+  if (orderedModels.length < 2) {
+    return Array(agentCount).fill(undefined);
+  }
+
+  const currentModelRef = ctx.model ? formatModelRef(ctx.model) : undefined;
+  if (currentModelRef) {
+    const currentIndex = orderedModels.findIndex((model) => formatModelRef(model) === currentModelRef);
+    if (currentIndex > 0) {
+      const [currentModel] = orderedModels.splice(currentIndex, 1);
+      orderedModels.unshift(currentModel);
+    }
+  }
+
+  const primaryModel = orderedModels[0];
+  const rotation = [
+    primaryModel,
+    ...orderedModels.slice(1).filter((model) => model.provider !== primaryModel.provider),
+  ];
+
+  if (rotation.length < 2) {
+    const fallbackAlt = orderedModels.slice(1).find((model) => formatModelRef(model) !== formatModelRef(primaryModel));
+    if (!fallbackAlt) {
+      return Array(agentCount).fill(undefined);
+    }
+    rotation.push(fallbackAlt);
+  }
+
+  return Array.from({ length: agentCount }, (_, index) => formatModelRef(rotation[index % rotation.length]));
+}
 
 export function registerReviewTool(oc: OrchestratorContext) {
   oc.pi.registerTool({
@@ -310,7 +355,8 @@ export function registerReviewTool(oc: OrchestratorContext) {
             }
           }
           const goal = oc.state.selectedGoal ?? "Unknown goal";
-          const agentConfigs = ready.map((b) => {
+          const modelAssignments = await getParallelModelAssignments(ctx, ready.length);
+          const agentConfigs = ready.map((b, index) => {
             const artifacts = extractBeadArtifacts(b);
             const agentName = `bead-${b.id}`;
             const threadId = b.id;
@@ -329,6 +375,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
             return {
               name: agentName,
               task: `${preamble}${implInstr}\n\ncd ${ctx.cwd}`,
+              ...(modelAssignments[index] ? { model: modelAssignments[index] } : {}),
             };
           });
 

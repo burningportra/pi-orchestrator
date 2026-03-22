@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import type { OrchestratorContext, Bead } from "../types.js";
@@ -184,6 +185,50 @@ function formatPlanSummary(plan: string): string {
   ].filter(Boolean);
 
   return summary.join("\n");
+}
+
+function formatModelRef(model: { provider?: string; id: string }): string {
+  return model.provider ? `${model.provider}/${model.id}` : model.id;
+}
+
+async function getParallelModelAssignments(ctx: ExtensionContext, agentCount: number): Promise<(string | undefined)[]> {
+  if (agentCount < 2) {
+    return Array(agentCount).fill(undefined);
+  }
+
+  const availableModels = ctx.modelRegistry.getAvailable();
+  const orderedModels = availableModels.filter((model, index, models) =>
+    models.findIndex((candidate) => formatModelRef(candidate) === formatModelRef(model)) === index
+  );
+
+  if (orderedModels.length < 2) {
+    return Array(agentCount).fill(undefined);
+  }
+
+  const currentModelRef = ctx.model ? formatModelRef(ctx.model) : undefined;
+  if (currentModelRef) {
+    const currentIndex = orderedModels.findIndex((model) => formatModelRef(model) === currentModelRef);
+    if (currentIndex > 0) {
+      const [currentModel] = orderedModels.splice(currentIndex, 1);
+      orderedModels.unshift(currentModel);
+    }
+  }
+
+  const primaryModel = orderedModels[0];
+  const rotation = [
+    primaryModel,
+    ...orderedModels.slice(1).filter((model) => model.provider !== primaryModel.provider),
+  ];
+
+  if (rotation.length < 2) {
+    const fallbackAlt = orderedModels.slice(1).find((model) => formatModelRef(model) !== formatModelRef(primaryModel));
+    if (!fallbackAlt) {
+      return Array(agentCount).fill(undefined);
+    }
+    rotation.push(fallbackAlt);
+  }
+
+  return Array.from({ length: agentCount }, (_, index) => formatModelRef(rotation[index % rotation.length]));
 }
 
 export function registerApproveTool(oc: OrchestratorContext) {
@@ -979,7 +1024,8 @@ cd ${ctx.cwd}`;
         }
 
         // Build parallel agent configs
-        const agentConfigs = ready.map((bead) => {
+        const modelAssignments = await getParallelModelAssignments(ctx, ready.length);
+        const agentConfigs = ready.map((bead, index) => {
           const artifacts = extractArtifacts(bead);
           const agentName = `bead-${bead.id}`;
           const preamble = oc.state.coordinationBackend?.agentMail
@@ -995,6 +1041,7 @@ cd ${ctx.cwd}`;
           return {
             name: agentName,
             task: `${preamble}You are implementing bead ${bead.id}.\n\n## ${bead.title}\n\n${bead.description}\n\n⚠️ SCOPE CONSTRAINT: Only modify files listed in the bead. If additional files need changes, note them in your summary but DO NOT modify them.\n\n${canSameDir ? "🤝 **Same-dir mode**: Other agents are working in this directory. Your file reservations protect your files.\n\n" : ""}Implement the bead. When done, do a fresh-eyes review of all changes. Then COMMIT:\n\`\`\`bash\ngit add ${artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "bead ${bead.id}: ${bead.title.slice(0, 60)}"\n\`\`\`\n\nSummarize what you did and what the fresh-eyes review found.\n\ncd ${ctx.cwd}`,
+            ...(modelAssignments[index] ? { model: modelAssignments[index] } : {}),
           };
         });
 
