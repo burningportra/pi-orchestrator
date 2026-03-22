@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import type { OrchestratorContext } from "../types.js";
-import { implementerInstructions, realityCheckInstructions, randomExplorationInstructions } from "../prompts.js";
+import { implementerInstructions, realityCheckInstructions, randomExplorationInstructions, SWARM_STAGGER_DELAY_MS } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 import { runGuidedGates } from "../gates.js";
 
@@ -319,13 +319,17 @@ export function registerReviewTool(oc: OrchestratorContext) {
           oc.persistState();
 
           const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+          const staggerSeconds = SWARM_STAGGER_DELAY_MS / 1000;
+          const launchInstruction = ready.length > 2
+            ? `⏱️ **STAGGER LAUNCH**: You have ${ready.length} agents to launch. Launch them ONE AT A TIME with ${staggerSeconds}-second gaps between each to prevent thundering herd. Call \`subagent\` for each agent config below sequentially, waiting ${staggerSeconds}s between calls.`
+            : `**NEXT: Call \`parallel_subagents\` NOW to implement ${ready.length} ready beads.**`;
           ctx.ui.notify(`✅ Bead ${params.beadId} passed! ${ready.length} beads now ready for parallel implementation.`, "info");
 
           return {
             content: [
               {
                 type: "text",
-                text: `✅ Bead ${params.beadId} (${bead.title}) passed.\n\n**NEXT: Call \`parallel_subagents\` NOW to implement ${ready.length} ready beads.**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each bead.`,
+                text: `✅ Bead ${params.beadId} (${bead.title}) passed.\n\n${launchInstruction}\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each bead.`,
               },
             ],
             details: { review: { beadId: params.beadId, passed: true }, readyBeads: ready.map((b) => b.id), launchingParallel: true },

@@ -38,6 +38,15 @@ export function selectStrategy(backend: CoordinationBackend): CoordinationStrate
   return "worktrees";
 }
 
+/**
+ * Select coordination mode based on available backends.
+ * When agent-mail is available, agents can safely share a single branch
+ * using file reservations. Otherwise, fall back to worktree isolation.
+ */
+export function selectMode(backend: CoordinationBackend): CoordinationMode {
+  return backend.agentMail ? "single-branch" : "worktree";
+}
+
 // ─── Detection ─────────────────────────────────────────────────
 
 let _cached: CoordinationBackend | null = null;

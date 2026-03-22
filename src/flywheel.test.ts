@@ -15,8 +15,10 @@ import {
   discoveryInstructions,
   planDocumentPrompt,
   planRefinementPrompt,
+  learningsExtractionPrompt,
   AI_SLOP_PATTERNS,
   SWARM_STAGGER_DELAY_MS,
+  implementerInstructions,
 } from "./prompts.js";
 import type { Bead, BeadResult } from "./types.js";
 
@@ -344,5 +346,26 @@ describe("planRefinementPrompt", () => {
     const prompt = planRefinementPrompt("plans/x.md", 1);
     expect(prompt).toContain("fresh");
     expect(prompt).toContain("anchoring");
+  });
+});
+
+describe("implementerInstructions", () => {
+  it("recommends bv --robot-next for picking next bead", () => {
+    const bead = {
+      id: "test-1",
+      title: "Test bead",
+      description: "Do something",
+      status: "ready" as const,
+      deps: [],
+    };
+    const profile = {
+      languages: ["TypeScript"],
+      frameworks: ["vitest"],
+      testFramework: "vitest",
+      buildCommand: "npm run build",
+      testCommand: "npm test",
+    };
+    const output = implementerInstructions(bead as any, profile as any, []);
+    expect(output).toContain("bv --robot-next");
   });
 });

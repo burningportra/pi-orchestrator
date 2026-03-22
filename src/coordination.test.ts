@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { selectStrategy, detectCoordinationBackend, resetDetection, detectUbs, resetUbsCache } from "./coordination.js";
+import { selectStrategy, selectMode, detectCoordinationBackend, resetDetection, detectUbs, resetUbsCache } from "./coordination.js";
 
 // ─── Mock fs ────────────────────────────────────────────────
 

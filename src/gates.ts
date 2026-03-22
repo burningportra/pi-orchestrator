@@ -93,9 +93,11 @@ export async function runGuidedGates(
     st.currentGateIndex = 0;
     oc.setPhase("complete", ctx);
     oc.persistState();
+    const learningsText = learningsExtractionPrompt(goal, activeBeads.map((b) => b.id));
+    // Completion output must include explicit `cm add` commands so the landing prompt teaches CASS capture.
     return {
       content: [
-        { type: "text", text: `${summaryText}${extraInfo}\n\nOrchestration complete after ${round} round(s).\n\n---\n## 🧠 Save Learnings to CASS Memory\n\nDistill the key decisions, gotchas, patterns, and architectural choices from this orchestration. What would a future agent need to know about this repo?\n\nFor each learning, call the \`orch_memory\` tool with action=\\"context\\" to check if similar rules already exist, then use bash to run:\n\`\`\`bash\ncm add \\"your learning here\\" --category orchestration --json\n\`\`\`\n\nAdd 3–7 rules. Each should be specific and actionable — not vague summaries.` },
+        { type: "text", text: `${summaryText}${extraInfo}\n\nOrchestration complete after ${round} round(s).\n\n---\n${learningsText}` },
       ],
       details: { complete: true, rounds: round },
     };
