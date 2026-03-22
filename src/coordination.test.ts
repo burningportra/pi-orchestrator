@@ -135,3 +135,24 @@ describe("detectCoordinationBackend", () => {
     expect(mockPi.exec.mock.calls.length).toBe(callCount);
   });
 });
+
+// ─── detectUbs ──────────────────────────────────────────────
+
+describe("detectUbs", () => {
+  let mockPi: { exec: ReturnType<typeof vi.fn> } & ExtensionAPI;
+
+  beforeEach(() => {
+    resetUbsCache();
+    mockPi = { exec: vi.fn() } as unknown as { exec: ReturnType<typeof vi.fn> } & ExtensionAPI;
+  });
+
+  it("returns true when ubs --help succeeds", async () => {
+    mockPi.exec.mockResolvedValue({ code: 0, stdout: "ubs help", stderr: "" });
+    expect(await detectUbs(mockPi, "/fake/cwd")).toBe(true);
+  });
+
+  it("returns false when ubs --help fails", async () => {
+    mockPi.exec.mockRejectedValue(new Error("command not found"));
+    expect(await detectUbs(mockPi, "/fake/cwd")).toBe(false);
+  });
+});

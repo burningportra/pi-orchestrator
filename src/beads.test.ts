@@ -315,6 +315,42 @@ describe("bvNext", () => {
   });
 });
 
+// ─── bvPlan ──────────────────────────────────────────────────
+
+describe("bvPlan", () => {
+  beforeEach(() => resetBvCache());
+
+  it("returns raw output from bv --robot-plan", async () => {
+    const planOutput = '{"order":["bead-1","bead-2"],"reasoning":"bead-1 unblocks bead-2"}';
+    const pi = {
+      exec: vi.fn(async (cmd: string, args?: string[]) => {
+        if (cmd === "which") return { code: 0, stdout: "/usr/local/bin/bv\n", stderr: "" };
+        if (args?.[0] === "--robot-plan") return { code: 0, stdout: planOutput + "\n", stderr: "" };
+        return { code: 0, stdout: "", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    const result = await bvPlan(pi, CWD);
+    expect(result).toBe(planOutput);
+  });
+
+  it("returns null when bv unavailable", async () => {
+    const pi = makePi(async () => { throw new Error("not found"); });
+    expect(await bvPlan(pi, CWD)).toBeNull();
+  });
+
+  it("returns null on empty output", async () => {
+    const pi = {
+      exec: vi.fn(async (cmd: string) => {
+        if (cmd === "which") return { code: 0, stdout: "/usr/local/bin/bv\n", stderr: "" };
+        return { code: 0, stdout: "  \n", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    expect(await bvPlan(pi, CWD)).toBeNull();
+  });
+});
+
 // ─── validateBeads with bv ───────────────────────────────────
 
 describe("validateBeads with bv insights", () => {
