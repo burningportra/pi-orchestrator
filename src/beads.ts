@@ -1,6 +1,94 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { Bead, BvInsights, BvNextPick } from "./types.js";
 
+export interface PlanAuditMatch {
+  beadId: string;
+  title: string;
+  score: number;
+}
+
+export interface PlanAuditSection {
+  heading: string;
+  summary: string;
+  matches: PlanAuditMatch[];
+}
+
+export interface PlanToBeadAudit {
+  sections: PlanAuditSection[];
+  uncoveredSections: PlanAuditSection[];
+  weakMappings: PlanAuditSection[];
+}
+
+function tokenizePlanAudit(text: string): string[] {
+  return Array.from(
+    new Set(
+      text
+        .toLowerCase()
+        .replace(/[`*_#>-]/g, " ")
+        .split(/[^a-z0-9]+/)
+        .filter((token) => token.length >= 4)
+    )
+  );
+}
+
+function scorePlanAuditSection(sectionText: string, bead: Bead): number {
+  const sectionTokens = tokenizePlanAudit(sectionText);
+  if (sectionTokens.length === 0) return 0;
+
+  const beadText = `${bead.title}\n${bead.description}`.toLowerCase();
+  let hits = 0;
+  for (const token of sectionTokens) {
+    if (beadText.includes(token)) hits++;
+  }
+  return hits / sectionTokens.length;
+}
+
+function summarizePlanAuditSection(body: string): string {
+  return body
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0 && !/^#+\s/.test(line))
+    ?.slice(0, 160) ?? "";
+}
+
+export function auditPlanToBeads(plan: string, beads: Bead[]): PlanToBeadAudit {
+  const normalized = plan.trim();
+  if (!normalized) return { sections: [], uncoveredSections: [], weakMappings: [] };
+
+  const headingPattern = /^#{1,3}\s+(.+)$/gm;
+  const headingMatches = Array.from(normalized.matchAll(headingPattern));
+  const rawSections = headingMatches.length > 0
+    ? headingMatches.map((match, index) => {
+        const heading = match[1].trim();
+        const start = match.index! + match[0].length;
+        const end = index + 1 < headingMatches.length ? headingMatches[index + 1].index! : normalized.length;
+        const body = normalized.slice(start, end).trim();
+        return { heading, body };
+      })
+    : [{ heading: "Plan", body: normalized }];
+
+  const sections = rawSections
+    .map(({ heading, body }) => {
+      const sectionText = `${heading}\n${body}`;
+      const matches = beads
+        .map((bead) => ({ beadId: bead.id, title: bead.title, score: scorePlanAuditSection(sectionText, bead) }))
+        .filter((match) => match.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 3);
+
+      return {
+        heading,
+        summary: summarizePlanAuditSection(body),
+        matches,
+      } satisfies PlanAuditSection;
+    })
+    .filter((section) => section.summary.length > 0 || section.matches.length > 0);
+
+  const uncoveredSections = sections.filter((section) => section.matches.length === 0);
+  const weakMappings = sections.filter((section) => section.matches.length > 0 && section.matches[0].score < 0.35);
+  return { sections, uncoveredSections, weakMappings };
+}
+
 // ─── bv (beads-viewer) Integration ────────────────────────────
 
 let _bvAvailable: boolean | null = null;

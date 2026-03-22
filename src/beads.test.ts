@@ -611,3 +611,35 @@ describe("validateBeads shallowBeads", () => {
     expect(result.shallowBeads[0].reason).toContain("too short");
   });
 });
+
+describe("auditPlanToBeads", () => {
+  it("flags uncovered plan sections with no bead matches", async () => {
+    const { auditPlanToBeads } = await import("./beads.js");
+    const plan = `# Feature Plan
+
+## API Contract
+Add route handlers and request validation.
+
+## Rollout Safety
+Add migration rollback and feature flag coverage.`;
+    const beads = [
+      makeBead({ id: "b1", title: "Implement API contract", description: "Add route handlers and request validation in src/api.ts" }),
+    ];
+
+    const audit = auditPlanToBeads(plan, beads);
+    expect(audit.uncoveredSections.map((section) => section.heading)).toContain("Rollout Safety");
+    expect(audit.sections.find((section) => section.heading === "API Contract")?.matches[0]?.beadId).toBe("b1");
+  });
+
+  it("flags weak mappings when overlap is too thin", async () => {
+    const { auditPlanToBeads } = await import("./beads.js");
+    const plan = `## Testing Strategy
+Cover retries, backoff, and timeout behavior.`;
+    const beads = [
+      makeBead({ id: "b2", title: "Add timeout smoke test", description: "Write a basic smoke test in src/tests.ts" }),
+    ];
+
+    const audit = auditPlanToBeads(plan, beads);
+    expect(audit.weakMappings.map((section) => section.heading)).toContain("Testing Strategy");
+  });
+});

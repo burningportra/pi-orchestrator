@@ -1,4 +1,5 @@
 import type { RepoProfile, Bead, BeadResult, ScanResult } from "./types.js";
+import type { PlanToBeadAudit } from "./beads.js";
 
 // ─── Repo Profile Formatting ────────────────────────────────
 export function formatRepoProfile(profile: RepoProfile, scanResult?: ScanResult): string {
@@ -260,6 +261,36 @@ Each subtask should be a single coherent unit of work that one agent can complet
 Verify with \`br list\` and \`br dep cycles\` (must show no cycles).
 
 Use ultrathink.`;
+}
+
+export function formatPlanToBeadAuditWarnings(audit: PlanToBeadAudit): string {
+  if (audit.uncoveredSections.length === 0 && audit.weakMappings.length === 0) {
+    return "";
+  }
+
+  const lines = ["⚠️ **Plan-to-bead audit warnings**"];
+
+  if (audit.uncoveredSections.length > 0) {
+    lines.push(
+      "Uncovered plan sections:",
+      ...audit.uncoveredSections.slice(0, 5).map((section) =>
+        `- **${section.heading}**${section.summary ? ` — ${section.summary}` : ""}`
+      )
+    );
+  }
+
+  if (audit.weakMappings.length > 0) {
+    lines.push(
+      "Weak section-to-bead mapping:",
+      ...audit.weakMappings.slice(0, 5).map((section) => {
+        const top = section.matches[0];
+        return `- **${section.heading}** → ${top?.beadId ?? "no bead"}${top ? ` (${Math.round(top.score * 100)}% keyword overlap)` : ""}`;
+      })
+    );
+  }
+
+  lines.push("Review these gaps before implementation if they reflect missing scope or underspecified beads.");
+  return lines.join("\n");
 }
 
 export function planToBeadsPrompt(

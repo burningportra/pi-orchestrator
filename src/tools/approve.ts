@@ -4,7 +4,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import type { OrchestratorContext, Bead, CoordinationMode } from "../types.js";
-import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS, beadCreationPrompt, planRefinementPrompt, planToBeadsPrompt } from "../prompts.js";
+import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS, beadCreationPrompt, planRefinementPrompt, planToBeadsPrompt, formatPlanToBeadAuditWarnings } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 
 // ─── Module-level bead snapshots for change detection ────────
@@ -364,7 +364,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
         };
       }
 
-      const { readBeads, readyBeads, extractArtifacts, validateBeads, syncBeads, updateBeadStatus, bvInsights } = await import("../beads.js");
+      const { readBeads, readyBeads, extractArtifacts, validateBeads, syncBeads, updateBeadStatus, bvInsights, auditPlanToBeads } = await import("../beads.js");
       const { beadRefinementPrompt } = await import("../prompts.js");
 
       // Read all beads from br CLI
@@ -485,6 +485,18 @@ export function registerApproveTool(oc: OrchestratorContext) {
         ? `\n\n⚠️ **Bottleneck beads:** ${insights.Bottlenecks.map((b) => b.ID).join(", ")} — high betweenness centrality means these block many downstream beads. Consider splitting them (Advanced → Fix graph issues) before implementing.`
         : "";
 
+      let planAuditWarning = "";
+      if (oc.state.planDocument) {
+        try {
+          const plan = readFileSync(sessionArtifactPath(ctx, oc.state.planDocument), "utf8");
+          const planAudit = auditPlanToBeads(plan, beads);
+          planAuditWarning = formatPlanToBeadAuditWarnings(planAudit);
+          if (planAuditWarning) planAuditWarning = `\n\n${planAuditWarning}`;
+        } catch {
+          // Non-fatal: missing or unreadable plan artifact should not block approval.
+        }
+      }
+
       // Quality summary
       const { qualityCheckBeads } = await import("../beads.js");
       const qualityPreview = await qualityCheckBeads(oc.pi, ctx.cwd);
@@ -583,7 +595,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
 
       if (choice === undefined) {
         choice = await ctx.ui.select(
-          `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}${bottleneckWarning}\n\n${beadListText}${validationWarning}${convergenceTip}`,
+          `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}${bottleneckWarning}${planAuditWarning}\n\n${beadListText}${validationWarning}${convergenceTip}`,
           options
         );
       }

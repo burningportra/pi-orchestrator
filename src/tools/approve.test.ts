@@ -239,3 +239,15 @@ describe("S2: simplified approval options", () => {
     expect(backHandler).toContain("orch_approve_beads");
   });
 });
+
+describe("plan-to-bead audit integration", () => {
+  const { readFileSync } = require("fs");
+  const { join } = require("path");
+  const approveSource = readFileSync(join(__dirname, "approve.ts"), "utf8");
+
+  it("audits beads against a saved plan artifact when available", () => {
+    expect(approveSource).toContain("auditPlanToBeads");
+    expect(approveSource).toContain("formatPlanToBeadAuditWarnings");
+    expect(approveSource).toContain("oc.state.planDocument");
+  });
+});
