@@ -25,6 +25,13 @@ export type CoordinationStrategy =
   | "sophia"
   | "worktrees";
 
+/**
+ * Coordination mode determines how agents isolate their work.
+ * - "worktree": each agent works in a separate git worktree
+ * - "single-branch": all agents work on the same branch (coordinated via agent-mail file reservations)
+ */
+export type CoordinationMode = "worktree" | "single-branch";
+
 export function selectStrategy(backend: CoordinationBackend): CoordinationStrategy {
   if (backend.beads && backend.agentMail) return "beads+agentmail";
   if (backend.sophia) return "sophia";

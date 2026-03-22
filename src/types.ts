@@ -264,6 +264,8 @@ export interface OrchestratorState {
   coordinationBackend?: import("./coordination.js").CoordinationBackend;
   /** Selected coordination strategy based on available backends */
   coordinationStrategy?: import("./coordination.js").CoordinationStrategy;
+  /** Coordination mode: worktree isolation vs single-branch */
+  coordinationMode?: import("./coordination.js").CoordinationMode;
   /** Whether agent-mail session was bootstrapped for this orchestration */
   agentMailSessionActive?: boolean;
 

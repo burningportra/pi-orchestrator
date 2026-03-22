@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { OrchestratorContext, Bead } from "../types.js";
-import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions } from "../prompts.js";
+import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 
 // ─── Module-level bead snapshots for change detection ────────

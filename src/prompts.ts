@@ -159,7 +159,8 @@ After all beads and reviews pass, the orchestrator offers:
 - When implementing beads, use the standard code tools (read, write, edit, bash) to make actual changes.
 - If a review fails, re-implement based on the revision instructions, then review again (max 3 retries per bead).
 - Do NOT add commentary between orchestrator tool calls. The user sees the tool results directly.
-- If orch_select returns no selection, stop gracefully.`;
+- If orch_select returns no selection, stop gracefully.
+- If you experience context compaction during this session, immediately re-read AGENTS.md and the current orchestration state via \`/orchestrate-status\` before continuing.`;
 }
 
 // ─── Discovery Prompt ────────────────────────────────────────
@@ -460,6 +461,8 @@ Work systematically and meticulously. Don't get stuck in analysis — be proacti
 Make focused, targeted changes. Stay within scope.
 
 **After implementing, do a fresh-eyes review:** carefully read over ALL the new code you just wrote and any existing code you modified, looking super carefully for any obvious bugs, errors, problems, issues, or confusion. Fix anything you uncover.
+
+When you finish this bead and need the next one, prefer \`bv --robot-next\` over \`br ready\` if bv is available. bv uses PageRank and betweenness centrality to pick the bead that unlocks the most downstream work.
 
 After the fresh-eyes review, call \`orch_review\` with a summary of what you did and what the review found.`;
 }
@@ -1089,4 +1092,40 @@ This is refinement round ${roundNumber}. Each round uses a fresh conversation to
 4. If the plan is solid and needs no changes, say "NO_CHANGES" and explain why
 
 Focus on substance over style. Each round should find fewer issues as the plan converges.`;
+}
+
+export function learningsExtractionPrompt(goal: string, beadIds: string[]): string {
+  return `## 🧠 Structured Learnings Extraction
+
+Goal: ${goal}
+Beads completed: ${beadIds.join(", ")}
+
+Reflect on this orchestration and extract actionable learnings by answering these 5 questions:
+
+### 1. What architectural decisions were made and why?
+Identify key design choices, trade-offs, and the reasoning behind them.
+
+### 2. What gotchas or surprises were encountered?
+What was unexpected? What broke in non-obvious ways? What assumptions were wrong?
+
+### 3. What patterns worked well?
+Which approaches, abstractions, or workflows proved effective and should be repeated?
+
+### 4. What would you do differently next time?
+With hindsight, what would you change about the approach, sequencing, or scope?
+
+### 5. Were there any tool issues or workflow friction?
+Did any tools misbehave? Were there workflow bottlenecks or ergonomic problems?
+
+---
+
+For each learning, save it to CASS memory:
+
+\`\`\`bash
+cm add '<learning>' --category orchestration --json
+\`\`\`
+
+Use appropriate categories: \`orchestration\`, \`architecture\`, \`gotcha\`, \`pattern\`, \`tooling\`
+
+Add 3–7 rules. Each should be specific, actionable, and traceable to beads: ${beadIds.join(", ")}`;
 }
