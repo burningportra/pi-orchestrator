@@ -205,13 +205,13 @@ Return 10-15 ideas total (5 top + 5-10 honorable).`;
   }
 
   if (mode === "creative") {
-    return `Analyze this repository and generate your most brilliant, innovative improvement ideas.
+    return `Analyze this repository and generate your best, most original improvement ideas.
 
 ${repoContext}
 
 ## Process (do this internally before outputting)
 1. **Ground yourself** — study the repo profile, scan findings, TODOs, commits carefully
-2. **Think of ONE HUNDRED ideas** — be radically creative, but stay pragmatic
+2. **Think of ONE HUNDRED ideas** — be wildly creative, but stay pragmatic
 3. **Score each candidate** against these 5 axes (1-5 scale):
    - **Useful** (2× weight) — does it solve a real, frequent pain?
    - **Pragmatic** (2× weight) — is it realistic to build in hours/days?
@@ -220,7 +220,7 @@ ${repoContext}
    - **Ergonomic** (1× weight) — does it reduce friction or cognitive load?
 4. **Cut ruthlessly** — remove anything scoring <3 average, anything duplicative, anything boring
 5. **Merge overlaps** — combine variant ideas into stronger unified ones
-6. **Pick your 7 VERY BEST** — the most brilliant, clever, and radically innovative ideas that are still pragmatic
+6. **Pick your 7 VERY BEST** — the most clever, surprising, and high-value ideas that are still pragmatic
 
 ## Output requirements
 For each idea, provide:
@@ -230,7 +230,7 @@ For each idea, provide:
 - **category**: feature | refactor | docs | dx | performance | reliability | security | testing
 - **effort**: low | medium | high
 - **impact**: low | medium | high
-- **rationale**: 2-3 sentences explaining why this is brilliant and what repo evidence supports it
+- **rationale**: 2-3 sentences explaining why this beats alternatives and what repo evidence supports it
 - **tier**: "top" for all 7
 - **sourceEvidence**: array of strings — what repo signals prompted this
 - **scores**: { useful, pragmatic, accretive, robust, ergonomic } — your 1-5 ratings
@@ -333,7 +333,7 @@ export function beadRefinementPrompt(roundNumber?: number, priorChanges?: number
 ${roundInfo}${changesInfo}Check over each bead super carefully via \`br list\` and \`br show <id>\`.
 
 ### Questions to ask for each bead:
-1. Are you sure this makes sense? Is it optimal?
+1. Are you sure this makes sense? Is it the best approach?
 2. Could we change anything to make it clearer or more actionable?
 3. Does the description contain enough context for a fresh agent to execute without guessing?
 4. Are the acceptance criteria specific and testable?
@@ -383,7 +383,7 @@ You are reviewing beads for a project with NO prior context. This is deliberate 
 ### Rules
 - DO NOT OVERSIMPLIFY. DO NOT LOSE FEATURES OR FUNCTIONALITY.
 - Every bead must be self-contained and self-documenting.
-- Include comprehensive test expectations in each bead.
+- Include specific test expectations in each bead.
 
 Use ultrathink.
 
@@ -723,7 +723,7 @@ export function strategicDriftCheckInstructions(
   const progressPct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
   return `## Strategic Drift Check (${completedCount}/${totalCount} beads, ${progressPct}%)
 
-A swarm can look productive while heading in the wrong direction. This check ensures we are still converging on the actual goal.
+A swarm can look productive while heading in the wrong direction. This check verifies we are still converging on the actual goal.
 
 ### Goal
 ${goal}
@@ -958,7 +958,7 @@ Write up a proposal document that:
 3. Proposes how to reimagine each through the lens of ${projectName}'s unique strengths
 4. Creates something neither project could achieve alone
 
-Make the proposal genuinely innovative, not a shallow port. Use ultrathink.
+Make the proposal genuinely novel, not a shallow port. Use ultrathink.
 
 cd ${cwd}`;
 }
@@ -969,7 +969,7 @@ cd ${cwd}`;
 export function researchDeepenPrompt(): string {
   return `## Research & Reimagine — Step 2: Deepen
 
-That's a decent start, but you barely scratched the surface. Go way deeper and think more profoundly, with more ambition and boldness. Come up with ideas that are legitimately "radically innovative" and disruptive because they are so compelling, useful, and accretive.
+That's a decent start, but you barely scratched the surface. Go way deeper — more ambition, more boldness. Come up with ideas that are genuinely surprising and high-impact because they are so compelling, useful, and accretive.
 
 Push past the conservative initial suggestions. Use ultrathink.`;
 }

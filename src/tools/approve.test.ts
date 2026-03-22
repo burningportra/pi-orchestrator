@@ -8,15 +8,15 @@ import type { OrchestratorState } from "../types.js";
 // Those files contain the bulk of tests. This file adds approve-specific
 // integration tests and tests for internal helpers via public interfaces.
 
-// ─── descHash consistency (tested indirectly via diffBeadSnapshots) ──────
-describe("descHash consistency via diffBeadSnapshots", () => {
-  function makeSnap(entries: Record<string, { title: string; descLength: number; descHash: string; files: string[] }>) {
+// ─── descFingerprint consistency (tested indirectly via diffBeadSnapshots) ──────
+describe("descFingerprint consistency via diffBeadSnapshots", () => {
+  function makeSnap(entries: Record<string, { title: string; descLength: number; descFingerprint: string; files: string[] }>) {
     return new Map(Object.entries(entries));
   }
 
   it("identical descriptions produce no modification", () => {
     const snap = makeSnap({
-      a: { title: "A", descLength: 100, descHash: "100:Hello world this is a test description that is ", files: [] },
+      a: { title: "A", descLength: 100, descFingerprint: "100:Hello world this is a test description that is ", files: [] },
     });
     const diff = diffBeadSnapshots(snap, snap);
     expect(diff.modified).toEqual([]);
@@ -26,10 +26,10 @@ describe("descHash consistency via diffBeadSnapshots", () => {
   it("descriptions differing only in chars after position 50 still differ by length", () => {
     const prefix = "x".repeat(50);
     const prev = makeSnap({
-      a: { title: "A", descLength: 60, descHash: `60:${prefix}`, files: [] },
+      a: { title: "A", descLength: 60, descFingerprint: `60:${prefix}`, files: [] },
     });
     const curr = makeSnap({
-      a: { title: "A", descLength: 70, descHash: `70:${prefix}`, files: [] },
+      a: { title: "A", descLength: 70, descFingerprint: `70:${prefix}`, files: [] },
     });
     const diff = diffBeadSnapshots(prev, curr);
     expect(diff.modified).toHaveLength(1);
@@ -38,10 +38,10 @@ describe("descHash consistency via diffBeadSnapshots", () => {
 
   it("descriptions with same length but different content are detected", () => {
     const prev = makeSnap({
-      a: { title: "A", descLength: 10, descHash: "10:aaaaaaaaaa", files: [] },
+      a: { title: "A", descLength: 10, descFingerprint: "10:aaaaaaaaaa", files: [] },
     });
     const curr = makeSnap({
-      a: { title: "A", descLength: 10, descHash: "10:bbbbbbbbbb", files: [] },
+      a: { title: "A", descLength: 10, descFingerprint: "10:bbbbbbbbbb", files: [] },
     });
     const diff = diffBeadSnapshots(prev, curr);
     expect(diff.modified).toHaveLength(1);
@@ -62,9 +62,9 @@ describe("countChanges accuracy via convergence tracking", () => {
   it("all new beads counted as additions", () => {
     const prev = new Map();
     const curr = new Map(Object.entries({
-      a: { title: "A", descLength: 10, descHash: "10:a", files: [] },
-      b: { title: "B", descLength: 20, descHash: "20:b", files: [] },
-      c: { title: "C", descLength: 30, descHash: "30:c", files: [] },
+      a: { title: "A", descLength: 10, descFingerprint: "10:a", files: [] },
+      b: { title: "B", descLength: 20, descFingerprint: "20:b", files: [] },
+      c: { title: "C", descLength: 30, descFingerprint: "30:c", files: [] },
     }));
     const diff = diffBeadSnapshots(prev, curr);
     expect(diff.added).toHaveLength(3);
@@ -72,8 +72,8 @@ describe("countChanges accuracy via convergence tracking", () => {
 
   it("all beads removed counted as removals", () => {
     const prev = new Map(Object.entries({
-      a: { title: "A", descLength: 10, descHash: "10:a", files: [] },
-      b: { title: "B", descLength: 20, descHash: "20:b", files: [] },
+      a: { title: "A", descLength: 10, descFingerprint: "10:a", files: [] },
+      b: { title: "B", descLength: 20, descFingerprint: "20:b", files: [] },
     }));
     const curr = new Map();
     const diff = diffBeadSnapshots(prev, curr);

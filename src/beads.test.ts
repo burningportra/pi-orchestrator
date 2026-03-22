@@ -275,7 +275,7 @@ describe("bvInsights", () => {
 describe("bvNext", () => {
   beforeEach(() => resetBvCache());
 
-  it("returns the optimal next bead pick", async () => {
+  it("returns the highest-priority next bead", async () => {
     const pickData = {
       id: "bead-abc",
       title: "Do the thing",

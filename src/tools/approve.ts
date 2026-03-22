@@ -4,19 +4,23 @@ import type { OrchestratorContext, Bead } from "../types.js";
 import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 
-// ─── Module-level bead snapshot for change detection ─────────
-type BeadSnapshot = Map<string, { title: string; descHash: string }>;
+// ─── Module-level bead snapshots for change detection ────────
+// These live at module scope so they persist across multiple calls to
+// orch_approve_beads within the same orchestration session. Each call
+// compares the current beads against the previous snapshot to compute
+// the number of changes made during a polish round.
+type BeadSnapshot = Map<string, { title: string; descFingerprint: string }>;
 let _lastBeadSnapshot: BeadSnapshot | undefined;
 
-/** Cheap content hash: length + first 50 chars. */
-function descHash(desc: string): string {
+/** Cheap fingerprint for change detection: length + first 50 chars. Not a cryptographic hash. */
+function descFingerprint(desc: string): string {
   return `${desc.length}:${desc.slice(0, 50)}`;
 }
 
 function snapshotBeads(beads: Bead[]): BeadSnapshot {
   const snap: BeadSnapshot = new Map();
   for (const b of beads) {
-    snap.set(b.id, { title: b.title, descHash: descHash(b.description) });
+    snap.set(b.id, { title: b.title, descFingerprint: descFingerprint(b.description) });
   }
   return snap;
 }
@@ -34,7 +38,7 @@ function countChanges(prev: BeadSnapshot, curr: BeadSnapshot): number {
   // Modified beads
   for (const [id, entry] of curr) {
     const old = prev.get(id);
-    if (old && (old.title !== entry.title || old.descHash !== entry.descHash)) {
+    if (old && (old.title !== entry.title || old.descFingerprint !== entry.descFingerprint)) {
       changes++;
     }
   }
@@ -42,12 +46,12 @@ function countChanges(prev: BeadSnapshot, curr: BeadSnapshot): number {
 }
 
 // ─── Extended snapshot for detailed diff ─────────────────────
-type BeadSnapshotFull = Map<string, { title: string; descLength: number; descHash: string; files: string[] }>;
+type BeadSnapshotFull = Map<string, { title: string; descLength: number; descFingerprint: string; files: string[] }>;
 
 function snapshotBeadsFull(beads: Bead[], extractArtifacts: (b: Bead) => string[]): BeadSnapshotFull {
   const snap: BeadSnapshotFull = new Map();
   for (const b of beads) {
-    snap.set(b.id, { title: b.title, descLength: b.description.length, descHash: descHash(b.description), files: extractArtifacts(b) });
+    snap.set(b.id, { title: b.title, descLength: b.description.length, descFingerprint: descFingerprint(b.description), files: extractArtifacts(b) });
   }
   return snap;
 }
@@ -73,7 +77,7 @@ export function diffBeadSnapshots(prev: BeadSnapshotFull, curr: BeadSnapshotFull
     }
     const changes: string[] = [];
     if (old.title !== entry.title) changes.push(`title: "${old.title}" → "${entry.title}"`);
-    if (old.descHash !== entry.descHash) {
+    if (old.descFingerprint !== entry.descFingerprint) {
       const delta = entry.descLength - old.descLength;
       changes.push(`description: ${delta >= 0 ? "+" : ""}${delta} chars`);
     }
@@ -119,6 +123,7 @@ export function formatDiffSummary(diff: DiffSummary): string {
   return lines.join("\n");
 }
 
+/** Extended snapshot for rendering diff summaries between polish rounds. */
 let _lastBeadSnapshotFull: BeadSnapshotFull | undefined;
 
 const MAX_POLISH_ROUNDS = 12;
@@ -254,8 +259,8 @@ export function registerApproveTool(oc: OrchestratorContext) {
         : "") + bvWarnings + shallowWarning;
 
       // Quality summary
-      const { qualityCheckBeads: qcBeads } = await import("../beads.js");
-      const qualityPreview = await qcBeads(oc.pi, ctx.cwd);
+      const { qualityCheckBeads } = await import("../beads.js");
+      const qualityPreview = await qualityCheckBeads(oc.pi, ctx.cwd);
       const qualitySummary = qualityPreview.passed
         ? `\n✅ ${beads.length}/${beads.length} beads pass quality checks`
         : `\n⚠️ ${beads.length - new Set(qualityPreview.failures.map((f) => f.beadId)).size}/${beads.length} pass — ${new Set(qualityPreview.failures.map((f) => f.beadId)).size} issues found`;
@@ -292,6 +297,10 @@ export function registerApproveTool(oc: OrchestratorContext) {
           ? `▶️  Start implementing (convergence ${(convergenceScore * 100).toFixed(0)}% ✅)`
           : "▶️  Start implementing";
 
+      // ── Detect graph health issues for remediation option ──
+      const hasGraphIssues = validation.orphaned.length > 0 || (validation.warnings?.length ?? 0) > 0;
+      const graphIssueCount = validation.orphaned.length + (validation.warnings?.length ?? 0);
+
       const options: string[] = [];
       if (maxReached) {
         options.push(startLabel, "❌ Reject");
@@ -316,6 +325,16 @@ export function registerApproveTool(oc: OrchestratorContext) {
           "❌ Reject",
         );
       }
+      // Insert graph remediation option before Reject when issues exist
+      if (hasGraphIssues && !maxReached) {
+        const rejectIdx = options.findIndex(o => o.startsWith("❌"));
+        const label = `🩺 Fix graph issues (${graphIssueCount} warning${graphIssueCount !== 1 ? "s" : ""})`;
+        if (rejectIdx >= 0) {
+          options.splice(rejectIdx, 0, label);
+        } else {
+          options.push(label);
+        }
+      }
 
       const convergenceTip = round >= 1 && convergenceScore !== undefined && convergenceScore < 0.5
         ? "\n💡 Tip: Fresh-agent refinement recommended — reduces anchoring bias."
@@ -331,7 +350,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
 
       if (meetsAutoApprove) {
         // Re-run quality gate before auto-approve (qualityPreview may be stale)
-        const autoQuality = await qcBeads(oc.pi, ctx.cwd);
+        const autoQuality = await qualityCheckBeads(oc.pi, ctx.cwd);
 
         if (autoQuality.passed) {
           // Show interruptible countdown.
@@ -453,6 +472,108 @@ cd ${ctx.cwd}`;
         };
       }
 
+      if (choice?.startsWith("🩺")) {
+        // Graph health remediation sub-menu
+        const { remediateOrphans } = await import("../beads.js");
+
+        const subOptions: string[] = [];
+        if (validation.orphaned.length > 0) {
+          subOptions.push(`🧹 Close ${validation.orphaned.length} orphaned bead${validation.orphaned.length !== 1 ? "s" : ""}`);
+        }
+        // Parse bottleneck bead IDs from warnings
+        const bottleneckIds = (validation.warnings ?? [])
+          .filter(w => w.includes("bottleneck"))
+          .map(w => w.match(/bead (\S+)/)?.[1])
+          .filter((id): id is string => !!id);
+        if (bottleneckIds.length > 0) {
+          subOptions.push(`✂️  Split ${bottleneckIds.length} bottleneck bead${bottleneckIds.length !== 1 ? "s" : ""}`);
+        }
+        // Parse articulation point IDs from warnings
+        const articulationIds = (validation.warnings ?? [])
+          .filter(w => w.includes("single point of failure"))
+          .map(w => w.match(/bead (\S+)/)?.[1])
+          .filter((id): id is string => !!id);
+        if (articulationIds.length > 0) {
+          subOptions.push(`🔗 Add redundancy for ${articulationIds.length} single-point-of-failure bead${articulationIds.length !== 1 ? "s" : ""}`);
+        }
+        subOptions.push("⬅️  Back to approval");
+
+        const subChoice = await ctx.ui.select(
+          `🩺 **Graph Health Remediation**\n\n` +
+          (validation.orphaned.length > 0 ? `• ${validation.orphaned.length} orphaned beads: ${validation.orphaned.join(", ")}\n` : "") +
+          (bottleneckIds.length > 0 ? `• ${bottleneckIds.length} bottleneck beads: ${bottleneckIds.join(", ")}\n` : "") +
+          (articulationIds.length > 0 ? `• ${articulationIds.length} single points of failure: ${articulationIds.join(", ")}\n` : ""),
+          subOptions,
+        );
+
+        if (subChoice?.startsWith("🧹")) {
+          // Close orphaned beads directly
+          const result = await remediateOrphans(oc.pi, ctx.cwd, validation.orphaned);
+          ctx.ui.notify(
+            `🧹 Closed ${result.closed.length} orphaned bead${result.closed.length !== 1 ? "s" : ""}` +
+            (result.failed.length > 0 ? ` (${result.failed.length} failed)` : ""),
+            result.failed.length > 0 ? "warning" : "info"
+          );
+          // Re-validate and return to approval
+          return {
+            content: [{
+              type: "text",
+              text: `**Closed ${result.closed.length} orphaned beads:** ${result.closed.join(", ")}${result.failed.length > 0 ? `\n⚠️ Failed to close: ${result.failed.join(", ")}` : ""}\n\nCall \`orch_approve_beads\` again to see updated graph health.`,
+            }],
+            details: { approved: false, remediation: "orphans", closed: result.closed, failed: result.failed },
+          };
+        }
+
+        if (subChoice?.startsWith("✂️")) {
+          // Bottleneck splitting: send to LLM refinement focused on splitting
+          oc.setPhase("refining_beads", ctx);
+          oc.persistState();
+          await syncBeads(oc.pi, ctx.cwd);
+
+          const bottleneckDetails = bottleneckIds.map(id => {
+            const bead = beads.find(b => b.id === id);
+            return bead ? `### ${id}: ${bead.title}\n${bead.description.split("\n").slice(0, 5).join("\n")}` : `### ${id} (details unavailable)`;
+          }).join("\n\n");
+
+          return {
+            content: [{
+              type: "text",
+              text: `**NEXT: Split these bottleneck beads into smaller tasks, then call \`orch_approve_beads\` again.**\n\n## Bottleneck Beads to Split\n\nThese beads have high betweenness centrality — many other beads depend on paths through them, creating serialization points.\n\nFor each bottleneck bead:\n1. Read the full bead via \`br show <id>\`\n2. Break it into 2-3 smaller beads that can be worked on in parallel\n3. Create the new beads with \`br create\` and set up dependencies with \`br dep add\`\n4. Close the original bottleneck bead with \`br update <id> --status closed\`\n5. Transfer dependencies: anything that depended on the bottleneck should depend on the appropriate sub-bead\n\n${bottleneckDetails}\n\ncd ${ctx.cwd}`,
+            }],
+            details: { approved: false, remediation: "bottlenecks", bottleneckIds, beadCount: beads.length },
+          };
+        }
+
+        if (subChoice?.startsWith("🔗")) {
+          // Articulation point remediation: add redundant dependency paths
+          oc.setPhase("refining_beads", ctx);
+          oc.persistState();
+          await syncBeads(oc.pi, ctx.cwd);
+
+          const articulationDetails = articulationIds.map(id => {
+            const bead = beads.find(b => b.id === id);
+            return bead ? `### ${id}: ${bead.title}\n${bead.description.split("\n").slice(0, 5).join("\n")}` : `### ${id} (details unavailable)`;
+          }).join("\n\n");
+
+          return {
+            content: [{
+              type: "text",
+              text: `**NEXT: Reduce single-point-of-failure risk for these beads, then call \`orch_approve_beads\` again.**\n\n## Single Points of Failure\n\nThese beads are articulation points — if blocked, they disconnect the dependency graph and stall all downstream work.\n\nFor each articulation point:\n1. Read the full bead and its dependencies via \`br show <id>\` and \`br dep list <id>\`\n2. Consider:\n   - Can the bead be split so parallel paths exist?\n   - Can some downstream beads bypass this dependency?\n   - Is the dependency actually necessary or overly conservative?\n3. Make changes via \`br create\`, \`br dep add\`, or \`br dep remove\` as needed\n\n${articulationDetails}\n\ncd ${ctx.cwd}`,
+            }],
+            details: { approved: false, remediation: "articulation", articulationIds, beadCount: beads.length },
+          };
+        }
+
+        // "Back to approval" — just re-trigger
+        return {
+          content: [{
+            type: "text",
+            text: "Call `orch_approve_beads` again to return to the approval menu.",
+          }],
+          details: { approved: false },
+        };
+      }
+
       if (choice?.startsWith("🔀")) {
         // Cross-model review: send beads to alternative model
         const { crossModelBeadReview } = await import("../bead-review.js");
@@ -564,7 +685,7 @@ cd ${ctx.cwd}`;
 
       // "▶️ Start implementing" — run quality gate first (skip if auto-approved, already checked)
       const skipQualityGate = choice === "auto-approved";
-      const qualityResult = skipQualityGate ? { passed: true, failures: [] as { beadId: string; check: string; reason: string }[] } : await qcBeads(oc.pi, ctx.cwd);
+      const qualityResult = skipQualityGate ? { passed: true, failures: [] as { beadId: string; check: string; reason: string }[] } : await qualityCheckBeads(oc.pi, ctx.cwd);
       if (!qualityResult.passed) {
         const failureLines = qualityResult.failures.map(
           (f) => `- ${f.beadId}: ${f.check} — ${f.reason}`

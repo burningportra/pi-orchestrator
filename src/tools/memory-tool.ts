@@ -47,7 +47,7 @@ export function registerMemoryTool(oc: OrchestratorContext) {
         const versionLine = stats.version ? ` · cm v${stats.version}` : "";
         const text =
           stats.entryCount === 0 && !stats.cassAvailable
-            ? "No CASS memory available. Install cm CLI for enhanced memory."
+            ? "No CASS memory available. Install cm CLI to enable memory."
             : `📊 CASS Memory: ${stats.entryCount} rules${statusLine}${versionLine}`;
         return {
           content: [{ type: "text", text }],

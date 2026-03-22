@@ -457,9 +457,10 @@ export async function runGoalRefinement(
         "--no-extensions",
         "--no-skills",
         "--no-prompt-templates",
+        "--tools", "read",
         `@${promptFile}`,
       ],
-      { timeout: 60000, cwd: ctx.cwd }
+      { timeout: 90000, cwd: ctx.cwd }
     );
 
     if (result.code !== 0) {
@@ -470,10 +471,17 @@ export async function runGoalRefinement(
       return fallback;
     }
 
-    // pi --print may output to stdout or stderr depending on version/config
+    // pi --print outputs to stdout; check stderr as fallback
     const output = (result.stdout || result.stderr || "").trim();
     if (!output) {
-      ctx.ui.notify("⚠️ Goal refinement returned empty output. Using raw goal.", "warning");
+      // Log diagnostic info to help debug empty output
+      const diagParts = [
+        `stdout=${result.stdout?.length ?? 0}B`,
+        `stderr=${result.stderr?.length ?? 0}B`,
+        `code=${result.code}`,
+        `promptSize=${prompt.length}B`,
+      ];
+      ctx.ui.notify(`⚠️ Goal refinement returned empty output (${diagParts.join(", ")}). Using raw goal.`, "warning");
       return fallback;
     }
 

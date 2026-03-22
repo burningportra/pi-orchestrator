@@ -42,7 +42,7 @@ export async function bvInsights(
 }
 
 /**
- * Runs `bv --robot-next` and returns the optimal next bead pick.
+ * Runs `bv --robot-next` and returns the highest-priority next bead.
  * Returns null if bv is unavailable, no actionable items, or parse error.
  */
 export async function bvNext(
@@ -137,7 +137,9 @@ export async function beadDeps(
 
 /**
  * Extracts artifact file paths from a bead's description.
- * Looks for a '### Files:' section or lines starting with '- src/', '- lib/', etc.
+ * Looks for a '### Files:' section or bullet lines starting with known prefixes
+ * (src/, lib/, test/, tests/, dist/, docs/). Files outside these directories
+ * won't be detected unless they appear in a '### Files:' section.
  */
 export function extractArtifacts(bead: Bead): string[] {
   const desc = bead.description ?? "";
@@ -196,6 +198,28 @@ export async function syncBeads(
   } catch {
     // Non-fatal
   }
+}
+
+/**
+ * Closes orphaned beads by setting their status to "closed".
+ * Returns the list of IDs that were successfully closed.
+ */
+export async function remediateOrphans(
+  pi: ExtensionAPI,
+  cwd: string,
+  orphanIds: string[]
+): Promise<{ closed: string[]; failed: string[] }> {
+  const closed: string[] = [];
+  const failed: string[] = [];
+  for (const id of orphanIds) {
+    try {
+      await pi.exec("br", ["update", id, "--status", "closed"], { timeout: 10000, cwd });
+      closed.push(id);
+    } catch {
+      failed.push(id);
+    }
+  }
+  return { closed, failed };
 }
 
 /**
@@ -267,8 +291,7 @@ export async function validateBeads(
 
   // Detect shallow beads
   try {
-    const allBeads = insights ? await readBeads(pi, cwd) : [];
-    const beadsToCheck = insights ? allBeads : await readBeads(pi, cwd);
+    const beadsToCheck = await readBeads(pi, cwd);
     for (const bead of beadsToCheck) {
       if (bead.status !== "open" && bead.status !== "in_progress") continue;
       const desc = bead.description ?? "";
