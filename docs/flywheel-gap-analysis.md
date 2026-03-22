@@ -8,12 +8,12 @@ Comparison of the [Agent Flywheel Complete Guide](https://agent-flywheel.com/com
 
 | # | Gap | Severity | Section |
 |---|-----|----------|---------|
-| 1 | No standalone markdown plan phase | Critical | §2-3 |
+| 1 | No standalone markdown plan phase (deep planning partially covers reasoning) | Significant | §2-3 |
 | 2 | bv graph-theory routing not used for agent bead selection | Significant | §6 |
 | 3 | No staggered agent launch / thundering herd prevention | Significant | §7 |
 | 4 | No agent-mail file reservations enforced during parallel execution | Significant | §6 |
 | 5 | No multi-agent swarm with persistent identity & coordination | Significant | §7 |
-| 6 | Worktrees used instead of single-branch model | Significant | §6 |
+| 6 | Worktrees used instead of single-branch model (deliberate divergence) | Divergence | §6 |
 | 7 | No UBS / DCG / SLB safety tooling | Minor | §9 |
 | 8 | No recursive self-improvement / skill refinement loop | Minor | §10 |
 | 9 | No post-compaction AGENTS.md re-read enforcement | Minor | §7 |
@@ -105,7 +105,7 @@ pi-orchestrator implements the full arc: scan → discover → select → plan �
 | No worktrees, single-branch model | Uses worktrees (`WorktreePool`) for parallel execution | **Significant** |
 | Advisory file reservations with TTL | Agent Mail RPC available but not enforced during parallel exec | **Significant** |
 | bv `--robot-triage` / `--robot-next` for bead selection | `bvNext()` and `bvInsights()` exist but agents use `br ready` primarily | **Significant** |
-| Agent fungibility (no specialists) | Hit-me agents have specialized roles (fresh-eyes, polish, ergonomics, reality-check) | Minor |
+| Agent fungibility (no specialists) — kernel invariant #6 | Hit-me agents have specialized roles (fresh-eyes, polish, ergonomics, reality-check) | **Significant** |
 | Bead IDs as Agent Mail thread anchors | Agent Mail task preamble exists; thread convention not enforced | Minor |
 | AGENTS.md as operating manual with 8 core rules | `ensureAgentMailSection()` generates AGENTS.md content | Partial |
 | DCG (Destructive Command Guard) | Not integrated | Minor |
