@@ -204,9 +204,12 @@ export default function (pi: ExtensionAPI) {
           orchestratorActive = state.phase !== "idle" && state.phase !== "complete";
         }
 
-        // Restore worktree pool
-        if (state.worktreePoolState) {
+        // Restore worktree pool only for explicit worktree mode.
+        if (state.coordinationMode === "worktree" && state.worktreePoolState) {
           worktreePool = WorktreePool.fromState(pi, state.worktreePoolState);
+        } else {
+          worktreePool = undefined;
+          state.worktreePoolState = undefined;
         }
 
         // Restore coordination backend — re-validate availability

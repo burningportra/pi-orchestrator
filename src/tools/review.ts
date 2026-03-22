@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { OrchestratorContext } from "../types.js";
+import type { OrchestratorContext, CoordinationMode } from "../types.js";
 import { implementerInstructions, realityCheckInstructions, randomExplorationInstructions, SWARM_STAGGER_DELAY_MS } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 import { runGuidedGates } from "../gates.js";
@@ -49,6 +49,15 @@ async function getParallelModelAssignments(ctx: ExtensionContext, agentCount: nu
   }
 
   return Array.from({ length: agentCount }, (_, index) => formatModelRef(rotation[index % rotation.length]));
+}
+
+function resolveExecutionMode(
+  coordinationMode: CoordinationMode | undefined,
+  hasAgentMail: boolean
+): "worktree" | "single-branch" {
+  if (coordinationMode === "single-branch") return "single-branch";
+  if (coordinationMode === "worktree") return "worktree";
+  return hasAgentMail ? "single-branch" : "worktree";
 }
 
 export function registerReviewTool(oc: OrchestratorContext) {
@@ -169,6 +178,10 @@ export function registerReviewTool(oc: OrchestratorContext) {
           ctx.ui.notify(`⚠️ Review agents haven't completed yet. Re-presenting spawn instruction.`, "warning");
           const round = Math.max(0, prevPassCount - 1);
           const rePresThreadId = params.beadId;
+          const executionMode = resolveExecutionMode(
+            oc.state.coordinationMode,
+            !!oc.state.coordinationBackend?.agentMail
+          );
           const rePresPreamble = (name: string) =>
             oc.state.coordinationBackend?.agentMail
               ? agentMailTaskPreamble(
@@ -177,7 +190,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
                   bead.title,
                   allArtifactsForBead,
                   rePresThreadId,
-                  oc.state.coordinationMode ?? "worktree"
+                  executionMode
                 )
               : "";
           const allBeads = await readBeads(oc.pi, ctx.cwd);
@@ -186,22 +199,27 @@ export function registerReviewTool(oc: OrchestratorContext) {
           const agentConfigs = [
             {
               name: `fresh-eyes-${params.beadId}-r${round}`,
-              task: `${rePresPreamble(`fresh-eyes-${params.beadId}-r${round}`)}Fresh-eyes reviewer for bead ${params.beadId} (round ${round}). NEVER seen this code.\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool.\n\ncd ${ctx.cwd}`,
+              cwd: ctx.cwd,
+              task: `${rePresPreamble(`fresh-eyes-${params.beadId}-r${round}`)}Fresh-eyes reviewer for bead ${params.beadId} (round ${round}). NEVER seen this code.\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool.`,
             },
             {
               name: `polish-${params.beadId}-r${round}`,
-              task: `${rePresPreamble(`polish-${params.beadId}-r${round}`)}Polish reviewer for bead ${params.beadId} (round ${round}). De-slopify.\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly.\n\ncd ${ctx.cwd}`,
+              cwd: ctx.cwd,
+              task: `${rePresPreamble(`polish-${params.beadId}-r${round}`)}Polish reviewer for bead ${params.beadId} (round ${round}). De-slopify.\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly.`,
             },
             {
               name: `ergonomics-${params.beadId}-r${round}`,
-              task: `${rePresPreamble(`ergonomics-${params.beadId}-r${round}`)}Ergonomics reviewer for bead ${params.beadId} (round ${round}).\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
+              cwd: ctx.cwd,
+              task: `${rePresPreamble(`ergonomics-${params.beadId}-r${round}`)}Ergonomics reviewer for bead ${params.beadId} (round ${round}).\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.`,
             },
             {
               name: `reality-check-${params.beadId}-r${round}`,
-              task: `${rePresPreamble(`reality-check-${params.beadId}-r${round}`)}Reality checker for bead ${params.beadId} (round ${round}).\n\n${realityCheckInstructions(goal, allBeads, beadResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+              cwd: ctx.cwd,
+              task: `${rePresPreamble(`reality-check-${params.beadId}-r${round}`)}Reality checker for bead ${params.beadId} (round ${round}).\n\n${realityCheckInstructions(goal, allBeads, beadResults)}\n\nDo NOT edit code. Just report your findings as text.`,
             },
             {
               name: `random-explore-${params.beadId}-r${round}`,
+              cwd: ctx.cwd,
               task: `${rePresPreamble(`random-explore-${params.beadId}-r${round}`)}${randomExplorationInstructions(goal, allArtifactsForBead, ctx.cwd)}`,
             },
           ];
@@ -234,6 +252,10 @@ export function registerReviewTool(oc: OrchestratorContext) {
 
           const round = prevPassCount;
           const hitMeThreadId = params.beadId;
+          const executionMode = resolveExecutionMode(
+            oc.state.coordinationMode,
+            !!oc.state.coordinationBackend?.agentMail
+          );
           const hitMePreamble = (name: string) =>
             oc.state.coordinationBackend?.agentMail
               ? agentMailTaskPreamble(
@@ -242,7 +264,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
                   bead.title,
                   allArtifactsForBead,
                   hitMeThreadId,
-                  oc.state.coordinationMode ?? "worktree"
+                  executionMode
                 )
               : "";
           const allBeads = await readBeads(oc.pi, ctx.cwd);
@@ -251,22 +273,27 @@ export function registerReviewTool(oc: OrchestratorContext) {
           const agentConfigs = [
             {
               name: `fresh-eyes-${params.beadId}-r${round}`,
-              task: `${hitMePreamble(`fresh-eyes-${params.beadId}-r${round}`)}Fresh-eyes reviewer for bead ${params.beadId} (round ${round}). NEVER seen this code.\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool.\n\ncd ${ctx.cwd}`,
+              cwd: ctx.cwd,
+              task: `${hitMePreamble(`fresh-eyes-${params.beadId}-r${round}`)}Fresh-eyes reviewer for bead ${params.beadId} (round ${round}). NEVER seen this code.\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool.`,
             },
             {
               name: `polish-${params.beadId}-r${round}`,
-              task: `${hitMePreamble(`polish-${params.beadId}-r${round}`)}Polish reviewer for bead ${params.beadId} (round ${round}). De-slopify.\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly.\n\ncd ${ctx.cwd}`,
+              cwd: ctx.cwd,
+              task: `${hitMePreamble(`polish-${params.beadId}-r${round}`)}Polish reviewer for bead ${params.beadId} (round ${round}). De-slopify.\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nRemove AI slop, improve clarity, make it agent-friendly. Fix issues directly.`,
             },
             {
               name: `ergonomics-${params.beadId}-r${round}`,
-              task: `${hitMePreamble(`ergonomics-${params.beadId}-r${round}`)}Ergonomics reviewer for bead ${params.beadId} (round ${round}).\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.\n\ncd ${ctx.cwd}`,
+              cwd: ctx.cwd,
+              task: `${hitMePreamble(`ergonomics-${params.beadId}-r${round}`)}Ergonomics reviewer for bead ${params.beadId} (round ${round}).\n\nBead: ${bead.title} — ${bead.description}\nFiles: ${allArtifactsForBead.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything confusing.`,
             },
             {
               name: `reality-check-${params.beadId}-r${round}`,
-              task: `${hitMePreamble(`reality-check-${params.beadId}-r${round}`)}Reality checker for bead ${params.beadId} (round ${round}).\n\n${realityCheckInstructions(goal, allBeads, beadResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
+              cwd: ctx.cwd,
+              task: `${hitMePreamble(`reality-check-${params.beadId}-r${round}`)}Reality checker for bead ${params.beadId} (round ${round}).\n\n${realityCheckInstructions(goal, allBeads, beadResults)}\n\nDo NOT edit code. Just report your findings as text.`,
             },
             {
               name: `random-explore-${params.beadId}-r${round}`,
+              cwd: ctx.cwd,
               task: `${hitMePreamble(`random-explore-${params.beadId}-r${round}`)}${randomExplorationInstructions(goal, allArtifactsForBead, ctx.cwd)}`,
             },
           ];
@@ -354,7 +381,11 @@ export function registerReviewTool(oc: OrchestratorContext) {
               ready.unshift(top);
             }
           }
-          const goal = oc.state.selectedGoal ?? "Unknown goal";
+          const executionMode = resolveExecutionMode(
+            oc.state.coordinationMode,
+            !!oc.state.coordinationBackend?.agentMail
+          );
+          const singleBranchMode = executionMode === "single-branch";
           const modelAssignments = await getParallelModelAssignments(ctx, ready.length);
           const agentConfigs = ready.map((b, index) => {
             const artifacts = extractBeadArtifacts(b);
@@ -367,14 +398,18 @@ export function registerReviewTool(oc: OrchestratorContext) {
                   b.title,
                   artifacts,
                   threadId,
-                  oc.state.coordinationMode ?? "worktree"
+                  executionMode
                 )
               : "";
             const prevResults = Object.values(oc.state.beadResults ?? {});
             const implInstr = implementerInstructions(b, oc.state.repoProfile!, prevResults);
+            const branchModeInstructions = singleBranchMode
+              ? "\n\n🤝 Single-branch mode: work in the shared checkout at this cwd. Do not assume an isolated worktree."
+              : "\n\n🌿 Worktree mode: if the orchestrator provides an isolated checkout, do your work there.";
             return {
               name: agentName,
-              task: `${preamble}${implInstr}\n\ncd ${ctx.cwd}`,
+              cwd: ctx.cwd,
+              task: `${preamble}${implInstr}${branchModeInstructions}`,
               ...(modelAssignments[index] ? { model: modelAssignments[index] } : {}),
             };
           });

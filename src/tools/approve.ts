@@ -3,7 +3,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
-import type { OrchestratorContext, Bead } from "../types.js";
+import type { OrchestratorContext, Bead, CoordinationMode } from "../types.js";
 import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS, beadCreationPrompt, planRefinementPrompt, planToBeadsPrompt } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 
@@ -229,6 +229,15 @@ async function getParallelModelAssignments(ctx: ExtensionContext, agentCount: nu
   }
 
   return Array.from({ length: agentCount }, (_, index) => formatModelRef(rotation[index % rotation.length]));
+}
+
+function resolveExecutionMode(
+  coordinationMode: CoordinationMode | undefined,
+  hasAgentMail: boolean
+): "worktree" | "single-branch" {
+  if (coordinationMode === "single-branch") return "single-branch";
+  if (coordinationMode === "worktree") return "worktree";
+  return hasAgentMail ? "single-branch" : "worktree";
 }
 
 export function registerApproveTool(oc: OrchestratorContext) {
@@ -1003,14 +1012,11 @@ cd ${ctx.cwd}`;
       const hasParallel = ready.length > 1;
 
       if (hasParallel) {
-        // Check artifact overlap for same-dir vs worktree decision
-        const allArtifactSets = ready.map((b) => new Set(extractArtifacts(b)));
-        const allDisjoint = allArtifactSets.every((setA, i) =>
-          allArtifactSets.every((setB, j) =>
-            i === j || [...setA].every((f) => !setB.has(f))
-          )
+        const executionMode = resolveExecutionMode(
+          oc.state.coordinationMode,
+          !!oc.state.coordinationBackend?.agentMail
         );
-        const canSameDir = allDisjoint && oc.state.coordinationBackend?.agentMail;
+        const singleBranchMode = executionMode === "single-branch";
 
         // Check bv for bottleneck recommendations
         const { bvInsights } = await import("../beads.js");
@@ -1036,12 +1042,16 @@ cd ${ctx.cwd}`;
                 bead.title,
                 artifacts,
                 bead.id,
-                canSameDir ? "single-branch" : "worktree"
+                executionMode
               )
             : "";
+          const branchModeInstructions = singleBranchMode
+            ? "🤝 **Single-branch mode**: Work in the shared checkout at the provided cwd. Respect file reservations and avoid worktree-specific assumptions.\n\n"
+            : "🌿 **Worktree mode**: Work in your assigned isolated checkout if one is provided by the orchestrator.\n\n";
           return {
             name: agentName,
-            task: `${preamble}You are implementing bead ${bead.id}.\n\n## ${bead.title}\n\n${bead.description}\n\n⚠️ SCOPE CONSTRAINT: Only modify files listed in the bead. If additional files need changes, note them in your summary but DO NOT modify them.\n\n${canSameDir ? "🤝 **Same-dir mode**: Other agents are working in this directory. Your file reservations protect your files.\n\n" : ""}Implement the bead. When done, do a fresh-eyes review of all changes. Then COMMIT:\n\`\`\`bash\ngit add ${artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "bead ${bead.id}: ${bead.title.slice(0, 60)}"\n\`\`\`\n\nSummarize what you did and what the fresh-eyes review found.\n\ncd ${ctx.cwd}`,
+            cwd: ctx.cwd,
+            task: `${preamble}You are implementing bead ${bead.id}.\n\n## ${bead.title}\n\n${bead.description}\n\n⚠️ SCOPE CONSTRAINT: Only modify files listed in the bead. If additional files need changes, note them in your summary but DO NOT modify them.\n\n${branchModeInstructions}Implement the bead. When done, do a fresh-eyes review of all changes. Then COMMIT:${singleBranchMode ? "" : " only your bead changes"}\n\`\`\`bash\ngit add ${artifacts.map(f => '"' + f + '"').join(' ')} && git commit -m "bead ${bead.id}: ${bead.title.slice(0, 60)}"${singleBranchMode ? "\ngit push" : ""}\n\`\`\`\n\nSummarize what you did and what the fresh-eyes review found.`,
             ...(modelAssignments[index] ? { model: modelAssignments[index] } : {}),
           };
         });
@@ -1056,9 +1066,9 @@ cd ${ctx.cwd}`;
         oc.persistState();
 
         const parallelJson = JSON.stringify({ agents: agentConfigs }, null, 2);
-        const modeLabel = canSameDir
-          ? "🤝 Same-dir mode — agents coordinate via agent-mail file reservations."
-          : "🔄 Parallel execution via sub-agents.";
+        const modeLabel = singleBranchMode
+          ? "🤝 Single-branch mode — agents share the main checkout via cwd and coordinate with agent-mail reservations when available."
+          : "🌿 Worktree mode — agents run in isolated checkouts when provided by the orchestrator.";
 
         return {
           content: [
