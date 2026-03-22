@@ -32,7 +32,13 @@ Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
   │     │   ✅ Approve / 🔍 Refine / ❌ Reject
   │     │
   │     ├─► Reads beads from `br list --json`
-  │     ├─► Optional refinement passes (polish in bead space)
+  │     ├─► Quality checklist gate (WHAT/WHY/HOW scoring)
+  │     ├─► Optional refinement passes with convergence scoring
+  │     │     ├─ Round 1: LLM polish in-context
+  │     │     ├─ Round 2+: fresh sub-agent review (no anchoring)
+  │     │     └─ Stops at steady-state or ≥90% convergence
+  │     ├─► Cross-model bead review (alternative AI model)
+  │     ├─► Bead dedup check (detect overlapping beads)
   │     └─► On approve: finds ready beads via `br ready`
   │
   │   ┌─── Per-Bead Loop ─────────────────────────────────────┐
@@ -40,7 +46,7 @@ Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
   │   │  Implement (with fresh-eyes self-review before commit)  │
   │   │                                                         │
   │   │  orch_review — per-bead gate:                          │
-  │   │    🔥 Hit me → 4 parallel review agents                │
+  │   │    🔥 Hit me → 5 parallel review agents                │
   │   │    ✅ Looks good → mark bead done, advance             │
   │   │                                                         │
   │   │  `br done <id>` on pass → unlocks dependent beads      │
@@ -48,8 +54,9 @@ Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
   │   └────────────────────────────────────────────────────────┘
   │
   └─► Post-Implementation Guided Gates (sequential):
-        🔍 Self-review → 👥 Peer review (4 agents) →
-        🧪 Test coverage → 📦 Commit → 🚀 Ship it → ✅ Done
+        🔍 Self-review → 👥 Peer review (+ file-conflict detection) →
+        🧪 Test coverage → ✏️ De-slopify → 📦 Commit →
+        🚀 Ship it → 🛬 Landing checklist → ✅ Done
         │
         └─► 🧠 CASS memory: extract learnings for future runs
 ```
@@ -133,6 +140,28 @@ The `orch_approve_beads` tool reads beads from `br list --json` and presents the
 
 Refinement passes let you iterate on bead descriptions, dependencies, and priorities before committing to execution.
 
+#### Iterative Refinement with Convergence Scoring
+
+Polish rounds track change counts per round and compute a weighted convergence score (combining velocity, output size stability, and streak of zero-change rounds). The system stops automatically when:
+
+- **Steady-state**: 2 consecutive rounds with 0 changes
+- **Diminishing returns**: convergence score ≥ 90%
+- **Ready to implement**: convergence score ≥ 75% (shown as a hint)
+
+After the first polish round, a **fresh sub-agent** (spawned via `pi --print` with no prior context) reviews the beads using `freshContextRefinementPrompt`. This avoids anchoring bias from the in-context LLM that created the beads.
+
+#### Quality Checklist Gate
+
+Before approval proceeds, `qualityCheckBeads()` validates each bead against automated quality checks — scoring WHAT (clear deliverable), WHY (rationale), and HOW (implementation detail) on a 1–5 scale via `beadQualityScoringPrompt`. Beads that fail are flagged for refinement.
+
+#### Cross-Model Bead Review
+
+`bead-review.ts` sends the full bead set to an alternative AI model (auto-selected from available providers) for a fresh-perspective review. The parser handles all response formats — numbered lists, markdown, and freeform text. Suggestions are surfaced during the approval flow.
+
+#### Bead Dedup Check
+
+Before implementation begins, a deduplication prompt scans for overlapping beads — tasks that cover substantially the same work. Detected duplicates are flagged for the user to merge or remove.
+
 #### Bead Dependencies
 
 Dependencies are managed via `br dep add <child> <parent>`. The `br ready` command returns beads whose dependencies are all satisfied. Cycle detection is handled by the br CLI.
@@ -191,7 +220,7 @@ After all steps pass, a sequential gate flow runs (each gate offers: do it / ⏭
 | Gate | What happens |
 |------|-------------|
 | 🔍 Self-review | LLM reads all new code with fresh eyes, fixes issues |
-| 👥 Peer review | 4 parallel agents: bugs, polish, ergonomics, reality-check |
+| 👥 Peer review | 4 parallel agents: bugs, polish, ergonomics, reality-check + file-conflict detection |
 | 🧪 Test coverage | Check unit tests + e2e, create tasks for gaps |
 | ✏️ De-slopify | Remove AI writing patterns from docs (auto-skips if no docs changed) |
 | 📦 Commit | Logical groupings with detailed messages, push |
@@ -247,6 +276,7 @@ When [Sophia](https://github.com/sophialab/sophia) is initialized:
 | `researchInvestigatePrompt` | Study external project, propose reimagined ideas | Research workflow |
 | `researchDeepenPrompt` | Push past conservative suggestions | Research workflow |
 | `researchInversionPrompt` | What can WE do that THEY cannot? | Research workflow |
+| `goalRefinementPrompt` | Sharpen raw goal into structured spec via questions | Goal refinement |
 
 ## Project Structure
 
@@ -257,11 +287,14 @@ src/
 ├── profiler.ts        # Built-in repo profiling (find, git, grep) + detection
 ├── prompts.ts         # Flywheel-derived prompt templates
 ├── types.ts           # Shared TypeScript types: scan, state, beads, reviews
-├── beads.ts           # br CLI wrapper: list, ready, done, create beads
+├── beads.ts           # br CLI wrapper: list, ready, done, create beads + quality checks
+├── bead-review.ts     # Cross-model bead review via alternative AI model
+├── commands.ts        # Command registration (/orchestrate, /orchestrate-status, /orchestrate-reset)
 ├── coordination.ts    # Coordination backend detection (beads, sophia, agent-mail)
 ├── agent-mail.ts      # Agent-mail integration for multi-agent coordination
 ├── agents-md.ts       # AGENTS.md generation for sub-agent context
 ├── goal-refinement.ts # Goal refinement and constraint extraction
+├── gates.ts           # Guided review gates (7-step sequential flow with resumable state)
 ├── sophia.ts          # Sophia CLI wrapper + dependency analysis + merge
 ├── worktree.ts        # WorktreePool + autoCommitWorktree
 ├── tender.ts          # SwarmTender: agent health + conflict detection
