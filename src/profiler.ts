@@ -80,7 +80,7 @@ async function collectCommits(
 ): Promise<CommitSummary[]> {
   const result = await pi.exec(
     "git",
-    ["log", "--oneline", "--no-decorate", "-n", "20", "--format=%H|%s|%ai|%an"],
+    ["log", "--oneline", "--no-decorate", "-n", "20", "--format=%H%x00%s%x00%ai%x00%an"],
     { signal, timeout: 5000, cwd }
   );
   if (result.code !== 0) return [];
@@ -89,7 +89,7 @@ async function collectCommits(
     .split("\n")
     .filter(Boolean)
     .map((line) => {
-      const [hash, message, date, author] = line.split("|");
+      const [hash, message, date, author] = line.split("\0");
       return {
         hash: hash?.slice(0, 7) ?? "",
         message: message ?? "",

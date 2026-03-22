@@ -285,39 +285,37 @@ export function registerApproveTool(oc: OrchestratorContext) {
         ? `\n🔄 Polish round ${round}${changesInfo}${convergenceInfo}${converged ? "\n✅ Steady-state reached (0 changes for 2 consecutive rounds)" : ""}`
         : "";
 
-      const options: string[] = [];
-      if (maxReached) {
-        options.push(
-          "▶️  Start implementing (max rounds reached)",
-          "❌ Reject"
-        );
-      } else {
-        const startLabel = converged
+      const startLabel = maxReached
+        ? "▶️  Start implementing (max rounds reached)"
+        : converged
           ? "▶️  Start implementing (steady-state reached ✅)"
           : convergenceScore !== undefined && convergenceScore >= 0.75
           ? `▶️  Start implementing (convergence ${(convergenceScore * 100).toFixed(0)}% ✅)`
           : "▶️  Start implementing";
-        if (round >= 1) {
-          // After first round, prioritize fresh-agent to reduce anchoring bias
-          options.push(
-            startLabel,
-            `🧠 Fresh-agent refinement (round ${round + 1})`,
-            `🔍 Same-agent polish (may anchor) (round ${round + 1})`,
-            `🔨 Blunder hunt (5x overshoot)`,
-            `🔗 Dedup check`,
-            "🔀 Cross-model review",
-            "❌ Reject",
-          );
-        } else {
-          options.push(
-            startLabel,
-            `🔍 Polish again (round ${round + 1})`,
-            `🧠 Fresh-agent refinement (round ${round + 1})`,
-            `🔨 Blunder hunt (5x overshoot)`,
-            `🔗 Dedup check`,
-            "❌ Reject",
-          );
-        }
+
+      const options: string[] = [];
+      if (maxReached) {
+        options.push(startLabel, "❌ Reject");
+      } else if (round >= 1) {
+        // After first round, prioritize fresh-agent to reduce anchoring bias
+        options.push(
+          startLabel,
+          `🧠 Fresh-agent refinement (round ${round + 1})`,
+          `🔍 Same-agent polish (may anchor) (round ${round + 1})`,
+          `🔨 Blunder hunt (5x overshoot)`,
+          `🔗 Dedup check`,
+          "🔀 Cross-model review",
+          "❌ Reject",
+        );
+      } else {
+        options.push(
+          startLabel,
+          `🔍 Polish again (round ${round + 1})`,
+          `🧠 Fresh-agent refinement (round ${round + 1})`,
+          `🔨 Blunder hunt (5x overshoot)`,
+          `🔗 Dedup check`,
+          "❌ Reject",
+        );
       }
 
       const convergenceTip = round >= 1 && convergenceScore !== undefined && convergenceScore < 0.5
@@ -333,23 +331,24 @@ export function registerApproveTool(oc: OrchestratorContext) {
       let choice: string | undefined;
 
       if (meetsAutoApprove) {
-        // Run quality gate before auto-approve
-        const { qualityCheckBeads: qcAutoApprove } = await import("../beads.js");
-        const autoQuality = await qcAutoApprove(oc.pi, ctx.cwd);
+        // Re-run quality gate before auto-approve (qualityPreview may be stale)
+        const autoQuality = await qcBeads(oc.pi, ctx.cwd);
 
         if (autoQuality.passed) {
-          // Show interruptible countdown — timeout returns false (auto-approve)
-          const interrupted = await ctx.ui.confirm(
+          // Show interruptible countdown.
+          // ctx.ui.confirm with timeout: returns false on timeout (no user input),
+          // returns true if user presses Enter (i.e. they want to review manually).
+          const userWantsManualReview = await ctx.ui.confirm(
             `✅ Beads converged${convergenceScore !== undefined ? ` (${(convergenceScore * 100).toFixed(0)}%)` : ""} — auto-approving in 3s`,
             "Press Enter to review manually instead",
             { timeout: 3000 }
           );
 
-          if (!interrupted) {
-            // Auto-approve: set choice to start-implementing label
-            choice = options[0]; // First option is always the start label
+          if (!userWantsManualReview) {
+            // Auto-approve: skip to implementation (quality gate already passed above)
+            choice = "auto-approved";
           }
-          // If interrupted, choice stays undefined → fall through to manual select
+          // If user pressed Enter, choice stays undefined → fall through to manual select
         }
         // If quality gate failed, fall through to manual select
       }
@@ -564,9 +563,10 @@ cd ${ctx.cwd}`;
         };
       }
 
-      // "▶️ Start implementing" — run quality gate first
+      // "▶️ Start implementing" — run quality gate first (skip if auto-approved, already checked)
+      const skipQualityGate = choice === "auto-approved";
       const { qualityCheckBeads } = await import("../beads.js");
-      const qualityResult = await qualityCheckBeads(oc.pi, ctx.cwd);
+      const qualityResult = skipQualityGate ? { passed: true, failures: [] } : await qualityCheckBeads(oc.pi, ctx.cwd);
       if (!qualityResult.passed) {
         const failureLines = qualityResult.failures.map(
           (f) => `- ${f.beadId}: ${f.check} — ${f.reason}`
