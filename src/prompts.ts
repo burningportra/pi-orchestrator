@@ -1165,11 +1165,9 @@ This is refinement round ${roundNumber}. Each round uses a fresh conversation to
    - Gaps in testing strategy
    - Sequencing issues or missing dependencies
    - Vague sections that need concrete detail
-3. Produce changes in git-diff style format:
-   - Lines prefixed with \`-\` for removals
-   - Lines prefixed with \`+\` for additions
-   - Include enough context lines to locate each change
-4. If the plan is solid and needs no changes, say "NO_CHANGES" and explain why
+3. If the plan needs improvement, rewrite the FULL refined plan and save it back to the SAME artifact with \`write_artifact\` using the exact same artifact name: ${planPath}
+4. Preserve the strongest parts of the current plan while fixing weaknesses — do not regress coverage or specificity
+5. If the plan is already solid, make no artifact changes and say \`NO_CHANGES\` with a brief explanation
 
 Focus on substance over style. Each round should find fewer issues as the plan converges.`;
 }

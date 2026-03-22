@@ -1,7 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
+import { readFileSync } from "fs";
+import { dirname, join } from "path";
 import type { OrchestratorContext, Bead } from "../types.js";
-import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS } from "../prompts.js";
+import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS, formatRepoProfile, beadCreationPrompt, planRefinementPrompt } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 
 // ─── Module-level bead snapshots for change detection ────────
@@ -128,6 +130,62 @@ let _lastBeadSnapshotFull: BeadSnapshotFull | undefined;
 
 const MAX_POLISH_ROUNDS = 12;
 
+type PlanSnapshot = { fingerprint: string; lineCount: number; size: number; content: string };
+let _lastPlanSnapshot: PlanSnapshot | undefined;
+
+function sessionArtifactPath(ctx: any, name: string): string {
+  const sessionFile = ctx.sessionManager.getSessionFile();
+  const sessionId = ctx.sessionManager.getSessionId();
+
+  if (sessionFile && sessionId) {
+    const artifactRoot = sessionFile.includes("/sessions/")
+      ? sessionFile.replace(/\/sessions\/[^/]+$/, `/artifacts/${sessionId}`)
+      : join(dirname(sessionFile), "..", "artifacts", sessionId);
+    return join(artifactRoot, name);
+  }
+
+  return join(ctx.cwd, ".pi-orchestrator-artifacts", name);
+}
+
+function snapshotPlan(plan: string): PlanSnapshot {
+  return {
+    fingerprint: descFingerprint(plan),
+    lineCount: plan.split("\n").length,
+    size: plan.length,
+    content: plan,
+  };
+}
+
+function countPlanChanges(prev: string, curr: string): number {
+  if (prev === curr) return 0;
+  const prevLines = prev.split("\n");
+  const currLines = curr.split("\n");
+  const maxLen = Math.max(prevLines.length, currLines.length);
+  let changes = Math.abs(prevLines.length - currLines.length);
+  for (let i = 0; i < Math.min(prevLines.length, currLines.length); i++) {
+    if (prevLines[i] !== currLines[i]) changes++;
+  }
+  return Math.min(changes, maxLen);
+}
+
+function formatPlanSummary(plan: string): string {
+  const lines = plan.split("\n");
+  const headings = lines.filter((line) => /^#{1,3}\s/.test(line.trim())).slice(0, 8);
+  const preview = lines
+    .filter((line) => line.trim().length > 0)
+    .slice(0, 12)
+    .join("\n")
+    .slice(0, 2000);
+
+  const summary = [
+    `📄 **Plan artifact preview** (${lines.length} lines, ${plan.length} chars)`,
+    headings.length > 0 ? `\n**Sections:**\n${headings.map((h) => `- ${h.trim()}`).join("\n")}` : "",
+    `\n**Preview:**\n${preview}${preview.length < plan.length ? "\n...(truncated)" : ""}`,
+  ].filter(Boolean);
+
+  return summary.join("\n");
+}
+
 export function registerApproveTool(oc: OrchestratorContext) {
   oc.pi.registerTool({
     name: "orch_approve_beads",
@@ -140,6 +198,115 @@ export function registerApproveTool(oc: OrchestratorContext) {
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       if (!oc.state.selectedGoal) {
         throw new Error("No goal selected. Call orch_select first.");
+      }
+
+      if (oc.state.phase === "awaiting_plan_approval" || (oc.state.phase === "planning" && oc.state.planDocument)) {
+        if (!oc.state.planDocument) {
+          throw new Error("No saved plan artifact found in orchestrator state.");
+        }
+
+        const planPath = sessionArtifactPath(ctx, oc.state.planDocument);
+        const plan = readFileSync(planPath, "utf8");
+        const currentPlanSnapshot = snapshotPlan(plan);
+        const returningFromRefinement = oc.state.phase === "planning" && !!_lastPlanSnapshot;
+
+        if (returningFromRefinement) {
+          const previousPlanSnapshot = _lastPlanSnapshot!;
+          const changes = previousPlanSnapshot.fingerprint === currentPlanSnapshot.fingerprint ? 0 : countPlanChanges(previousPlanSnapshot.content, plan);
+          oc.state.polishChanges.push(changes);
+          if (!oc.state.polishOutputSizes) oc.state.polishOutputSizes = [];
+          oc.state.polishOutputSizes.push(currentPlanSnapshot.size);
+          oc.state.planRefinementRound = (oc.state.planRefinementRound ?? 0) + 1;
+          if (oc.state.polishChanges.length >= 2) {
+            const recent = oc.state.polishChanges.slice(-2);
+            oc.state.polishConverged = recent[0] === 0 && recent[1] === 0;
+          }
+        } else if (!_lastPlanSnapshot) {
+          oc.state.planRefinementRound = oc.state.planRefinementRound ?? 0;
+          oc.state.polishChanges = [];
+          oc.state.polishOutputSizes = [currentPlanSnapshot.size];
+          oc.state.polishConverged = false;
+        }
+
+        _lastPlanSnapshot = currentPlanSnapshot;
+        oc.setPhase("awaiting_plan_approval", ctx);
+
+        const planRound = oc.state.planRefinementRound ?? 0;
+        const planConvergenceScore = oc.state.polishChanges.length >= 3
+          ? computeConvergenceScore(oc.state.polishChanges, oc.state.polishOutputSizes)
+          : undefined;
+        if (planConvergenceScore !== undefined) {
+          oc.state.planConvergenceScore = planConvergenceScore;
+        }
+        oc.persistState();
+
+        const changesInfo = oc.state.polishChanges.length > 0
+          ? `\n📊 Refinement history: ${oc.state.polishChanges.map((n, i) => `R${i + 1}: ${n} change${n !== 1 ? "s" : ""}`).join(", ")}`
+          : "";
+        const convergenceInfo = planConvergenceScore !== undefined
+          ? `\n📈 Convergence: ${(planConvergenceScore * 100).toFixed(0)}%${planConvergenceScore >= 0.90 ? " (diminishing returns)" : planConvergenceScore >= 0.75 ? " (ready to accept)" : ""}`
+          : "";
+        const roundHeader = planRound > 0
+          ? `\n🔄 Plan refinement round ${planRound}${changesInfo}${convergenceInfo}${oc.state.polishConverged ? "\n✅ Steady-state reached (0 changes for 2 consecutive rounds)" : ""}`
+          : "";
+
+        const choice = await ctx.ui.select(
+          `Review plan for: ${oc.state.selectedGoal}${roundHeader}\n\n${formatPlanSummary(plan)}`,
+          [
+            "✅ Accept plan and create beads",
+            `🔍 Refine plan (round ${planRound + 1})`,
+            "❌ Reject plan",
+          ]
+        );
+
+        if (!choice || choice.startsWith("❌")) {
+          _lastPlanSnapshot = undefined;
+          oc.state.planDocument = undefined;
+          oc.state.planRefinementRound = 0;
+          oc.state.planConvergenceScore = undefined;
+          oc.state.polishChanges = [];
+          oc.state.polishOutputSizes = [];
+          oc.state.polishConverged = false;
+          oc.orchestratorActive = false;
+          oc.setPhase("idle", ctx);
+          oc.persistState();
+          return {
+            content: [{ type: "text", text: "Plan rejected. Orchestration stopped." }],
+            details: { approved: false, plan: true },
+          };
+        }
+
+        if (choice.startsWith("🔍")) {
+          oc.setPhase("planning", ctx);
+          oc.persistState();
+          return {
+            content: [{
+              type: "text",
+              text: `**NEXT: Refine the saved plan artifact, then call \`orch_approve_beads\` again.**\n\nArtifact: \`${oc.state.planDocument}\`\n\n${planRefinementPrompt(oc.state.planDocument, planRound + 1)}\n\n---\n\nCurrent plan summary:\n${formatPlanSummary(plan)}`,
+            }],
+            details: { approved: false, plan: true, refining: true, planDocument: oc.state.planDocument, planRound },
+          };
+        }
+
+        _lastPlanSnapshot = undefined;
+        oc.state.planRefinementRound = 0;
+        oc.state.planConvergenceScore = undefined;
+        oc.state.polishChanges = [];
+        oc.state.polishOutputSizes = [];
+        oc.state.polishConverged = false;
+        oc.setPhase("creating_beads", ctx);
+        oc.persistState();
+
+        const repoContext = oc.state.repoProfile ? formatRepoProfile(oc.state.repoProfile, oc.state.scanResult) : "";
+        const creationPrompt = `${beadCreationPrompt(oc.state.selectedGoal, repoContext, oc.state.constraints)}\n\n### Approved Plan Artifact\nUse the approved plan artifact \`${oc.state.planDocument}\` as the source of truth. Read it carefully and translate it into beads without dropping requirements or edge cases.\n\n### Approved Plan Content\n${plan}`;
+
+        return {
+          content: [{
+            type: "text",
+            text: `**NEXT: Create beads from the approved plan using \`br create\` and \`br dep add\` in bash NOW.**\n\nArtifact: \`${oc.state.planDocument}\`\n\n---\n\n${creationPrompt}`,
+          }],
+          details: { approved: true, plan: true, creatingBeads: true, planDocument: oc.state.planDocument },
+        };
       }
 
       const { readBeads, readyBeads, extractArtifacts, validateBeads, syncBeads, updateBeadStatus, bvInsights } = await import("../beads.js");
@@ -885,6 +1052,10 @@ cd ${ctx.cwd}`;
 
     renderResult(result, { expanded }, theme) {
       const d = result.details as any;
+      if (d?.plan) {
+        if (!d.approved) return new Text(theme.fg("warning", "📋 Plan not approved"), 0, 0);
+        return new Text(theme.fg("success", "📋 Plan approved — ready to create beads"), 0, 0);
+      }
       if (!d?.approved) return new Text(theme.fg("warning", "📝 Beads rejected"), 0, 0);
       let text = theme.fg("success", `📝 Beads approved — ${d.beadCount} beads, ${d.readyCount} ready`);
       if (d.parallel) text += theme.fg("dim", " (parallel)");
