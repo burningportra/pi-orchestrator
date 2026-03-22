@@ -794,6 +794,18 @@ cd ${ctx.cwd}`;
         );
         const canSameDir = allDisjoint && oc.state.coordinationBackend?.agentMail;
 
+        // Check bv for bottleneck recommendations
+        const { bvInsights } = await import("../beads.js");
+        const insights = await bvInsights(oc.pi, ctx.cwd);
+        let bvRecommendation = "";
+        if (insights?.Bottlenecks?.length) {
+          const top = insights.Bottlenecks[0];
+          const readyIds = new Set(ready.map(b => b.id));
+          if (readyIds.has(top.ID)) {
+            bvRecommendation = `\n\n🎯 bv recommends implementing ${top.ID} first (critical bottleneck — unlocks most downstream work). Consider launching it before the others.`;
+          }
+        }
+
         // Build parallel agent configs
         const agentConfigs = ready.map((bead) => {
           const artifacts = extractArtifacts(bead);
@@ -825,7 +837,7 @@ cd ${ctx.cwd}`;
           content: [
             {
               type: "text",
-              text: `**NEXT: Call \`parallel_subagents\` NOW to launch ${ready.length} parallel beads.**\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each bead with the sub-agent's summary.\n\n---\n\nBeads approved! ${beads.length} total, ${ready.length} ready now.\n\n${modeLabel}`,
+              text: `**NEXT: Call \`parallel_subagents\` NOW to launch ${ready.length} parallel beads.**${bvRecommendation}\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each bead with the sub-agent's summary.\n\n---\n\nBeads approved! ${beads.length} total, ${ready.length} ready now.\n\n${modeLabel}`,
             },
           ],
           details: { approved: true, beadCount: beads.length, readyCount: ready.length, parallel: true },

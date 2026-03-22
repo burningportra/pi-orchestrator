@@ -3,6 +3,7 @@ import type { OrchestratorContext, OrchestratorState } from "./types.js";
 import { polishInstructions, summaryInstructions, realityCheckInstructions, deSlopifyInstructions, landingChecklistInstructions } from "./prompts.js";
 import { readBeads, extractArtifacts as extractBeadArtifacts } from "./beads.js";
 import { agentMailTaskPreamble } from "./agent-mail.js";
+import { detectUbs } from "./coordination.js";
 
 export async function runGuidedGates(
   oc: OrchestratorContext,
@@ -150,11 +151,15 @@ export async function runGuidedGates(
   }
 
   if (chosen.startsWith("🧪")) {
+    const ubsAvailable = await detectUbs(oc.pi, ctx.cwd);
+    const ubsHint = ubsAvailable
+      ? `\n\nAlso run \`ubs <changed-files>\` to scan for bugs beyond what linters catch.`
+      : "";
     return {
       content: [
         {
           type: "text",
-          text: `## 🧪 Test Coverage Check — Round ${round}\n\nDo we have full unit test coverage without using mocks or fake stuff? What about complete e2e integration test scripts with great, detailed logging?\n\nReview the current state:\n- Goal: ${goal}\n- Files: ${allArtifacts.join(", ")}\n\nIf test coverage is incomplete, create specific tasks for each missing test, with subtasks and dependency structure. Each task should be self-contained — a fresh agent can execute it without extra context.\n\nFor unit tests: test real behavior, not mocked interfaces. For e2e: full integration scripts with detailed logging at each stage.${callbackHint}`,
+          text: `## 🧪 Test Coverage Check — Round ${round}\n\nDo we have full unit test coverage without using mocks or fake stuff? What about complete e2e integration test scripts with great, detailed logging?\n\nReview the current state:\n- Goal: ${goal}\n- Files: ${allArtifacts.join(", ")}\n\nIf test coverage is incomplete, create specific tasks for each missing test, with subtasks and dependency structure. Each task should be self-contained — a fresh agent can execute it without extra context.\n\nFor unit tests: test real behavior, not mocked interfaces. For e2e: full integration scripts with detailed logging at each stage.${ubsHint}${callbackHint}`,
         },
       ],
       details: { iterating: true, round, testCoverage: true },

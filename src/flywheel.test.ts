@@ -13,6 +13,8 @@ import {
   researchDeepenPrompt,
   researchInversionPrompt,
   discoveryInstructions,
+  planDocumentPrompt,
+  planRefinementPrompt,
   AI_SLOP_PATTERNS,
   SWARM_STAGGER_DELAY_MS,
 } from "./prompts.js";

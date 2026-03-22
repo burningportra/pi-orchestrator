@@ -1013,3 +1013,80 @@ Also ask the user if they'd like you to:
 - Run tests
 - Create a git commit with a descriptive message`;
 }
+
+// ─── Plan Document Generation ───────────────────────────────
+export function planDocumentPrompt(goal: string, profile: RepoProfile, scanResult?: ScanResult): string {
+  const repoContext = formatRepoProfile(profile, scanResult);
+
+  return `You are an expert software architect. Use ultrathink to produce a comprehensive implementation plan.
+
+## Goal
+${goal}
+
+## Repository Context
+${repoContext}
+
+## Instructions
+Produce a detailed markdown plan document covering ALL of the following sections:
+
+### 1. Architecture Overview
+- High-level system design and component relationships
+- Key architectural decisions and trade-offs
+
+### 2. User Workflows
+- Step-by-step user-facing flows the implementation enables
+- How existing workflows are affected
+
+### 3. Data Model / Types
+- New types, interfaces, or schemas needed
+- Changes to existing data structures
+
+### 4. API Surface
+- New functions, methods, endpoints, or CLI commands
+- Signatures, parameters, return types
+
+### 5. Testing Strategy
+- Unit, integration, and e2e test plan
+- Edge cases to cover, mocking strategy
+
+### 6. Edge Cases & Failure Modes
+- What can go wrong and how to handle it
+- Graceful degradation, error messages
+
+### 7. File Structure
+- Which files to create or modify
+- Logical grouping and module boundaries
+
+### 8. Sequencing
+- Implementation order with dependencies
+- What can be parallelized vs. must be sequential
+
+## Output
+Save the plan as a session artifact using write_artifact with a descriptive name like 'plans/<goal-slug>.md'.
+Ground every recommendation in the repository context above — do not hallucinate capabilities or files that don't exist.`;
+}
+
+export function planRefinementPrompt(planPath: string, roundNumber: number): string {
+  return `You are a fresh reviewer with NO prior context on this plan. Use ultrathink to critically evaluate it.
+
+## Round ${roundNumber} Refinement
+
+This is refinement round ${roundNumber}. Each round uses a fresh conversation to prevent anchoring bias — you should evaluate the plan with completely fresh eyes.
+
+## Instructions
+1. Read the plan artifact at: ${planPath}
+2. Evaluate it critically — look for:
+   - Missing edge cases or failure modes
+   - Overly complex designs that could be simplified
+   - Incorrect assumptions about the codebase
+   - Gaps in testing strategy
+   - Sequencing issues or missing dependencies
+   - Vague sections that need concrete detail
+3. Produce changes in git-diff style format:
+   - Lines prefixed with \`-\` for removals
+   - Lines prefixed with \`+\` for additions
+   - Include enough context lines to locate each change
+4. If the plan is solid and needs no changes, say "NO_CHANGES" and explain why
+
+Focus on substance over style. Each round should find fewer issues as the plan converges.`;
+}

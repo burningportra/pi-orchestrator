@@ -141,9 +141,70 @@ export function registerSelectTool(oc: OrchestratorContext) {
       }
       oc.persistState();
 
-      const repoContext = oc.state.repoProfile ? formatRepoProfile(oc.state.repoProfile) : "";
-      const instructions = beadCreationPrompt(goal, repoContext, oc.state.constraints);
+      // ── Workflow choice: plan first, deep plan, or direct to beads ──
+      const workflowOptions = [
+        "📋 Plan first — generate a plan document before creating beads",
+        "🧠 Deep plan (beads) — multi-model planning agents create beads",
+        "⚡ Direct to beads — jump straight to bead creation",
+      ];
 
+      let workflowChoice: string | undefined;
+      try {
+        workflowChoice = await ctx.ui.select(
+          "🛤️ Choose a workflow:",
+          workflowOptions
+        );
+      } catch {
+        workflowChoice = workflowOptions[2]; // default to direct
+      }
+
+      if (workflowChoice === undefined) {
+        oc.orchestratorActive = false;
+        oc.setPhase("idle", ctx);
+        oc.persistState();
+        return {
+          content: [{ type: "text", text: "Workflow selection cancelled. Orchestration stopped." }],
+          details: { selected: false },
+        };
+      }
+
+      const repoContext = oc.state.repoProfile ? formatRepoProfile(oc.state.repoProfile) : "";
+
+      if (workflowChoice.startsWith("📋")) {
+        // Plan-first workflow: stay in planning phase
+        oc.state.planRefinementRound = 0;
+        oc.setPhase("planning", ctx);
+        oc.persistState();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `**NEXT: Generate a plan document for this goal.**\n\nGoal: "${goal}"${oc.state.constraints.length > 0 ? `\nConstraints: ${oc.state.constraints.join(", ")}` : ""}\n\nCreate a detailed implementation plan as a markdown artifact. Once the plan is approved, beads will be created from it.`,
+            },
+          ],
+          details: { selected: true, goal, constraints: oc.state.constraints, workflow: "plan_first" },
+        };
+      }
+
+      if (workflowChoice.startsWith("🧠")) {
+        // Deep plan workflow: delegate to deep-plan agents
+        oc.setPhase("planning", ctx);
+        oc.persistState();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `**NEXT: Run deep planning with multi-model agents.**\n\nGoal: "${goal}"${oc.state.constraints.length > 0 ? `\nConstraints: ${oc.state.constraints.join(", ")}` : ""}\n\nUse the deep planning system to generate beads via multi-model triangulation.`,
+            },
+          ],
+          details: { selected: true, goal, constraints: oc.state.constraints, workflow: "deep_plan" },
+        };
+      }
+
+      // Default: Direct to beads
+      const instructions = beadCreationPrompt(goal, repoContext, oc.state.constraints);
       oc.setPhase("creating_beads", ctx);
 
       return {
@@ -153,7 +214,7 @@ export function registerSelectTool(oc: OrchestratorContext) {
             text: `**NEXT: Create beads for this goal using \`br create\` and \`br dep add\` in bash NOW.**\n\nGoal: "${goal}"${oc.state.constraints.length > 0 ? `\nConstraints: ${oc.state.constraints.join(", ")}` : ""}\n\n---\n\n${instructions}`,
           },
         ],
-        details: { selected: true, goal, constraints: oc.state.constraints },
+        details: { selected: true, goal, constraints: oc.state.constraints, workflow: "direct" },
       };
     },
 

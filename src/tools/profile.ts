@@ -57,17 +57,18 @@ export function registerProfileTool(oc: OrchestratorContext) {
 
       // Foundation validation — non-blocking warnings
       const foundationGaps: string[] = [];
-      if (!scanResult.hasAgentsMd) {
+      const hasAgentsMd = profile.keyFiles && Object.keys(profile.keyFiles).some(f => f.toLowerCase().includes("agents.md"));
+      if (!hasAgentsMd) {
         foundationGaps.push("- No AGENTS.md found. Consider creating one for agent guidance.");
       }
       if (!profile.hasTests) {
         foundationGaps.push("- No test framework detected. Consider adding tests before orchestrating.");
       }
-      if (!profile.ciPlatform && !scanResult.packageJson?.scripts?.build && !scanResult.packageJson?.scripts?.test) {
-        foundationGaps.push("- No build/test scripts detected. Consider adding CI or build tooling.");
+      if (!profile.hasCI && !profile.ciPlatform) {
+        foundationGaps.push("- No CI/build tooling detected. Consider adding build scripts or CI.");
       }
-      if (!scanResult.isGitRepo) {
-        foundationGaps.push("- No git repository detected. Consider initializing git for version control.");
+      if (profile.recentCommits.length === 0) {
+        foundationGaps.push("- No git history detected. Consider initializing git for version control.");
       }
       const foundationWarning = foundationGaps.length > 0
         ? `\n⚠️ Foundation gaps detected:\n${foundationGaps.join("\n")}\n`
@@ -131,7 +132,7 @@ export function registerProfileTool(oc: OrchestratorContext) {
           content: [
             {
               type: "text",
-              text: `**NEXT: Create beads for this goal using \`br create\` and \`br dep add\` in bash NOW.**\n\nGoal: "${goal}"\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}\n\n${formatted}${memoryContext}\n\n${instructions}`,
+              text: `**NEXT: Create beads for this goal using \`br create\` and \`br dep add\` in bash NOW.**\n\nGoal: "${goal}"\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}${foundationWarning}\n\n${formatted}${memoryContext}\n\n${instructions}`,
             },
           ],
           details: { profile, scanResult, customGoal: goal },

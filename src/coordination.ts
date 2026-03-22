@@ -125,6 +125,29 @@ async function detectAgentMail(pi: ExtensionAPI): Promise<boolean> {
   return false;
 }
 
+// ─── UBS Detection ─────────────────────────────────────────────
+
+let _ubsAvailable: boolean | null = null;
+
+/**
+ * Detects whether the `ubs` CLI is available. Result is cached.
+ */
+export async function detectUbs(pi: ExtensionAPI, cwd: string): Promise<boolean> {
+  if (_ubsAvailable !== null) return _ubsAvailable;
+  try {
+    const result = await pi.exec("ubs", ["--help"], { timeout: 3000, cwd });
+    _ubsAvailable = result.code === 0;
+  } catch {
+    _ubsAvailable = false;
+  }
+  return _ubsAvailable;
+}
+
+/** Reset UBS detection cache (for testing). */
+export function resetUbsCache(): void {
+  _ubsAvailable = null;
+}
+
 async function detectSophia(pi: ExtensionAPI, cwd: string): Promise<boolean> {
   // CLI available
   try {
