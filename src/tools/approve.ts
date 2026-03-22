@@ -142,7 +142,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
         throw new Error("No goal selected. Call orch_select first.");
       }
 
-      const { readBeads, readyBeads, extractArtifacts, validateBeads, syncBeads, updateBeadStatus } = await import("../beads.js");
+      const { readBeads, readyBeads, extractArtifacts, validateBeads, syncBeads, updateBeadStatus, bvInsights } = await import("../beads.js");
       const { beadRefinementPrompt } = await import("../prompts.js");
 
       // Read all beads from br CLI
@@ -258,6 +258,11 @@ export function registerApproveTool(oc: OrchestratorContext) {
         ? `\n\n⚠️ Validation issues: ${validation.cycles ? "dependency cycles detected" : ""} ${validation.orphaned.length > 0 ? `orphaned: ${validation.orphaned.join(", ")}` : ""}`
         : "") + bvWarnings + shallowWarning;
 
+      const insights = await bvInsights(oc.pi, ctx.cwd);
+      const bottleneckWarning = insights?.Bottlenecks?.length
+        ? `\n\n⚠️ **Bottleneck beads:** ${insights.Bottlenecks.map((b) => b.ID).join(", ")} — high betweenness centrality means these block many downstream beads. Consider splitting them (Advanced → Fix graph issues) before implementing.`
+        : "";
+
       // Quality summary
       const { qualityCheckBeads } = await import("../beads.js");
       const qualityPreview = await qualityCheckBeads(oc.pi, ctx.cwd);
@@ -356,7 +361,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
 
       if (choice === undefined) {
         choice = await ctx.ui.select(
-          `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}\n\n${beadListText}${validationWarning}${convergenceTip}`,
+          `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}${bottleneckWarning}\n\n${beadListText}${validationWarning}${convergenceTip}`,
           options
         );
       }
