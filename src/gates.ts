@@ -24,15 +24,17 @@ export async function runGuidedGates(
   const round = st.iterationRound;
   oc.persistState();
 
-  // Sequential guided flow — resume from saved gate index
+  // Sequential guided flow — resume from saved gate index.
+  // Gates marked auto: true run immediately without prompting the user.
+  // Gates marked auto: false present a select with execute/skip/done options.
   const gates = [
-    { emoji: "🔍", label: "Fresh self-review", desc: "read all new code with fresh eyes" },
-    { emoji: "👥", label: "Peer review", desc: "parallel agents review each other's work" },
-    { emoji: "🧪", label: "Test coverage", desc: "check unit tests + e2e, create tasks for gaps" },
-    { emoji: "✏️", label: "De-slopify", desc: "remove AI writing patterns from docs" },
-    { emoji: "📦", label: "Commit", desc: "logical groupings with detailed messages" },
-    { emoji: "🚀", label: "Ship it", desc: "commit, tag, release, deploy, monitor CI" },
-    { emoji: "🛬", label: "Landing checklist", desc: "verify session is resumable" },
+    { emoji: "🔍", label: "Fresh self-review", desc: "read all new code with fresh eyes", auto: true },
+    { emoji: "👥", label: "Peer review", desc: "parallel agents review each other's work", auto: false },
+    { emoji: "🧪", label: "Test coverage", desc: "check unit tests + e2e, create tasks for gaps", auto: true },
+    { emoji: "✏️", label: "De-slopify", desc: "remove AI writing patterns from docs", auto: true },
+    { emoji: "📦", label: "Commit", desc: "logical groupings with detailed messages", auto: false },
+    { emoji: "🚀", label: "Ship it", desc: "commit, tag, release, deploy, monitor CI", auto: false },
+    { emoji: "🛬", label: "Landing checklist", desc: "verify session is resumable", auto: false },
   ];
 
   // Agent-mail threading: if agentMail is active, sub-agents (peer review / hit-me) bootstrap
@@ -48,6 +50,16 @@ export async function runGuidedGates(
   const startGate = st.currentGateIndex ?? 0;
   for (let i = startGate; i < gates.length; i++) {
     const gate = gates[i];
+
+    if (gate.auto) {
+      // Auto-advance: run this gate immediately without prompting
+      st.currentGateIndex = i + 1;
+      oc.persistState();
+      chosen = `${gate.emoji} ${gate.label} — ${gate.desc}`;
+      break;
+    }
+
+    // User-prompted gate: show select with execute/skip/done
     const pick = await ctx.ui.select(
       `Round ${round} — ${gate.emoji} ${gate.label}`,
       [

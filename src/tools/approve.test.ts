@@ -165,3 +165,77 @@ describe("formatDiffSummary edge cases", () => {
     expect(text).toContain("1 bead unchanged");
   });
 });
+
+// ─── S2: Simplified approval options structure ──────────────
+describe("S2: simplified approval options", () => {
+  // These tests validate the approve.ts source structure to ensure
+  // the simplified option menus are correctly implemented.
+  const { readFileSync } = require("fs");
+  const { join } = require("path");
+  const approveSource = readFileSync(join(__dirname, "approve.ts"), "utf8");
+
+  it("round 0 offers Polish beads (not fresh-agent)", () => {
+    expect(approveSource).toContain("🔍 Polish beads (round");
+  });
+
+  it("round 1+ offers Refine further (not same-agent)", () => {
+    expect(approveSource).toContain("🔍 Refine further (round");
+  });
+
+  it("has Advanced options sub-menu", () => {
+    expect(approveSource).toContain("⚙️ Advanced options...");
+    expect(approveSource).toContain("Advanced refinement options");
+  });
+
+  it("Advanced sub-menu contains all specialist options", () => {
+    // All specialist options should be in the advancedOptions array
+    expect(approveSource).toContain("advancedOptions");
+    // Fresh-agent in advanced
+    const advSection = approveSource.slice(approveSource.indexOf("advancedOptions"));
+    expect(advSection).toContain("Fresh-agent refinement");
+    expect(advSection).toContain("Same-agent polish");
+    expect(advSection).toContain("Blunder hunt");
+    expect(advSection).toContain("Dedup check");
+  });
+
+  it("cross-model review only in Advanced after round 1", () => {
+    // Cross-model review should be gated by round >= 1 inside the Advanced menu
+    const advSection = approveSource.slice(approveSource.indexOf("advancedOptions"));
+    const crossModelSection = advSection.slice(0, advSection.indexOf("advancedOptions.push(\"⬅️"));
+    expect(crossModelSection).toContain("round >= 1");
+    expect(crossModelSection).toContain("Cross-model review");
+  });
+
+  it("graph fix only in Advanced when issues exist", () => {
+    const advSection = approveSource.slice(approveSource.indexOf("advancedOptions"));
+    const graphSection = advSection.slice(0, advSection.indexOf("advancedOptions.push(\"⬅️"));
+    expect(graphSection).toContain("hasGraphIssues");
+    expect(graphSection).toContain("Fix graph issues");
+  });
+
+  it("maxReached shows only Start + Reject", () => {
+    // When maxReached, options should only have startLabel and Reject
+    expect(approveSource).toContain('if (maxReached)');
+    // The maxReached block should push only 2 options
+    const maxBlock = approveSource.slice(
+      approveSource.indexOf("if (maxReached)"),
+      approveSource.indexOf("} else {", approveSource.indexOf("if (maxReached)"))
+    );
+    expect(maxBlock).toContain("startLabel");
+    expect(maxBlock).toContain("Reject");
+    expect(maxBlock).not.toContain("Advanced");
+  });
+
+  it("'Refine further' round 1+ delegates to fresh-agent", () => {
+    // The "Refine further" handler should produce freshAgent: true
+    expect(approveSource).toContain("🔍 Refine further");
+    const refineHandler = approveSource.slice(approveSource.indexOf("🔍 Refine further"));
+    expect(refineHandler).toContain("freshAgent: true");
+  });
+
+  it("Advanced 'Back' returns to main menu", () => {
+    expect(approveSource).toContain("⬅️ Back");
+    const backHandler = approveSource.slice(approveSource.indexOf("⬅️ Back"));
+    expect(backHandler).toContain("orch_approve_beads");
+  });
+});

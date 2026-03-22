@@ -301,39 +301,22 @@ export function registerApproveTool(oc: OrchestratorContext) {
       const hasGraphIssues = validation.orphaned.length > 0 || (validation.warnings?.length ?? 0) > 0;
       const graphIssueCount = validation.orphaned.length + (validation.warnings?.length ?? 0);
 
+      // ── Simplified options: progressive disclosure ──
+      // Main menu: Start / Polish (or Refine) / Advanced / Reject
+      // Advanced sub-menu: all specialist options for power users
       const options: string[] = [];
       if (maxReached) {
         options.push(startLabel, "❌ Reject");
-      } else if (round >= 1) {
-        // After first round, prioritize fresh-agent to reduce anchoring bias
-        options.push(
-          startLabel,
-          `🧠 Fresh-agent refinement (round ${round + 1})`,
-          `🔍 Same-agent polish (may anchor) (round ${round + 1})`,
-          `🔨 Blunder hunt (5x overshoot)`,
-          `🔗 Dedup check`,
-          "🔀 Cross-model review",
-          "❌ Reject",
-        );
       } else {
-        options.push(
-          startLabel,
-          `🔍 Polish again (round ${round + 1})`,
-          `🧠 Fresh-agent refinement (round ${round + 1})`,
-          `🔨 Blunder hunt (5x overshoot)`,
-          `🔗 Dedup check`,
-          "❌ Reject",
-        );
-      }
-      // Insert graph remediation option before Reject when issues exist
-      if (hasGraphIssues && !maxReached) {
-        const rejectIdx = options.findIndex(o => o.startsWith("❌"));
-        const label = `🩺 Fix graph issues (${graphIssueCount} warning${graphIssueCount !== 1 ? "s" : ""})`;
-        if (rejectIdx >= 0) {
-          options.splice(rejectIdx, 0, label);
+        options.push(startLabel);
+        if (round >= 1) {
+          // After round 1, default refinement action is fresh-agent (reduces anchoring bias)
+          options.push(`🔍 Refine further (round ${round + 1})`);
         } else {
-          options.push(label);
+          options.push(`🔍 Polish beads (round ${round + 1})`);
         }
+        options.push("⚙️ Advanced options...");
+        options.push("❌ Reject");
       }
 
       const convergenceTip = round >= 1 && convergenceScore !== undefined && convergenceScore < 0.5
@@ -378,6 +361,63 @@ export function registerApproveTool(oc: OrchestratorContext) {
         );
       }
 
+      // ── Advanced sub-menu handler ──
+      if (choice?.startsWith("⚙️")) {
+        const advancedOptions: string[] = [
+          `🧠 Fresh-agent refinement (round ${round + 1})`,
+          `🔍 Same-agent polish (round ${round + 1})`,
+          `🔨 Blunder hunt (5x overshoot)`,
+          `🔗 Dedup check`,
+        ];
+        if (round >= 1) {
+          advancedOptions.push("🔀 Cross-model review");
+        }
+        if (hasGraphIssues) {
+          advancedOptions.push(`🩺 Fix graph issues (${graphIssueCount} warning${graphIssueCount !== 1 ? "s" : ""})`);
+        }
+        advancedOptions.push("⬅️ Back");
+
+        const advChoice = await ctx.ui.select(
+          "⚙️ Advanced refinement options:",
+          advancedOptions
+        );
+
+        if (!advChoice || advChoice.startsWith("⬅️")) {
+          // Back to main menu — re-trigger approval
+          return {
+            content: [{ type: "text", text: "Call `orch_approve_beads` again to return to the approval menu." }],
+            details: { approved: false },
+          };
+        }
+        // Delegate to existing handlers by reassigning choice
+        choice = advChoice;
+        // Fall through to handler blocks below...
+      }
+
+      // ── "🔍 Refine further" (round 1+) → fresh-agent refinement ──
+      if (choice?.startsWith("🔍 Refine further")) {
+        oc.setPhase("refining_beads", ctx);
+        oc.persistState();
+        await syncBeads(oc.pi, ctx.cwd);
+
+        const freshPrompt = freshContextRefinementPrompt(ctx.cwd, oc.state.selectedGoal!, round);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `**NEXT: Spawn a fresh sub-agent for bead refinement, then call \`orch_approve_beads\` again.**\n\nUse \`subagent\` with these parameters:\n\`\`\`json\n${JSON.stringify({
+                name: `fresh-refine-r${round + 1}`,
+                task: freshPrompt,
+                interactive: false,
+                cwd: ctx.cwd,
+              }, null, 2)}\n\`\`\`\n\nThe sub-agent has NO prior conversation context — this is deliberate. Fresh eyes catch what anchored reviewers miss.\n\nAfter the sub-agent completes, call \`orch_approve_beads\` to see the changes.`,
+            },
+          ],
+          details: { approved: false, refining: true, freshAgent: true, beadCount: beads.length, polishRound: round },
+        };
+      }
+
+      // ── "🔍 Polish beads" (round 0) or "🔍 Same-agent polish" (from Advanced menu) ──
       if (choice?.startsWith("🔍")) {
         oc.setPhase("refining_beads", ctx);
         oc.persistState();
