@@ -983,7 +983,14 @@ cd ${ctx.cwd}`;
           const artifacts = extractArtifacts(bead);
           const agentName = `bead-${bead.id}`;
           const preamble = oc.state.coordinationBackend?.agentMail
-            ? agentMailTaskPreamble(ctx.cwd, agentName, bead.title, artifacts, bead.id)
+            ? agentMailTaskPreamble(
+                ctx.cwd,
+                agentName,
+                bead.title,
+                artifacts,
+                bead.id,
+                canSameDir ? "single-branch" : "worktree"
+              )
             : "";
           return {
             name: agentName,

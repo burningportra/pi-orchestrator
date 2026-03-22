@@ -232,7 +232,8 @@ export function agentMailTaskPreamble(
   _agentName: string,
   stepDesc: string,
   artifacts: string[],
-  threadId: string
+  threadId: string,
+  mode: "worktree" | "single-branch" = "worktree"
 ): string {
   const safeDesc = stepDesc.replace(/"/g, '\\"').replace(/`/g, '\\`').replace(/\n/g, '\\n');
 
@@ -244,6 +245,19 @@ export function agentMailTaskPreamble(
   });
 
   const helperScript = amHelperScript(cwd, threadId);
+  const gitWorkflowInstructions = mode === "single-branch"
+    ? `
+### Single-branch git workflow (MANDATORY)
+You are working directly on the shared branch in the main checkout.
+- Before editing, sync first: \`git pull --rebase\`
+- After finishing and before your final summary, commit only your bead changes with a clear message, then push immediately:
+  - \`git add <your-files> && git commit -m "bead <id>: <summary>"\`
+  - \`git push\`
+- If \`git pull --rebase\`, \`git rebase --continue\`, or \`git push\` reports conflicts or a non-fast-forward error, STOP immediately.
+- Do not force-push, do not merge, and do not try to untangle another agent's changes unless explicitly instructed.
+- Report the conflict in your summary / agent-mail update so the orchestrator can decide the next step.
+`
+    : "";
 
   return `## Agent Mail Coordination — MANDATORY
 You are coordinating with other parallel agents via agent-mail.
@@ -274,7 +288,7 @@ am_send "Starting: ${safeDesc.slice(0, 60)}" "Working on: ${safeDesc.slice(0, 10
 am_inbox | python3 -c "import json,sys; d=json.load(sys.stdin); msgs=d.get('result',{}).get('structuredContent',{}).get('messages',[]); [print(f'FROM {m[\"sender_name\"]}: {m[\"subject\"]}') for m in msgs]" 2>/dev/null
 \`\`\`
 If there are messages from other agents, read and acknowledge them before proceeding.
-
+${gitWorkflowInstructions}
 ### Step 5: Do your work (implement the bead)
 
 ### Step 6: Check inbox again BEFORE finishing

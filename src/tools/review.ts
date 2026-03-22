@@ -126,7 +126,14 @@ export function registerReviewTool(oc: OrchestratorContext) {
           const rePresThreadId = params.beadId;
           const rePresPreamble = (name: string) =>
             oc.state.coordinationBackend?.agentMail
-              ? agentMailTaskPreamble(ctx.cwd, name, bead.title, allArtifactsForBead, rePresThreadId)
+              ? agentMailTaskPreamble(
+                  ctx.cwd,
+                  name,
+                  bead.title,
+                  allArtifactsForBead,
+                  rePresThreadId,
+                  oc.state.coordinationMode ?? "worktree"
+                )
               : "";
           const allBeads = await readBeads(oc.pi, ctx.cwd);
           const beadResults = Object.values(oc.state.beadResults ?? {});
@@ -184,7 +191,14 @@ export function registerReviewTool(oc: OrchestratorContext) {
           const hitMeThreadId = params.beadId;
           const hitMePreamble = (name: string) =>
             oc.state.coordinationBackend?.agentMail
-              ? agentMailTaskPreamble(ctx.cwd, name, bead.title, allArtifactsForBead, hitMeThreadId)
+              ? agentMailTaskPreamble(
+                  ctx.cwd,
+                  name,
+                  bead.title,
+                  allArtifactsForBead,
+                  hitMeThreadId,
+                  oc.state.coordinationMode ?? "worktree"
+                )
               : "";
           const allBeads = await readBeads(oc.pi, ctx.cwd);
           const beadResults = Object.values(oc.state.beadResults ?? {});
@@ -301,7 +315,14 @@ export function registerReviewTool(oc: OrchestratorContext) {
             const agentName = `bead-${b.id}`;
             const threadId = b.id;
             const preamble = oc.state.coordinationBackend?.agentMail
-              ? agentMailTaskPreamble(ctx.cwd, agentName, b.title, artifacts, threadId)
+              ? agentMailTaskPreamble(
+                  ctx.cwd,
+                  agentName,
+                  b.title,
+                  artifacts,
+                  threadId,
+                  oc.state.coordinationMode ?? "worktree"
+                )
               : "";
             const prevResults = Object.values(oc.state.beadResults ?? {});
             const implInstr = implementerInstructions(b, oc.state.repoProfile!, prevResults);
