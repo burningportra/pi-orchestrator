@@ -214,10 +214,42 @@ export function registerApproveTool(oc: OrchestratorContext) {
         ? "\n💡 Tip: Fresh-agent refinement recommended — reduces anchoring bias."
         : "";
 
-      const choice = await ctx.ui.select(
-        `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}\n\n${beadListText}${validationWarning}${convergenceTip}`,
-        options
+      // ── Auto-approve when convergence criteria met ──
+      const autoApproveEnabled = oc.state.autoApproveOnConvergence !== false; // default true
+      const meetsAutoApprove = autoApproveEnabled && round > 0 && (
+        converged || (convergenceScore !== undefined && convergenceScore >= 0.90)
       );
+
+      let choice: string | undefined;
+
+      if (meetsAutoApprove) {
+        // Run quality gate before auto-approve
+        const { qualityCheckBeads: qcAutoApprove } = await import("../beads.js");
+        const autoQuality = await qcAutoApprove(oc.pi, ctx.cwd);
+
+        if (autoQuality.passed) {
+          // Show interruptible countdown — timeout returns false (auto-approve)
+          const interrupted = await ctx.ui.confirm(
+            `✅ Beads converged${convergenceScore !== undefined ? ` (${(convergenceScore * 100).toFixed(0)}%)` : ""} — auto-approving in 3s`,
+            "Press Enter to review manually instead",
+            { timeout: 3000 }
+          );
+
+          if (!interrupted) {
+            // Auto-approve: set choice to start-implementing label
+            choice = options[0]; // First option is always the start label
+          }
+          // If interrupted, choice stays undefined → fall through to manual select
+        }
+        // If quality gate failed, fall through to manual select
+      }
+
+      if (choice === undefined) {
+        choice = await ctx.ui.select(
+          `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}\n\n${beadListText}${validationWarning}${convergenceTip}`,
+          options
+        );
+      }
 
       if (choice?.startsWith("🔍")) {
         oc.setPhase("refining_beads", ctx);

@@ -298,6 +298,10 @@ export interface OrchestratorState {
   beadsSinceLastDriftCheck?: number;
   /** How often to auto-trigger drift checks (every N completed beads, default 3). */
   driftCheckInterval?: number;
+
+  // ─── Auto-approve config ───────────────────────────────────
+  /** Auto-approve beads when convergence >= 0.90 or polishConverged is true (default: true). */
+  autoApproveOnConvergence?: boolean;
 }
 
 export function createInitialState(): OrchestratorState {
