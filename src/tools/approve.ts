@@ -187,7 +187,6 @@ export function registerApproveTool(oc: OrchestratorContext) {
       const validation = await validateBeads(oc.pi, ctx.cwd);
 
       // Format bead list for display — group subtasks under parents
-      const parentIds = new Set(beads.filter((b) => b.parent).map((b) => b.parent!));
       const childrenByParent = new Map<string, typeof beads>();
       for (const b of beads) {
         if (b.parent) {
@@ -565,8 +564,7 @@ cd ${ctx.cwd}`;
 
       // "▶️ Start implementing" — run quality gate first (skip if auto-approved, already checked)
       const skipQualityGate = choice === "auto-approved";
-      const { qualityCheckBeads } = await import("../beads.js");
-      const qualityResult = skipQualityGate ? { passed: true, failures: [] } : await qualityCheckBeads(oc.pi, ctx.cwd);
+      const qualityResult = skipQualityGate ? { passed: true, failures: [] as { beadId: string; check: string; reason: string }[] } : await qcBeads(oc.pi, ctx.cwd);
       if (!qualityResult.passed) {
         const failureLines = qualityResult.failures.map(
           (f) => `- ${f.beadId}: ${f.check} — ${f.reason}`
