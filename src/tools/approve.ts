@@ -187,22 +187,35 @@ export function registerApproveTool(oc: OrchestratorContext) {
           : convergenceScore !== undefined && convergenceScore >= 0.75
           ? `▶️  Start implementing (convergence ${(convergenceScore * 100).toFixed(0)}% ✅)`
           : "▶️  Start implementing";
-        options.push(
-          startLabel,
-          `🔍 Polish again (round ${round + 1})`,
-          `🧠 Fresh-agent refinement (round ${round + 1})`,
-          `🔨 Blunder hunt (5x overshoot)`,
-          `🔗 Dedup check`,
-        );
-        // Cross-model review available after at least 1 polish round
         if (round >= 1) {
-          options.push("🔀 Cross-model review");
+          // After first round, prioritize fresh-agent to reduce anchoring bias
+          options.push(
+            startLabel,
+            `🧠 Fresh-agent refinement (round ${round + 1})`,
+            `🔍 Same-agent polish (may anchor) (round ${round + 1})`,
+            `🔨 Blunder hunt (5x overshoot)`,
+            `🔗 Dedup check`,
+            "🔀 Cross-model review",
+            "❌ Reject",
+          );
+        } else {
+          options.push(
+            startLabel,
+            `🔍 Polish again (round ${round + 1})`,
+            `🧠 Fresh-agent refinement (round ${round + 1})`,
+            `🔨 Blunder hunt (5x overshoot)`,
+            `🔗 Dedup check`,
+            "❌ Reject",
+          );
         }
-        options.push("❌ Reject");
       }
 
+      const convergenceTip = round >= 1 && convergenceScore !== undefined && convergenceScore < 0.5
+        ? "\n💡 Tip: Fresh-agent refinement recommended — reduces anchoring bias."
+        : "";
+
       const choice = await ctx.ui.select(
-        `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}\n\n${beadListText}${validationWarning}`,
+        `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}\n\n${beadListText}${validationWarning}${convergenceTip}`,
         options
       );
 
