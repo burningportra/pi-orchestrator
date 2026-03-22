@@ -12,6 +12,7 @@ import {
   detectBv,
   bvInsights,
   bvNext,
+  bvPlan,
   resetBvCache,
   qualityCheckBeads,
 } from "./beads.js";

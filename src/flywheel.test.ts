@@ -280,3 +280,69 @@ describe("discoveryInstructions", () => {
     expect(prompt2.length).toBeGreaterThan(100);
   });
 });
+
+// ─── Plan Document Prompt ───────────────────────────────────
+describe("planDocumentPrompt", () => {
+  const profile = {
+    name: "test-repo",
+    languages: ["TypeScript"],
+    frameworks: [],
+    structure: "",
+    entrypoints: ["src/index.ts"],
+    recentCommits: [],
+    hasTests: true,
+    hasDocs: false,
+    hasCI: false,
+    todos: [],
+    keyFiles: {},
+  };
+
+  it("contains key plan sections", () => {
+    const prompt = planDocumentPrompt("Build feature X", profile);
+    expect(prompt).toContain("Architecture Overview");
+    expect(prompt).toContain("User Workflows");
+    expect(prompt).toContain("Testing Strategy");
+    expect(prompt).toContain("Edge Cases");
+    expect(prompt).toContain("File Structure");
+    expect(prompt).toContain("Sequencing");
+  });
+
+  it("includes the goal", () => {
+    const prompt = planDocumentPrompt("Build feature X", profile);
+    expect(prompt).toContain("Build feature X");
+  });
+
+  it("mentions ultrathink", () => {
+    const prompt = planDocumentPrompt("goal", profile);
+    expect(prompt).toContain("ultrathink");
+  });
+
+  it("mentions write_artifact", () => {
+    const prompt = planDocumentPrompt("goal", profile);
+    expect(prompt).toContain("write_artifact");
+  });
+});
+
+// ─── Plan Refinement Prompt ─────────────────────────────────
+describe("planRefinementPrompt", () => {
+  it("references the plan path", () => {
+    const prompt = planRefinementPrompt("plans/my-plan.md", 2);
+    expect(prompt).toContain("plans/my-plan.md");
+  });
+
+  it("references the round number", () => {
+    const prompt = planRefinementPrompt("plans/my-plan.md", 3);
+    expect(prompt).toContain("Round 3");
+  });
+
+  it("mentions ultrathink", () => {
+    const prompt = planRefinementPrompt("plans/x.md", 1);
+    expect(prompt).toContain("ultrathink");
+  });
+
+  it("mentions fresh conversation to prevent anchoring", () => {
+    const prompt = planRefinementPrompt("plans/x.md", 1);
+    expect(prompt).toContain("fresh");
+    expect(prompt).toContain("anchoring");
+  });
+});

@@ -147,7 +147,7 @@ export function registerProfileTool(oc: OrchestratorContext) {
         content: [
           {
             type: "text",
-            text: `${discoveryPrompt}\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}\n\n${formatted}${memoryContext}`,
+            text: `${discoveryPrompt}\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}${foundationWarning}\n\n${formatted}${memoryContext}`,
           },
         ],
         details: { profile, scanResult },
