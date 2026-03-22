@@ -1018,6 +1018,86 @@ Also ask the user if they'd like you to:
 }
 
 // ─── Plan Document Generation ───────────────────────────────
+export function competingPlanAgentPrompt(
+  focus: "correctness" | "robustness" | "ergonomics",
+  goal: string,
+  profile: RepoProfile,
+  scanResult?: ScanResult
+): string {
+  const repoContext = formatRepoProfile(profile, scanResult);
+  const lensInstructions = {
+    correctness: [
+      "Prioritize architectural correctness and internal consistency.",
+      "Interrogate assumptions about existing interfaces, types, and control flow.",
+      "Call out any places where the implementation could accidentally violate current behavior or contracts.",
+    ],
+    robustness: [
+      "Prioritize failure modes, degraded paths, rollout safety, and testability.",
+      "Stress edge cases, missing validation, sequencing hazards, and migration risks.",
+      "Bias toward plans that remain reliable under partial failure and future extension.",
+    ],
+    ergonomics: [
+      "Prioritize clarity, maintainability, and agent ergonomics for future contributors.",
+      "Prefer simpler seams, better naming, and flows that reduce context-switching and ambiguity.",
+      "Push for plans that are easy to execute, review, and modify without surprising coupling.",
+    ],
+  } satisfies Record<string, string[]>;
+
+  return `You are an expert software architect participating in a competing-plans exercise. Use ultrathink and produce ONE detailed markdown plan document.
+
+## Goal
+${goal}
+
+## Focus Lens: ${focus}
+${lensInstructions[focus].map((line) => `- ${line}`).join("\n")}
+
+## Repository Context
+${repoContext}
+
+## Requirements
+Produce a concrete markdown plan with these sections:
+1. Architecture Overview
+2. User Workflows
+3. Data Model / Types
+4. API Surface
+5. Testing Strategy
+6. Edge Cases & Failure Modes
+7. File Structure
+8. Sequencing
+
+## Rules
+- Ground every recommendation in the repository context above.
+- Do not create beads.
+- Do not mention your focus lens in the final headings; express it through the substance of the plan.
+- Be opinionated about trade-offs and note key risks.
+- Make the plan detailed enough that a fresh agent could implement it without guessing.`;
+}
+
+export function planSynthesisPrompt(plans: { name: string; model: string; plan: string }[]): string {
+  return `## Plan Synthesis Instructions
+
+${plans.length} independent plan documents were generated for the same goal. Synthesize them into a single best-of-all-worlds implementation plan.
+
+${plans.map((plan, index) => `### Plan ${index + 1}: ${plan.name} (${plan.model})\n\n${plan.plan}`).join("\n\n")}
+
+## What to do
+1. Identify the strongest ideas from each plan
+2. Resolve contradictions explicitly; pick the approach with the best justification
+3. Preserve the best correctness, robustness, and ergonomics insights
+4. Produce one unified markdown plan document with these sections:
+   - Architecture Overview
+   - User Workflows
+   - Data Model / Types
+   - API Surface
+   - Testing Strategy
+   - Edge Cases & Failure Modes
+   - File Structure
+   - Sequencing
+5. Make it concrete enough that a fresh agent could execute it without guessing
+
+Return ONLY the synthesized markdown plan.`;
+}
+
 export function planDocumentPrompt(goal: string, profile: RepoProfile, scanResult?: ScanResult): string {
   const repoContext = formatRepoProfile(profile, scanResult);
 

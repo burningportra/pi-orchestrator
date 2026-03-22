@@ -26,6 +26,7 @@ import {
 import { registerProfileTool } from "./tools/profile.js";
 import { registerDiscoverTool } from "./tools/discover.js";
 import { registerSelectTool } from "./tools/select.js";
+import { registerPlanTool } from "./tools/plan.js";
 import { registerApproveTool } from "./tools/approve.js";
 import { registerReviewTool } from "./tools/review.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
@@ -316,6 +317,7 @@ export default function (pi: ExtensionAPI) {
   registerProfileTool(oc);
   registerDiscoverTool(oc);
   registerSelectTool(oc);
+  registerPlanTool(oc);
   registerApproveTool(oc);
   registerMemoryTool(oc);
   registerReviewTool(oc);

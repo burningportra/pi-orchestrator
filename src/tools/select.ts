@@ -143,7 +143,8 @@ export function registerSelectTool(oc: OrchestratorContext) {
 
       // ── Workflow choice: plan first, deep plan, or direct to beads ──
       const workflowOptions = [
-        "📋 Plan first — generate a plan document before creating beads",
+        "📋 Plan first — generate a single plan document before creating beads",
+        "🧠 Multi-model plan — competing planners synthesize one plan document",
         "🧠 Deep plan (beads) — multi-model planning agents create beads",
         "⚡ Direct to beads — jump straight to bead creation",
       ];
@@ -155,7 +156,7 @@ export function registerSelectTool(oc: OrchestratorContext) {
           workflowOptions
         );
       } catch {
-        workflowChoice = workflowOptions[2]; // default to direct
+        workflowChoice = workflowOptions[3]; // default to direct
       }
 
       if (workflowChoice === undefined) {
@@ -180,14 +181,30 @@ export function registerSelectTool(oc: OrchestratorContext) {
           content: [
             {
               type: "text",
-              text: `**NEXT: Generate a plan document for this goal.**\n\nGoal: "${goal}"${oc.state.constraints.length > 0 ? `\nConstraints: ${oc.state.constraints.join(", ")}` : ""}\n\nCreate a detailed implementation plan as a markdown artifact. Once the plan is approved, beads will be created from it.`,
+              text: `**NEXT: Call \`orch_plan\` with mode \`single_model\` NOW.**\n\nGoal: "${goal}"${oc.state.constraints.length > 0 ? `\nConstraints: ${oc.state.constraints.join(", ")}` : ""}\n\nGenerate a detailed implementation plan as a markdown artifact. Once the plan is approved, beads will be created from it.`,
             },
           ],
           details: { selected: true, goal, constraints: oc.state.constraints, workflow: "plan_first" },
         };
       }
 
-      if (workflowChoice.startsWith("🧠")) {
+      if (workflowChoice.startsWith("🧠 Multi-model")) {
+        oc.state.planRefinementRound = 0;
+        oc.setPhase("planning", ctx);
+        oc.persistState();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `**NEXT: Call \`orch_plan\` with mode \`multi_model\` NOW.**\n\nGoal: "${goal}"${oc.state.constraints.length > 0 ? `\nConstraints: ${oc.state.constraints.join(", ")}` : ""}\n\nRun competing planners for correctness, robustness, and ergonomics, then synthesize them into one plan document artifact.`,
+            },
+          ],
+          details: { selected: true, goal, constraints: oc.state.constraints, workflow: "multi_model_plan" },
+        };
+      }
+
+      if (workflowChoice.startsWith("🧠 Deep plan")) {
         // Deep plan workflow: delegate to deep-plan agents
         oc.setPhase("planning", ctx);
         oc.persistState();

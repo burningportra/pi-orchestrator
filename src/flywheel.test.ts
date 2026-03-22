@@ -15,6 +15,8 @@ import {
   discoveryInstructions,
   planDocumentPrompt,
   planRefinementPrompt,
+  competingPlanAgentPrompt,
+  planSynthesisPrompt,
   learningsExtractionPrompt,
   AI_SLOP_PATTERNS,
   SWARM_STAGGER_DELAY_MS,
@@ -280,6 +282,55 @@ describe("discoveryInstructions", () => {
     // Also works with scanResult
     const prompt2 = discoveryInstructions(profile, undefined);
     expect(prompt2.length).toBeGreaterThan(100);
+  });
+});
+
+// ─── Competing Plan Prompts ─────────────────────────────────
+describe("competingPlanAgentPrompt", () => {
+  const profile = {
+    name: "test-repo",
+    languages: ["TypeScript"],
+    frameworks: [],
+    structure: "",
+    entrypoints: ["src/index.ts"],
+    recentCommits: [],
+    hasTests: true,
+    hasDocs: false,
+    hasCI: false,
+    todos: [],
+    keyFiles: {},
+  };
+
+  it("tailors instructions for each focus lens", () => {
+    const correctness = competingPlanAgentPrompt("correctness", "Build feature X", profile);
+    const robustness = competingPlanAgentPrompt("robustness", "Build feature X", profile);
+    const ergonomics = competingPlanAgentPrompt("ergonomics", "Build feature X", profile);
+
+    expect(correctness).toContain("architectural correctness");
+    expect(robustness).toContain("failure modes");
+    expect(ergonomics).toContain("agent ergonomics");
+  });
+
+  it("keeps the required shared plan sections", () => {
+    const prompt = competingPlanAgentPrompt("correctness", "Build feature X", profile);
+    expect(prompt).toContain("Architecture Overview");
+    expect(prompt).toContain("Testing Strategy");
+    expect(prompt).toContain("Edge Cases & Failure Modes");
+    expect(prompt).toContain("Do not create beads");
+  });
+});
+
+describe("planSynthesisPrompt", () => {
+  it("includes all input plans and synthesis instructions", () => {
+    const prompt = planSynthesisPrompt([
+      { name: "correctness", model: "model-a", plan: "Plan A" },
+      { name: "robustness", model: "model-b", plan: "Plan B" },
+    ]);
+
+    expect(prompt).toContain("2 independent plan documents");
+    expect(prompt).toContain("correctness (model-a)");
+    expect(prompt).toContain("robustness (model-b)");
+    expect(prompt).toContain("Return ONLY the synthesized markdown plan.");
   });
 });
 
