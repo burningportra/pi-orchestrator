@@ -12,19 +12,12 @@ Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
 /orchestrate
   │
   ├─► orch_profile     — Scan repo + load CASS memory from prior runs
-  │     └─ Discovery mode: 📋 Standard or 🚀 Creative (broader ideation, return 7)
+  │     └─ 💡 Suggest improvements  or  ✏️ I know what I want
   │
-  ├─► orch_discover    — LLM generates 3–7 ideas (minimum enforced)
+  ├─► orch_discover    — LLM generates 10–15 scored ideas (rubric-ranked)
   │
-  ├─► orch_select      — User picks idea + planning mode:
-  │     │
-  │     ├─ 📋 Standard    → single plan
-  │     └─ 🧠 Deep plan   → pick 3 models → competing plans → synthesis
-  │                           ┌──────────────────┐
-  │                           │ Gemini plan       │
-  │                           │ GPT plan          │──► "best of all worlds"
-  │                           │ Claude plan       │
-  │                           └──────────────────┘
+  ├─► orch_select      — User picks idea → straight to bead creation
+  │                       (custom goals get refinement questionnaire)
   │
   ├─► LLM creates beads via `br create` + `br dep add`
   │
@@ -96,15 +89,14 @@ When scan data is rendered into prompts and tool output, the orchestrator now tr
 
 ### 1. Discovery
 
-The workflow begins with `orch_profile`, which scans the repository and loads CASS memory from prior runs. Discovery supports three modes:
+The workflow begins with `orch_profile`, which scans the repository and loads CASS memory from prior runs. The user chooses between:
 
-- **📋 Standard** — straightforward repo analysis, 3-7 practical ideas
-- **🧠 Idea Wizard** — structured ideation with rubric ranking. The LLM generates 25-30 candidates internally, scores each against 5 axes (useful, pragmatic, accretive, robust, ergonomic), winnows and merges overlaps, then returns 10-15 tiered ideas (5 top + 5-10 honorable mentions) with rationale and source evidence
-- **🚀 Creative** — the LLM thinks of 100 ideas internally, applies the same rubric, and surfaces the 7 best with rationale
+- **💡 Suggest improvements** — structured ideation with rubric ranking. The LLM generates 25-30 candidates internally, scores each against 5 weighted axes (useful 2×, pragmatic 2×, accretive 1.5×, robust 1×, ergonomic 1×), winnows and merges overlaps, then returns 10-15 tiered ideas (5 top + 5-10 honorable mentions) with rationale and source evidence
+- **✏️ I know what I want** — enter a custom goal directly, with optional refinement questionnaire
 
-Each idea includes a `rationale` (why it beat other candidates, citing repo evidence), a `tier` (top vs honorable), and optional `scores`, `sourceEvidence`, `risks`, and `synergies`. In Idea Wizard and Creative modes, scores are required.
+Each idea includes a `rationale` (why it beat other candidates, citing repo evidence), a `tier` (top vs honorable), and `scores`, `sourceEvidence`, `risks`, and `synergies`.
 
-`orch_discover` generates 3–15 ideas (minimum 3 enforced). `orch_select` presents these grouped by tier (top picks first, then honorable mentions), with rationale shown as a subtitle. The user selects an idea or enters a custom goal. The actual planning-mode choice happens inside `orch_plan`, where the user can keep the standard plan, request deep planning, or reject it.
+`orch_discover` generates 3–15 ideas (minimum 3 enforced). `orch_select` presents these grouped by tier (top picks first, then honorable mentions), with rationale shown as a subtitle. The user selects an idea (which proceeds directly to bead creation) or enters a custom goal (which gets a refinement questionnaire first).
 
 Full ideation results are persisted as a session artifact (`discovery/ideas-<timestamp>.md`) for later reference or follow-up orchestration runs.
 
@@ -134,8 +126,9 @@ Agents get read-only tools and cannot call `orch_*` tools.
 
 The `orch_approve_beads` tool reads beads from `br list --json` and presents them for approval:
 
-- **✅ Approve** → find ready beads and begin execution
-- **🔍 Refine** → polish beads in bead space, then re-approve
+- **▶️ Start implementing** → quality gate then begin execution
+- **🔍 Polish / Refine further** → round 0 uses same-agent polish; round 1+ auto-selects fresh-agent refinement
+- **⚙️ Advanced options** → sub-menu with: fresh-agent, same-agent, blunder hunt, dedup check, cross-model review, graph health fix
 - **❌ Reject** → stop
 
 Refinement passes let you iterate on bead descriptions, dependencies, and priorities before committing to execution.
@@ -215,17 +208,17 @@ After hit-me agents finish, the workflow auto-advances (no re-prompt). Only the 
 
 #### Post-Implementation Guided Gates
 
-After all steps pass, a sequential gate flow runs (each gate offers: do it / ⏭️ skip / ✅ done):
+After all beads pass, a sequential gate flow runs. Gates marked **auto** run immediately without prompting; gates marked **prompt** offer: do it / ⏭️ skip / ✅ done:
 
-| Gate | What happens |
-|------|-------------|
-| 🔍 Self-review | LLM reads all new code with fresh eyes, fixes issues |
-| 👥 Peer review | 4 parallel agents: bugs, polish, ergonomics, reality-check + file-conflict detection |
-| 🧪 Test coverage | Check unit tests + e2e, create tasks for gaps |
-| ✏️ De-slopify | Remove AI writing patterns from docs (auto-skips if no docs changed) |
-| 📦 Commit | Logical groupings with detailed messages, push |
-| 🚀 Ship it | Tag, release, deploy, monitor CI, checksums |
-| 🛬 Landing | Session completion checklist: verify resumability |
+| Gate | Mode | What happens |
+|------|------|-------------|
+| 🔍 Self-review | auto | LLM reads all new code with fresh eyes, fixes issues |
+| 👥 Peer review | prompt | 4 parallel agents: bugs, polish, ergonomics, reality-check + file-conflict detection |
+| 🧪 Test coverage | auto | Check unit tests + e2e, create tasks for gaps |
+| ✏️ De-slopify | auto | Remove AI writing patterns from docs (auto-skips if no docs changed) |
+| 📦 Commit | prompt | Logical groupings with detailed messages, push |
+| 🚀 Ship it | prompt | Tag, release, deploy, monitor CI, checksums |
+| 🛬 Landing | prompt | Session completion checklist: verify resumability |
 
 Every review action includes auto-commit instructions.
 
