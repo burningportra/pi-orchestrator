@@ -8,6 +8,8 @@ export interface CrossModelReviewResult {
   suggestions: string[];
   rawOutput: string;
   model: string;
+  error?: string;
+  fallbackUsed?: boolean;
 }
 
 /**
@@ -46,7 +48,8 @@ Review these beads critically. Look for:
 6. **Redundancies** — do any beads overlap significantly?
 
 Output specific, actionable suggestions as a numbered list. Each suggestion should reference specific bead IDs.
-If the beads look solid, say so briefly — don't invent problems.`;
+Be specific. If everything looks solid, explain briefly why each bead is well-formed. Always output a numbered list.
+Check for: parallel-ready beads that modify the same files, closure extraction feasibility, missing error handling, vague acceptance criteria.`;
 
   const outputDir = join(tmpdir(), `pi-bead-review-${Date.now()}`);
   mkdirSync(outputDir, { recursive: true });
@@ -76,6 +79,7 @@ If the beads look solid, say so briefly — don't invent problems.`;
 
     const rawOutput = result.stdout.trim();
     const suggestions = parseSuggestions(rawOutput);
+    const fallbackUsed = suggestions.length > 0 && !rawOutput.match(/^\s*\d+\.\s+/m) && !rawOutput.match(/^\s*[-*•]\s+/m);
 
     // Clean up temp files
     try { rmSync(outputDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -84,15 +88,18 @@ If the beads look solid, say so briefly — don't invent problems.`;
       suggestions,
       rawOutput,
       model: altModel ?? "default",
+      fallbackUsed: fallbackUsed || undefined,
     };
   } catch (err) {
     // Clean up temp files on error too
     try { rmSync(outputDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
+    const errorMessage = err instanceof Error ? err.message : String(err);
     return {
       suggestions: [],
-      rawOutput: err instanceof Error ? err.message : String(err),
+      rawOutput: errorMessage,
       model: altModel ?? "default",
+      error: errorMessage,
     };
   }
 }
@@ -107,23 +114,43 @@ function pickAlternativeModel(): string | undefined {
 }
 
 /**
- * Parse numbered suggestions from model output.
+ * Parse suggestions from model output.
+ * Supports numbered lists, bullet points, markdown headers, and paragraph fallback.
  */
-function parseSuggestions(output: string): string[] {
+export function parseSuggestions(output: string): string[] {
   const lines = output.split("\n");
   const suggestions: string[] = [];
   let current = "";
 
   for (const line of lines) {
-    const match = line.match(/^\s*(\d+)\.\s+(.+)/);
-    if (match) {
+    // Numbered list: "1. something"
+    const numMatch = line.match(/^\s*(\d+)\.\s+(.+)/);
+    // Bullet point: "- something", "* something", "• something"
+    const bulletMatch = !numMatch && line.match(/^\s*[-*•]\s+(.+)/);
+    // Markdown header: "## something"
+    const headerMatch = !numMatch && !bulletMatch && line.match(/^#{1,3}\s+(.+)/);
+
+    if (numMatch) {
       if (current) suggestions.push(current.trim());
-      current = match[2];
+      current = numMatch[2];
+    } else if (bulletMatch) {
+      if (current) suggestions.push(current.trim());
+      current = bulletMatch[1];
+    } else if (headerMatch) {
+      // Headers act as section delimiters — flush current, but don't start a new suggestion from the header itself
+      if (current) suggestions.push(current.trim());
+      current = "";
     } else if (current && line.trim()) {
       current += " " + line.trim();
     }
   }
   if (current) suggestions.push(current.trim());
+
+  // Paragraph fallback: if nothing parsed, split on double newlines
+  if (suggestions.length === 0 && output.trim()) {
+    const paragraphs = output.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+    return paragraphs;
+  }
 
   return suggestions;
 }

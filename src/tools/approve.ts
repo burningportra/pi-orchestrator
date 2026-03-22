@@ -307,11 +307,55 @@ cd ${ctx.cwd}`;
           oc.pi, ctx.cwd, beads, oc.state.selectedGoal!, undefined
         );
 
-        if (reviewResult.suggestions.length === 0) {
+        if (reviewResult.error) {
+          const retryChoice = await ctx.ui.select(
+            `⚠️ **Cross-model review failed:** ${reviewResult.error}`,
+            [
+              "🔄 Try again",
+              "⏭️  Continue without cross-model review",
+            ]
+          );
+          if (retryChoice?.startsWith("🔄")) {
+            // Return to approval screen — user can pick cross-model again
+          }
           return {
             content: [{
               type: "text",
-              text: `**Cross-model review (${reviewResult.model}):** No specific suggestions — beads look solid.\n\nCall \`orch_approve_beads\` again to continue.`,
+              text: `**Cross-model review (${reviewResult.model}):** Review failed: ${reviewResult.error}\n\nCall \`orch_approve_beads\` again to continue.`,
+            }],
+            details: { approved: false, crossModelReview: true, model: reviewResult.model, error: reviewResult.error },
+          };
+        }
+
+        if (reviewResult.suggestions.length === 0) {
+          const rawChoice = await ctx.ui.select(
+            `**Cross-model review (${reviewResult.model}):** Parser found no structured suggestions.\n\n**Raw output:**\n${reviewResult.rawOutput.slice(0, 2000)}`,
+            [
+              "✅ Looks fine, continue",
+              "📝 Send raw feedback to polish round",
+            ]
+          );
+
+          if (rawChoice?.startsWith("📝")) {
+            oc.state.polishRound++;
+            oc.setPhase("refining_beads", ctx);
+            oc.persistState();
+            _lastBeadSnapshot = snapshotBeads(beads);
+
+            const injectedPrompt = beadRefinementPrompt(oc.state.polishRound - 1, oc.state.polishChanges);
+            return {
+              content: [{
+                type: "text",
+                text: `**NEXT: Apply this cross-model feedback, then call \`orch_approve_beads\` again.**\n\n### Raw cross-model feedback:\n${reviewResult.rawOutput}\n\n---\n\n${injectedPrompt}\n\n---\n\nCurrent beads:\n\n${beadListText}`,
+              }],
+              details: { approved: false, refining: true, crossModelApplied: true, beadCount: beads.length, polishRound: oc.state.polishRound },
+            };
+          }
+
+          return {
+            content: [{
+              type: "text",
+              text: `**Cross-model review (${reviewResult.model}):** No structured suggestions found.\n\nCall \`orch_approve_beads\` again to continue.`,
             }],
             details: { approved: false, crossModelReview: true, model: reviewResult.model },
           };
