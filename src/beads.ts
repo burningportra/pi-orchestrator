@@ -362,6 +362,28 @@ export async function qualityCheckBeads(
     }
   }
 
+  // 7. File overlap among ready beads (parallel execution conflict)
+  const ready = await readyBeads(pi, cwd);
+  if (ready.length >= 2) {
+    const artifactMap = new Map<string, string[]>(); // file -> bead IDs
+    for (const bead of ready) {
+      const files = extractArtifacts(bead);
+      for (const file of files) {
+        if (!artifactMap.has(file)) artifactMap.set(file, []);
+        artifactMap.get(file)!.push(bead.id);
+      }
+    }
+    for (const [file, ids] of artifactMap) {
+      if (ids.length > 1) {
+        failures.push({
+          beadId: ids.join(","),
+          check: "file-overlap",
+          reason: `Beads ${ids.join(", ")} both modify ${file} — parallel execution may cause conflicts`,
+        });
+      }
+    }
+  }
+
   return { passed: failures.length === 0, failures };
 }
 

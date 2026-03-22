@@ -475,6 +475,83 @@ Add a new widget component that handles user input validation and displays resul
   });
 });
 
+// ─── file-overlap detection ──────────────────────────────────
+
+describe("qualityCheckBeads file-overlap", () => {
+  beforeEach(() => resetBvCache());
+
+  const makeValidDesc = (...files: string[]) =>
+    `This bead implements a feature with proper error handling and thorough testing throughout.
+
+## What to implement
+Add a new component that handles user input validation and displays results properly.
+
+### Files:
+${files.map((f) => `- ${f}`).join("\n")}
+
+## Acceptance criteria
+- [ ] Component works correctly
+- [ ] Tests pass`;
+
+  function makeOverlapPi(allBeads: Bead[], readyBeads: Bead[]) {
+    return {
+      exec: vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "which") throw new Error("not found");
+        if (cmd === "br" && args[0] === "list") return { code: 0, stdout: JSON.stringify(allBeads), stderr: "" };
+        if (cmd === "br" && args[0] === "ready") return { code: 0, stdout: JSON.stringify(readyBeads), stderr: "" };
+        if (cmd === "br" && args[0] === "dep" && args[1] === "cycles") return { code: 0, stdout: "OK", stderr: "" };
+        if (cmd === "br" && args[0] === "dep" && args[1] === "list") return { code: 0, stdout: "", stderr: "" };
+        return { code: 0, stdout: "[]", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+  }
+
+  it("no failure for disjoint files", async () => {
+    const b1 = makeBead({ id: "a1", description: makeValidDesc("src/foo.ts") });
+    const b2 = makeBead({ id: "a2", description: makeValidDesc("src/bar.ts") });
+    const pi = makeOverlapPi([b1, b2], [b1, b2]);
+
+    const result = await qualityCheckBeads(pi, CWD);
+    expect(result.failures.some((f) => f.check === "file-overlap")).toBe(false);
+  });
+
+  it("fails for two ready beads sharing a file", async () => {
+    const b1 = makeBead({ id: "a1", description: makeValidDesc("src/shared.ts") });
+    const b2 = makeBead({ id: "a2", description: makeValidDesc("src/shared.ts") });
+    const pi = makeOverlapPi([b1, b2], [b1, b2]);
+
+    const result = await qualityCheckBeads(pi, CWD);
+    expect(result.passed).toBe(false);
+    const overlap = result.failures.filter((f) => f.check === "file-overlap");
+    expect(overlap.length).toBe(1);
+    expect(overlap[0].reason).toContain("a1");
+    expect(overlap[0].reason).toContain("a2");
+    expect(overlap[0].reason).toContain("src/shared.ts");
+  });
+
+  it("no failure when beads with deps share files (not both ready)", async () => {
+    const b1 = makeBead({ id: "a1", description: makeValidDesc("src/shared.ts") });
+    const b2 = makeBead({ id: "a2", description: makeValidDesc("src/shared.ts") });
+    // Only b1 is ready (b2 depends on b1)
+    const pi = {
+      exec: vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "which") throw new Error("not found");
+        if (cmd === "br" && args[0] === "list") return { code: 0, stdout: JSON.stringify([b1, b2]), stderr: "" };
+        if (cmd === "br" && args[0] === "ready") return { code: 0, stdout: JSON.stringify([b1]), stderr: "" };
+        if (cmd === "br" && args[0] === "dep" && args[1] === "cycles") return { code: 0, stdout: "OK", stderr: "" };
+        if (cmd === "br" && args[0] === "dep" && args[1] === "list") {
+          if (args[2] === "a2") return { code: 0, stdout: "a1", stderr: "" };
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        return { code: 0, stdout: "[]", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+
+    const result = await qualityCheckBeads(pi, CWD);
+    expect(result.failures.some((f) => f.check === "file-overlap")).toBe(false);
+  });
+});
+
 // ─── validateBeads shallowBeads ──────────────────────────────
 
 describe("validateBeads shallowBeads", () => {
