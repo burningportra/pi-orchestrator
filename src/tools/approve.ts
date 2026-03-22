@@ -4,7 +4,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import type { OrchestratorContext, Bead } from "../types.js";
-import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS, formatRepoProfile, beadCreationPrompt, planRefinementPrompt } from "../prompts.js";
+import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS, beadCreationPrompt, planRefinementPrompt, planToBeadsPrompt } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 
 // ─── Module-level bead snapshots for change detection ────────
@@ -342,8 +342,9 @@ export function registerApproveTool(oc: OrchestratorContext) {
         oc.setPhase("creating_beads", ctx);
         oc.persistState();
 
-        const repoContext = oc.state.repoProfile ? formatRepoProfile(oc.state.repoProfile, oc.state.scanResult) : "";
-        const creationPrompt = `${beadCreationPrompt(oc.state.selectedGoal, repoContext, oc.state.constraints)}\n\n### Approved Plan Artifact\nUse the approved plan artifact \`${oc.state.planDocument}\` as the source of truth. Read it carefully and translate it into beads without dropping requirements or edge cases.\n\n### Approved Plan Content\n${plan}`;
+        const creationPrompt = oc.state.repoProfile
+          ? planToBeadsPrompt(oc.state.planDocument, oc.state.selectedGoal, oc.state.repoProfile)
+          : `${beadCreationPrompt(oc.state.selectedGoal, "", oc.state.constraints)}\n\n### Approved Plan Artifact\nRead the approved plan artifact at \`${oc.state.planDocument}\` before creating beads, and carry the needed context directly into each bead description.`;
 
         return {
           content: [{

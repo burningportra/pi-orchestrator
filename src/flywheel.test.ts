@@ -15,6 +15,7 @@ import {
   discoveryInstructions,
   planDocumentPrompt,
   planRefinementPrompt,
+  planToBeadsPrompt,
   competingPlanAgentPrompt,
   planSynthesisPrompt,
   learningsExtractionPrompt,
@@ -397,6 +398,42 @@ describe("planRefinementPrompt", () => {
     const prompt = planRefinementPrompt("plans/x.md", 1);
     expect(prompt).toContain("fresh");
     expect(prompt).toContain("anchoring");
+  });
+});
+
+describe("planToBeadsPrompt", () => {
+  const profile = {
+    name: "test-repo",
+    languages: ["TypeScript"],
+    frameworks: ["Vitest"],
+    structure: "",
+    entrypoints: ["src/index.ts"],
+    recentCommits: [],
+    hasTests: true,
+    hasDocs: false,
+    hasCI: false,
+    todos: [],
+    keyFiles: {},
+  };
+
+  it("references the approved plan artifact path", () => {
+    const prompt = planToBeadsPrompt("plans/feature-x.md", "Build feature X", profile as any);
+    expect(prompt).toContain("plans/feature-x.md");
+    expect(prompt).toContain("Build feature X");
+  });
+
+  it("requires reading the plan artifact and embedding context", () => {
+    const prompt = planToBeadsPrompt("plans/feature-x.md", "Build feature X", profile as any);
+    expect(prompt).toContain("Read the plan artifact");
+    expect(prompt).toContain("Embed the relevant context");
+    expect(prompt).toContain("Each bead must stand on its own");
+  });
+
+  it("forbids see-the-plan shorthand references", () => {
+    const prompt = planToBeadsPrompt("plans/feature-x.md", "Build feature X", profile as any);
+    expect(prompt).toContain('see the plan');
+    expect(prompt).toContain('refer to plan');
+    expect(prompt).toContain('per approved plan');
   });
 });
 

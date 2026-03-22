@@ -262,6 +262,67 @@ Verify with \`br list\` and \`br dep cycles\` (must show no cycles).
 Use ultrathink.`;
 }
 
+export function planToBeadsPrompt(
+  planPath: string,
+  goal: string,
+  profile: RepoProfile
+): string {
+  return `## Convert Approved Plan into Beads
+
+Take the approved implementation plan and translate it into beads (tasks) using the br CLI.
+
+### Goal
+${goal}
+
+### Repository Context
+${formatRepoProfile(profile)}
+
+### Plan Artifact
+The approved plan lives at: \`${planPath}\`
+
+### Instructions
+1. Read the plan artifact at \`${planPath}\` before creating any beads.
+2. Treat that artifact as the source of truth for scope, sequencing, architecture, edge cases, and testing.
+3. Convert the plan into executable beads with \`br create\` and dependency edges with \`br dep add\`.
+4. Embed the relevant context from the plan directly into each bead description:
+   - summarize the implementation intent
+   - capture the rationale and important constraints
+   - include acceptance criteria and verification expectations
+   - list the files to create or modify
+5. DO NOT write beads that say things like "see the plan", "refer to plan", or "per approved plan" without restating the needed context. Each bead must stand on its own for a fresh agent.
+6. If the plan describes a large effort, split it into multiple beads so each bead is a coherent, independently executable unit.
+
+### Bead Format
+For each bead, run in bash:
+\`\`\`
+br create "Title" -t task -p <priority 1-5> --description "Detailed description including:
+- What to implement
+- Why it matters
+- Key context pulled forward from the approved plan
+- Acceptance criteria (as checklist):
+  - [ ] Criterion 1
+  - [ ] Criterion 2
+- ### Files: src/foo.ts, src/bar.ts"
+\`\`\`
+
+Set dependencies between beads:
+\`\`\`
+br dep add <child-id> <parent-id>
+\`\`\`
+
+### Requirements
+- Every bead must be self-contained and self-documenting
+- Preserve the plan's intended sequencing and parallelism
+- Carry forward edge cases, migration notes, and testing expectations from the plan into the relevant beads
+- Each bead MUST include a \`### Files:\` section listing files to create/modify
+- Acceptance criteria should be specific and testable
+- Include test beads where appropriate
+
+Verify with \`br list\` and \`br dep cycles\` (must show no cycles).
+
+Use ultrathink.`;
+}
+
 // ─── Bead Refinement Prompt ──────────────────────────────────
 export function beadRefinementPrompt(roundNumber?: number, priorChanges?: number[]): string {
   const roundInfo = roundNumber != null ? `This is polish round ${roundNumber + 1}.\n\n` : "";
