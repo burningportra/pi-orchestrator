@@ -55,6 +55,24 @@ export function registerProfileTool(oc: OrchestratorContext) {
         await oc.ensureAgentMailProject(ctx.cwd);
       }
 
+      // Foundation validation — non-blocking warnings
+      const foundationGaps: string[] = [];
+      if (!scanResult.hasAgentsMd) {
+        foundationGaps.push("- No AGENTS.md found. Consider creating one for agent guidance.");
+      }
+      if (!profile.hasTests) {
+        foundationGaps.push("- No test framework detected. Consider adding tests before orchestrating.");
+      }
+      if (!profile.ciPlatform && !scanResult.packageJson?.scripts?.build && !scanResult.packageJson?.scripts?.test) {
+        foundationGaps.push("- No build/test scripts detected. Consider adding CI or build tooling.");
+      }
+      if (!scanResult.isGitRepo) {
+        foundationGaps.push("- No git repository detected. Consider initializing git for version control.");
+      }
+      const foundationWarning = foundationGaps.length > 0
+        ? `\n⚠️ Foundation gaps detected:\n${foundationGaps.join("\n")}\n`
+        : "";
+
       // Coordination backend summary
       const coordParts: string[] = [];
       if (coordBackend.beads) coordParts.push("beads");

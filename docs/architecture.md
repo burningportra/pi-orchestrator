@@ -206,6 +206,17 @@ After each bead's self-review passes:
 
 After hit-me agents finish, the workflow auto-advances (no re-prompt). Only the first round shows the menu.
 
+#### Agent Fungibility
+
+Review agents use different **prompts** (fresh-eyes, polish, ergonomics, reality-check, random-exploration) but are fully interchangeable — any model can run any review prompt. There is no persistent identity or specialization; agents are ephemeral, spawned fresh per bead with no compaction concerns or accumulated state.
+
+This is **prompt diversity**, not specialist agents. The distinction matters:
+
+- **Prompt diversity** (what we do): different review lenses applied by interchangeable agents. If one agent slot fails, any other can take its place with the same prompt.
+- **Specialist agents** (what the flywheel warns against): long-running agents with unique roles, accumulated context, and irreplaceable expertise that become single points of failure.
+
+This satisfies the spirit of the fungible-agents invariant: no agent is special, all are replaceable, and better reviews emerge from applying diverse prompts rather than cultivating diverse identities.
+
 #### Post-Implementation Guided Gates
 
 After all beads pass, a sequential gate flow runs. Gates marked **auto** run immediately without prompting; gates marked **prompt** offer: do it / ⏭️ skip / ✅ done:

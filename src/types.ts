@@ -302,6 +302,14 @@ export interface OrchestratorState {
   // ─── Auto-approve config ───────────────────────────────────
   /** Auto-approve beads when convergence >= 0.90 or polishConverged is true (default: true). */
   autoApproveOnConvergence?: boolean;
+
+  // ─── Plan document state ───────────────────────────────────
+  /** Path to generated plan artifact. */
+  planDocument?: string;
+  /** Current plan refinement round. */
+  planRefinementRound?: number;
+  /** Plan convergence score (0-1). */
+  planConvergenceScore?: number;
 }
 
 export function createInitialState(): OrchestratorState {

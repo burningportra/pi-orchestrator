@@ -63,6 +63,25 @@ export async function bvNext(
   }
 }
 
+/**
+ * Runs `bv --robot-plan` and returns the raw output string.
+ * Returns null if bv is unavailable, empty output, or error.
+ */
+export async function bvPlan(
+  pi: ExtensionAPI,
+  cwd: string
+): Promise<string | null> {
+  if (!(await detectBv(pi))) return null;
+  try {
+    const result = await pi.exec("bv", ["--robot-plan"], { timeout: 15000, cwd });
+    const stdout = result.stdout.trim();
+    if (!stdout) return null;
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Beads Integration ────────────────────────────────────────
 
 /**
