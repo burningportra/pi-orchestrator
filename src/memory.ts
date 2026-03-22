@@ -31,22 +31,43 @@ export interface CassContext {
 // ─── CASS Detection ─────────────────────────────────────────
 
 let _cassAvailable: boolean | null = null;
+let _cassCheckedAt = 0;
+const CASS_FALSE_CACHE_MS = 5_000;
 
-/** Check if cm CLI is available. Caches result. */
-export function detectCass(): boolean {
-  if (_cassAvailable !== null) return _cassAvailable;
+function probeCass(args: string[]): boolean {
   try {
-    execFileSync("cm", ["--version"], { timeout: 3000, stdio: "pipe" });
-    _cassAvailable = true;
+    execFileSync("cm", args, { timeout: 3000, stdio: "pipe" });
+    return true;
   } catch {
-    _cassAvailable = false;
+    return false;
   }
-  return _cassAvailable;
+}
+
+/**
+ * Check if cm CLI is available.
+ *
+ * We cache successful detection aggressively, but only cache failures briefly.
+ * This avoids a stale false-negative when cm becomes available after startup
+ * or when one specific probe (`cm --version`) fails in a shell/environment
+ * even though the CLI itself is usable.
+ */
+export function detectCass(): boolean {
+  const now = Date.now();
+  if (_cassAvailable === true) return true;
+  if (_cassAvailable === false && now - _cassCheckedAt < CASS_FALSE_CACHE_MS) {
+    return false;
+  }
+
+  const available = probeCass(["--version"]) || probeCass(["--help"]);
+  _cassAvailable = available;
+  _cassCheckedAt = now;
+  return available;
 }
 
 /** Reset detection cache (for testing). */
 export function resetCassDetection(): void {
   _cassAvailable = null;
+  _cassCheckedAt = 0;
 }
 
 // ─── Helpers ────────────────────────────────────────────────

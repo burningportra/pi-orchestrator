@@ -50,16 +50,40 @@ describe("detectCass", () => {
     expect(detectCass()).toBe(true);
   });
 
+  it("falls back to --help when --version fails", () => {
+    mockExec.mockImplementation((cmd: string, args?: readonly string[]) => {
+      if (cmd === "cm" && args?.[0] === "--version") throw new Error("version failed");
+      if (cmd === "cm" && args?.[0] === "--help") return "Usage: cm" as any;
+      throw new Error(`Unmocked call: ${cmd} ${args?.join(" ")}`);
+    });
+
+    expect(detectCass()).toBe(true);
+  });
+
   it("returns false when cm is not available", () => {
     mockExec.mockImplementation(() => { throw new Error("not found"); });
     expect(detectCass()).toBe(false);
   });
 
-  it("caches the result", () => {
+  it("caches successful detection", () => {
     detectCass();
     detectCass();
-    // --version only called once (cached)
     expect(mockExec).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not permanently cache a false negative", () => {
+    vi.useFakeTimers();
+    mockExec.mockImplementation(() => { throw new Error("not found"); });
+    expect(detectCass()).toBe(false);
+
+    mockExec.mockImplementation((cmd: string, args?: readonly string[]) => {
+      if (cmd === "cm" && args?.[0] === "--version") return "0.2.3\n" as any;
+      throw new Error(`Unmocked call: ${cmd} ${args?.join(" ")}`);
+    });
+
+    vi.advanceTimersByTime(5001);
+    expect(detectCass()).toBe(true);
+    vi.useRealTimers();
   });
 });
 
