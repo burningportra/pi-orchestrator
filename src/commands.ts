@@ -62,7 +62,13 @@ export function registerCommands(oc: OrchestratorContext) {
     handler: async (_args, ctx) => {
       if (oc.orchestratorActive) {
         if (oc.worktreePool) {
-          await oc.worktreePool.cleanup();
+          const summary = await oc.worktreePool.safeCleanup();
+          if (summary.autoCommitted > 0) {
+            ctx.ui.notify(
+              `💾 Auto-committed ${summary.autoCommitted} dirty worktree${summary.autoCommitted > 1 ? "s" : ""} before cleanup.`,
+              "info"
+            );
+          }
           oc.worktreePool = undefined;
         }
         if (oc.swarmTender) { oc.swarmTender.stop(); oc.swarmTender = undefined; }
@@ -73,6 +79,59 @@ export function registerCommands(oc: OrchestratorContext) {
       } else {
         ctx.ui.notify("No orchestration in progress.", "info");
       }
+    },
+  });
+
+  // ─── Command: /orchestrate-cleanup ─────────────────────────────
+  pi.registerCommand("orchestrate-cleanup", {
+    description: "Clean up orphaned worktrees from previous sessions",
+    handler: async (_args, ctx) => {
+      const { findOrphanedWorktrees, cleanupOrphanedWorktrees } = await import("./worktree.js");
+
+      // If there's an active pool, confirm then use safeCleanup
+      if (oc.worktreePool) {
+        const poolCount = oc.worktreePool.getAll().length;
+        const confirmed = await ctx.ui.confirm(
+          "Clean up worktrees",
+          `Active worktree pool has ${poolCount} tracked worktree${poolCount !== 1 ? "s" : ""}. Dirty ones will be auto-committed before removal. Proceed?`
+        );
+        if (!confirmed) {
+          ctx.ui.notify("Cleanup cancelled.", "info");
+          return;
+        }
+        const summary = await oc.worktreePool.safeCleanup();
+        oc.worktreePool = undefined;
+        oc.persistState();
+        const parts: string[] = [`🧹 Cleaned up ${summary.removed} worktree${summary.removed !== 1 ? "s" : ""}`];
+        if (summary.autoCommitted > 0) parts.push(`💾 Auto-committed ${summary.autoCommitted} with uncommitted changes`);
+        if (summary.errors.length > 0) parts.push(`⚠️ ${summary.errors.length} error${summary.errors.length !== 1 ? "s" : ""}: ${summary.errors.join(", ")}`);
+        ctx.ui.notify(parts.join("\n"), summary.errors.length > 0 ? "warning" : "info");
+        return;
+      }
+
+      // No active pool — scan for orphans directly
+      const orphans = await findOrphanedWorktrees(pi, ctx.cwd, []);
+      if (orphans.length === 0) {
+        ctx.ui.notify("✅ No orphaned worktrees found.", "info");
+        return;
+      }
+
+      const dirtyCount = orphans.filter(o => o.isDirty).length;
+      const dirtyNote = dirtyCount > 0 ? ` (${dirtyCount} with uncommitted changes — will auto-commit)` : "";
+      const confirmed = await ctx.ui.confirm(
+        "Clean up worktrees",
+        `Found ${orphans.length} orphaned worktree${orphans.length > 1 ? "s" : ""}${dirtyNote}. Remove them?`
+      );
+      if (!confirmed) {
+        ctx.ui.notify("Cleanup cancelled.", "info");
+        return;
+      }
+
+      const summary = await cleanupOrphanedWorktrees(pi, ctx.cwd, orphans);
+      const parts: string[] = [`🧹 Removed ${summary.removed} worktree${summary.removed !== 1 ? "s" : ""}`];
+      if (summary.autoCommitted > 0) parts.push(`💾 Auto-committed ${summary.autoCommitted} with uncommitted changes`);
+      if (summary.errors.length > 0) parts.push(`⚠️ ${summary.errors.length} error${summary.errors.length !== 1 ? "s" : ""}: ${summary.errors.join(", ")}`);
+      ctx.ui.notify(parts.join("\n"), summary.errors.length > 0 ? "warning" : "info");
     },
   });
 

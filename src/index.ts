@@ -191,7 +191,6 @@ export default function (pi: ExtensionAPI) {
       }
     }
     if (lastStateEntry) {
-      {
         state = lastStateEntry;
 
         // If a previous orchestration was mid-flight, reset it
@@ -212,21 +211,12 @@ export default function (pi: ExtensionAPI) {
           state.worktreePoolState = undefined;
         }
 
-        // Restore coordination backend — re-validate availability
-        if (state.coordinationBackend) {
-          // Re-detect to catch uninstalled tools
-          resetDetection();
-          const freshBackend = await detectCoordinationBackend(pi, ctx.cwd);
-          state.coordinationBackend = freshBackend;
-          state.coordinationStrategy = selectStrategy(freshBackend);
-          state.coordinationMode ??= selectMode(freshBackend);
-        } else {
-          // Legacy state without coordination backend — detect fresh
-          const freshBackend = await detectCoordinationBackend(pi, ctx.cwd);
-          state.coordinationBackend = freshBackend;
-          state.coordinationStrategy = selectStrategy(freshBackend);
-          state.coordinationMode ??= selectMode(freshBackend);
-        }
+        // Re-detect coordination backend to catch uninstalled tools
+        if (state.coordinationBackend) resetDetection();
+        const freshBackend = await detectCoordinationBackend(pi, ctx.cwd);
+        state.coordinationBackend = freshBackend;
+        state.coordinationStrategy = selectStrategy(freshBackend);
+        state.coordinationMode ??= selectMode(freshBackend);
         if (state.sophiaCRId) {
           // Try to rebuild full CR state from sophia if available
           if (state.coordinationBackend?.sophia) {
@@ -263,17 +253,39 @@ export default function (pi: ExtensionAPI) {
             "info"
           );
         }
+    }
+
+    // Detect stale/orphaned worktrees from previous crashed sessions
+    try {
+      const { findOrphanedWorktrees } = await import("./worktree.js");
+      const tracked = worktreePool?.getAll() ?? [];
+      const orphans = await findOrphanedWorktrees(pi, ctx.cwd, [...tracked]);
+      if (orphans.length > 0) {
+        const dirtyCount = orphans.filter(o => o.isDirty).length;
+        const dirtyNote = dirtyCount > 0 ? ` (${dirtyCount} with uncommitted changes)` : "";
+        ctx.ui.notify(
+          `🧹 Found ${orphans.length} orphaned worktree${orphans.length > 1 ? "s" : ""} from a previous session${dirtyNote}. Run \`/orchestrate-cleanup\` to remove them.`,
+          "warning"
+        );
       }
+    } catch {
+      // Non-fatal — orphan detection is advisory only
     }
   });
 
   pi.on("session_shutdown", async () => {
-    if (worktreePool) {
-      await worktreePool.cleanup();
+    try {
+      if (worktreePool) {
+        await worktreePool.safeCleanup();
+      }
+    } catch (err) {
+      // Log but don't block shutdown — best-effort cleanup
+      console.error(`[pi-orchestrator] worktree cleanup error on shutdown: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
       worktreePool = undefined;
       if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
+      orchestratorActive = false;
     }
-    orchestratorActive = false;
   });
 
   // ─── Helper: persist state ───────────────────────────────────

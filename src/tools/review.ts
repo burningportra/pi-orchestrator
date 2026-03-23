@@ -330,9 +330,9 @@ export function registerReviewTool(oc: OrchestratorContext) {
             beadsReviewInfo = `\n\n**Beads:** ${summary}${!validation.ok ? `\n⚠️ ${validation.cycles ? "Cycles detected" : ""} ${validation.orphaned.length > 0 ? `Orphaned: ${validation.orphaned.join(", ")}` : ""}` : ""}${warningsStr}`;
           }
 
-          // Clean up worktrees and tender
+          // Clean up worktrees and tender (safe cleanup preserves uncommitted work)
           if (oc.worktreePool) {
-            await oc.worktreePool.cleanup();
+            await oc.worktreePool.safeCleanup();
             oc.worktreePool = undefined;
           }
           if (oc.swarmTender) {

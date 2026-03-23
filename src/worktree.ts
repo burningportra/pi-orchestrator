@@ -1,13 +1,17 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { join } from "path";
+import { existsSync, readdirSync } from "fs";
 
 // ─── Types ─────────────────────────────────────────────────────
 
-export interface WorktreeResult<T = void> {
-  ok: boolean;
-  data?: T;
-  error?: string;
-}
+/**
+ * Result type for worktree operations.
+ * When ok=true, `data` holds the payload (if any) and `error` is undefined.
+ * When ok=false, `error` describes what went wrong and `data` is undefined.
+ */
+export type WorktreeResult<T = void> =
+  | { ok: true; data?: T; error?: undefined }
+  | { ok: false; data?: undefined; error: string };
 
 export interface WorktreeInfo {
   path: string;
@@ -19,6 +23,18 @@ export interface WorktreePoolState {
   repoRoot: string;
   baseBranch: string;
   worktrees: WorktreeInfo[];
+}
+
+export interface OrphanedWorktreeInfo {
+  path: string;
+  branch?: string;
+  isDirty: boolean;
+}
+
+export interface CleanupSummary {
+  removed: number;
+  autoCommitted: number;
+  errors: string[];
 }
 
 // ─── Constants ─────────────────────────────────────────────────
@@ -61,22 +77,34 @@ export async function createWorktree(
   }
 }
 
+/**
+ * Force-remove a git worktree. WARNING: discards uncommitted changes.
+ * Use `autoCommitWorktree` first if you need to preserve work.
+ * Falls back to `git worktree prune` if the directory was already deleted.
+ */
 export async function removeWorktree(
   pi: ExtensionAPI,
   cwd: string,
   path: string
 ): Promise<WorktreeResult> {
   try {
-    // Force remove to handle dirty worktrees
     const result = await pi.exec(
       "git",
       ["worktree", "remove", "--force", path],
       { timeout: 10000, cwd }
     );
     if (result.code !== 0) {
-      // Try prune as fallback if the directory was already deleted
+      // Try prune as fallback if the directory was already deleted externally
       await pi.exec("git", ["worktree", "prune"], { timeout: 5000, cwd });
-      return { ok: true }; // prune cleans up stale entries
+
+      // Check if the directory still exists — if so, prune didn't help
+      if (existsSync(path)) {
+        return {
+          ok: false,
+          error: result.stderr.trim() || `git worktree remove failed (code ${result.code})`,
+        };
+      }
+      return { ok: true }; // directory gone, prune cleaned up the stale entry
     }
     return { ok: true };
   } catch (err) {
@@ -111,9 +139,8 @@ export async function listWorktrees(
 }
 
 /**
- * Check if a worktree has uncommitted changes and commit them.
- * Used as a fallback when sub-agents forget to commit before exiting.
- * Returns ok:true with data:true if a commit was made, data:false if clean.
+ * Auto-commit any uncommitted changes in a worktree.
+ * Returns data:true if a commit was made, data:false if already clean.
  */
 export async function autoCommitWorktree(
   pi: ExtensionAPI,
@@ -157,6 +184,133 @@ export async function autoCommitWorktree(
       error: `autoCommitWorktree failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+}
+
+// ─── Orphan Detection & Cleanup ────────────────────────────────
+
+/**
+ * Find worktrees in `.pi-orchestrator/worktrees/` that aren't in the tracked list.
+ * Returns info about each orphan including dirty status and branch name (if detectable).
+ */
+export async function findOrphanedWorktrees(
+  pi: ExtensionAPI,
+  repoRoot: string,
+  tracked: WorktreeInfo[]
+): Promise<OrphanedWorktreeInfo[]> {
+  const worktreeDir = join(repoRoot, WORKTREE_DIR);
+  if (!existsSync(worktreeDir)) return [];
+
+  let entries: string[];
+  try {
+    entries = readdirSync(worktreeDir);
+  } catch {
+    return [];
+  }
+
+  const trackedPaths = new Set(tracked.map((w) => w.path));
+
+  // Build a path→branch map from git once, not per-orphan
+  const branchByPath = new Map<string, string>();
+  try {
+    const result = await pi.exec(
+      "git",
+      ["worktree", "list", "--porcelain"],
+      { timeout: 5000, cwd: repoRoot }
+    );
+    if (result.code === 0) {
+      const lines = result.stdout.split("\n");
+      let currentPath: string | undefined;
+      for (const line of lines) {
+        if (line.startsWith("worktree ")) {
+          currentPath = line.slice("worktree ".length);
+        } else if (line.startsWith("branch refs/heads/") && currentPath) {
+          branchByPath.set(currentPath, line.slice("branch refs/heads/".length));
+        } else if (line === "") {
+          currentPath = undefined;
+        }
+      }
+    }
+  } catch {
+    // Branch detection is best-effort
+  }
+
+  const orphans: OrphanedWorktreeInfo[] = [];
+
+  for (const entry of entries) {
+    if (!entry.startsWith("step-")) continue;
+    const fullPath = join(worktreeDir, entry);
+    if (trackedPaths.has(fullPath)) continue;
+
+    let isDirty = false;
+    try {
+      const status = await pi.exec("git", ["status", "--porcelain"], {
+        timeout: 5000,
+        cwd: fullPath,
+      });
+      isDirty = status.code === 0 && status.stdout.trim().length > 0;
+    } catch {
+      // Can't check status — treat as clean, will force-remove anyway
+    }
+
+    orphans.push({
+      path: fullPath,
+      branch: branchByPath.get(fullPath),
+      isDirty,
+    });
+  }
+
+  return orphans;
+}
+
+/**
+ * Remove orphaned worktrees. Auto-commits dirty ones first to preserve work.
+ */
+export async function cleanupOrphanedWorktrees(
+  pi: ExtensionAPI,
+  repoRoot: string,
+  orphans: OrphanedWorktreeInfo[]
+): Promise<CleanupSummary> {
+  const summary: CleanupSummary = { removed: 0, autoCommitted: 0, errors: [] };
+
+  for (const orphan of orphans) {
+    // Auto-commit dirty worktrees to preserve work
+    if (orphan.isDirty) {
+      const commitResult = await autoCommitWorktree(
+        pi,
+        orphan.path,
+        `[pi-orchestrator] auto-commit: recovery of orphaned worktree`
+      );
+      if (commitResult.ok && commitResult.data) {
+        summary.autoCommitted++;
+      }
+    }
+
+    // Remove the worktree
+    const removeResult = await removeWorktree(pi, repoRoot, orphan.path);
+    if (removeResult.ok) {
+      summary.removed++;
+
+      // Also delete the branch if known
+      if (orphan.branch) {
+        await pi.exec("git", ["branch", "-D", orphan.branch], {
+          timeout: 5000,
+          cwd: repoRoot,
+        }).catch(() => {});
+      }
+    } else {
+      summary.errors.push(
+        `Failed to remove ${orphan.path}: ${removeResult.error ?? "unknown error"}`
+      );
+    }
+  }
+
+  // Final prune to catch any stale git refs
+  await pi.exec("git", ["worktree", "prune"], {
+    timeout: 5000,
+    cwd: repoRoot,
+  }).catch(() => {});
+
+  return summary;
 }
 
 // ─── WorktreePool ──────────────────────────────────────────────
@@ -233,13 +387,15 @@ export class WorktreePool {
       info.path
     );
 
-    // Also delete the branch
-    await this.pi.exec("git", ["branch", "-D", info.branch], {
-      timeout: 5000,
-      cwd: this.state.repoRoot,
-    }).catch(() => {});
+    if (result.ok) {
+      // Also delete the branch
+      await this.pi.exec("git", ["branch", "-D", info.branch], {
+        timeout: 5000,
+        cwd: this.state.repoRoot,
+      }).catch(() => {});
 
-    this.state.worktrees.splice(idx, 1);
+      this.state.worktrees.splice(idx, 1);
+    }
     return result;
   }
 
@@ -258,7 +414,10 @@ export class WorktreePool {
     return this.state.worktrees;
   }
 
-  /** Clean up all worktrees. */
+  /**
+   * Remove all tracked worktrees without preserving uncommitted changes.
+   * Prefer `safeCleanup()` unless you know all worktrees are already committed.
+   */
   async cleanup(): Promise<void> {
     const indices = this.state.worktrees.map((w) => w.stepIndex);
     for (const idx of indices) {
@@ -269,5 +428,62 @@ export class WorktreePool {
       timeout: 5000,
       cwd: this.state.repoRoot,
     }).catch(() => {});
+  }
+
+  /**
+   * Auto-commit dirty worktrees, remove all tracked worktrees, then
+   * sweep orphaned worktrees not tracked by this pool.
+   */
+  async safeCleanup(): Promise<CleanupSummary> {
+    const summary: CleanupSummary = { removed: 0, autoCommitted: 0, errors: [] };
+
+    // 1. Auto-commit and remove tracked worktrees
+    const indices = this.state.worktrees.map((w) => w.stepIndex);
+    for (const idx of indices) {
+      const info = this.state.worktrees.find((w) => w.stepIndex === idx);
+      if (!info) continue;
+
+      // Try auto-commit before removal
+      try {
+        const commitResult = await autoCommitWorktree(
+          this.pi,
+          info.path,
+          `[pi-orchestrator] auto-commit: safe cleanup of worktree step-${idx}`
+        );
+        if (commitResult.ok && commitResult.data) {
+          summary.autoCommitted++;
+        }
+      } catch {
+        // Non-fatal — continue with removal
+      }
+
+      const releaseResult = await this.release(idx);
+      if (releaseResult.ok) {
+        summary.removed++;
+      } else {
+        summary.errors.push(
+          `Failed to release step-${idx}: ${releaseResult.error ?? "unknown error"}`
+        );
+      }
+    }
+
+    // 2. Find and clean up orphaned worktrees (not tracked by pool)
+    const orphans = await findOrphanedWorktrees(
+      this.pi,
+      this.state.repoRoot,
+      this.state.worktrees // already empty after releases above
+    );
+    if (orphans.length > 0) {
+      const orphanSummary = await cleanupOrphanedWorktrees(
+        this.pi,
+        this.state.repoRoot,
+        orphans
+      );
+      summary.removed += orphanSummary.removed;
+      summary.autoCommitted += orphanSummary.autoCommitted;
+      summary.errors.push(...orphanSummary.errors);
+    }
+
+    return summary;
   }
 }
