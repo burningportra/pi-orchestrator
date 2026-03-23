@@ -1,5 +1,24 @@
-import type { RepoProfile, Bead, BeadResult, ScanResult } from "./types.js";
+import type { RepoProfile, Bead, BeadResult, ScanResult, OrchestratorPhase } from "./types.js";
 import type { PlanToBeadAudit } from "./beads.js";
+
+// ─── Workflow Roadmap ───────────────────────────────────────
+const WORKFLOW_PHASES: { key: OrchestratorPhase; label: string }[] = [
+  { key: "profiling", label: "Scan" },
+  { key: "discovering", label: "Discover" },
+  { key: "awaiting_selection", label: "Select" },
+  { key: "creating_beads", label: "Plan" },
+  { key: "implementing", label: "Build" },
+  { key: "reviewing", label: "Review" },
+  { key: "complete", label: "Done" },
+];
+
+export function workflowRoadmap(currentPhase: OrchestratorPhase): string {
+  const phaseIdx = WORKFLOW_PHASES.findIndex(p => p.key === currentPhase);
+  return WORKFLOW_PHASES.map((p, i) => {
+    const marker = i < phaseIdx ? "✓" : i === phaseIdx ? "→" : "○";
+    return `${marker} ${p.label}`;
+  }).join("  ");
+}
 
 // ─── Repo Profile Formatting ────────────────────────────────
 export function formatRepoProfile(profile: RepoProfile, scanResult?: ScanResult): string {

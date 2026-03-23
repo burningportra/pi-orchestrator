@@ -26,7 +26,74 @@ export function registerCommands(oc: OrchestratorContext) {
     description:
       "Start the repo-aware multi-agent orchestrator",
     handler: async (args, ctx) => {
-      if (oc.orchestratorActive) {
+      const { readBeads } = await import("./beads.js");
+      
+      // Check for existing state that can be resumed
+      const hasExistingState = oc.state.phase !== "idle" && oc.state.phase !== "complete";
+      let existingBeads: import("./types.js").Bead[] = [];
+      try {
+        existingBeads = await readBeads(pi, ctx.cwd);
+      } catch { /* no beads dir */ }
+      const hasActiveBeads = existingBeads.some(b => b.status === "open" || b.status === "in_progress");
+      
+      // Resume vs Fresh fork
+      if (hasExistingState || hasActiveBeads) {
+        const completedCount = Object.values(oc.state.beadResults ?? {}).filter(r => r.status === "success").length;
+        const totalCount = oc.state.activeBeadIds?.length ?? existingBeads.length;
+        const progressStr = totalCount > 0 ? ` (${completedCount}/${totalCount} beads done)` : "";
+        const openCount = existingBeads.filter(b => b.status === "open" || b.status === "in_progress").length;
+        
+        const choice = await ctx.ui.select(
+          `Existing orchestration detected${progressStr}`,
+          [
+            `📂 Resume — continue with ${openCount} open bead(s)`,
+            "🔄 Fresh — archive current beads and start over",
+            "❌ Cancel",
+          ]
+        );
+        
+        if (choice?.startsWith("📂")) {
+          // Resume: restore active state and continue from where we left off
+          oc.orchestratorActive = true;
+          // Only change phase if it was reset to idle/complete; otherwise keep existing phase
+          if (oc.state.phase === "idle" || oc.state.phase === "complete") {
+            // Default to implementing if we have beads, otherwise start fresh
+            oc.setPhase(hasActiveBeads ? "implementing" : "profiling", ctx);
+          }
+          oc.persistState();
+          
+          // Tailor resume message based on current phase
+          const phaseMessages: Record<string, string> = {
+            profiling: "Resuming orchestration. Call `orch_profile` to continue scanning.",
+            discovering: "Resuming orchestration. Call `orch_discover` to continue generating ideas.",
+            awaiting_selection: "Resuming orchestration. Call `orch_select` to pick a goal.",
+            creating_beads: "Resuming orchestration. Continue creating beads with `br create`.",
+            implementing: "Resuming orchestration. Call `orch_review` to check bead status and continue.",
+            reviewing: "Resuming orchestration. Call `orch_review` to continue review.",
+            iterating: "Resuming orchestration. Call `orch_review` to continue iteration.",
+          };
+          const resumeMsg = phaseMessages[oc.state.phase] ?? "Resuming orchestration. Call `orch_review` to check status.";
+          pi.sendUserMessage(resumeMsg, { deliverAs: "followUp" });
+          return;
+        } else if (choice?.startsWith("🔄")) {
+          // Archive: defer all open beads, then start fresh
+          for (const bead of existingBeads) {
+            if (bead.status === "open" || bead.status === "in_progress") {
+              try {
+                await pi.exec("br", ["update", bead.id, "--status", "deferred"], { cwd: ctx.cwd, timeout: 5000 });
+              } catch { /* best effort */ }
+            }
+          }
+          ctx.ui.notify(`📦 Archived ${openCount} open bead(s) as deferred.`, "info");
+          // Fall through to fresh start
+        } else {
+          ctx.ui.notify("Orchestration cancelled.", "info");
+          return;
+        }
+      }
+      
+      // Active orchestration override (only if no beads detected but orchestrator is running)
+      if (oc.orchestratorActive && !hasExistingState && !hasActiveBeads) {
         const override = await ctx.ui.confirm(
           "Orchestrator Active",
           "An orchestration is in progress. Reset and start fresh?"
@@ -296,6 +363,184 @@ export function registerCommands(oc: OrchestratorContext) {
       );
 
       pi.sendUserMessage(prompt);
+    },
+  });
+
+  // ─── Command: /orchestrate-setup ─────────────────────────────
+  pi.registerCommand("orchestrate-setup", {
+    description: "Check and install orchestration prerequisites (beads, agent-mail)",
+    handler: async (_args, ctx) => {
+      const { detectCoordinationBackend, resetDetection } = await import("./coordination.js");
+      
+      // Force fresh detection
+      resetDetection();
+      const backend = await detectCoordinationBackend(pi, ctx.cwd);
+      
+      const checks = [
+        {
+          name: "beads (br)",
+          installed: false,
+          initialized: false,
+          installCmd: "cargo install beads-cli",
+          initCmd: "br init",
+          description: "Task lifecycle tracking with dependencies",
+        },
+        {
+          name: "agent-mail",
+          installed: false,
+          initialized: true, // no init needed
+          installCmd: "uv pip install mcp-agent-mail",
+          initCmd: null,
+          description: "Multi-agent coordination and file reservations",
+        },
+      ];
+      
+      // Check br
+      try {
+        const brResult = await pi.exec("br", ["--help"], { timeout: 3000, cwd: ctx.cwd });
+        checks[0].installed = brResult.code === 0;
+        const { existsSync } = await import("fs");
+        const { join } = await import("path");
+        checks[0].initialized = existsSync(join(ctx.cwd, ".beads"));
+      } catch { /* not installed */ }
+      
+      // Check agent-mail
+      checks[1].installed = backend.agentMail;
+      
+      // Build status display
+      const statusLines = checks.map(c => {
+        const installStatus = c.installed ? "✅" : "❌";
+        const initStatus = c.initialized ? "" : " (not initialized)";
+        return `${installStatus} **${c.name}**${c.installed ? initStatus : ""} — ${c.description}`;
+      });
+      
+      ctx.ui.notify(
+        `## Orchestrator Prerequisites\n\n${statusLines.join("\n")}\n\n` +
+        `Current strategy: **${backend.beads && backend.agentMail ? "beads+agentmail" : backend.beads ? "beads-only" : "bare worktrees"}**`,
+        "info"
+      );
+      
+      // Offer to install/init missing components
+      const missing = checks.filter(c => !c.installed || !c.initialized);
+      if (missing.length === 0) {
+        ctx.ui.notify("✅ All prerequisites satisfied!", "info");
+        return;
+      }
+      
+      for (const check of missing) {
+        if (!check.installed) {
+          const install = await ctx.ui.confirm(
+            `Install ${check.name}?`,
+            `Run: ${check.installCmd}`
+          );
+          if (install) {
+            ctx.ui.notify(`Running: ${check.installCmd}`, "info");
+            try {
+              const result = await pi.exec("bash", ["-c", check.installCmd], { timeout: 120000, cwd: ctx.cwd });
+              if (result.code === 0) {
+                ctx.ui.notify(`✅ ${check.name} installed successfully.`, "info");
+                check.installed = true;
+              } else {
+                ctx.ui.notify(`❌ Installation failed: ${result.stderr || result.stdout}`, "error");
+              }
+            } catch (err: any) {
+              ctx.ui.notify(`❌ Installation failed: ${err.message ?? err}`, "error");
+            }
+          }
+        }
+        
+        if (check.installed && !check.initialized && check.initCmd) {
+          const init = await ctx.ui.confirm(
+            `Initialize ${check.name}?`,
+            `Run: ${check.initCmd}`
+          );
+          if (init) {
+            ctx.ui.notify(`Running: ${check.initCmd}`, "info");
+            try {
+              const result = await pi.exec("bash", ["-c", check.initCmd], { timeout: 30000, cwd: ctx.cwd });
+              if (result.code === 0) {
+                ctx.ui.notify(`✅ ${check.name} initialized successfully.`, "info");
+              } else {
+                ctx.ui.notify(`❌ Initialization failed: ${result.stderr || result.stdout}`, "error");
+              }
+            } catch (err: any) {
+              ctx.ui.notify(`❌ Initialization failed: ${err.message ?? err}`, "error");
+            }
+          }
+        }
+      }
+      
+      // Re-detect after setup
+      resetDetection();
+      const newBackend = await detectCoordinationBackend(pi, ctx.cwd);
+      ctx.ui.notify(
+        `\n🔄 Updated strategy: **${newBackend.beads && newBackend.agentMail ? "beads+agentmail" : newBackend.beads ? "beads-only" : "bare worktrees"}**`,
+        "info"
+      );
+    },
+  });
+
+  // ─── Command: /orchestrate-rollback ──────────────────────────
+  pi.registerCommand("orchestrate-rollback", {
+    description: "Revert the last completed bead and re-open it for re-implementation",
+    handler: async (_args, ctx) => {
+      const { readBeads } = await import("./beads.js");
+      
+      // Find last completed bead from state
+      const completedEntries = Object.entries(oc.state.beadResults ?? {})
+        .filter(([_, r]) => r.status === "success");
+      
+      if (completedEntries.length === 0) {
+        ctx.ui.notify("No completed beads to roll back.", "info");
+        return;
+      }
+      
+      // Get bead details
+      const beads = await readBeads(pi, ctx.cwd);
+      const beadChoices = completedEntries.map(([id, result]) => {
+        const bead = beads.find(b => b.id === id);
+        return `${id}: ${bead?.title ?? result.summary.slice(0, 50)}`;
+      });
+      
+      const selected = await ctx.ui.select("Select bead to roll back:", beadChoices);
+      if (!selected) {
+        ctx.ui.notify("Rollback cancelled.", "info");
+        return;
+      }
+      
+      const beadId = selected.split(":")[0];
+      const confirmed = await ctx.ui.confirm(
+        "Confirm Rollback",
+        `Revert bead ${beadId} to open status? This will NOT undo code changes automatically.`
+      );
+      
+      if (!confirmed) {
+        ctx.ui.notify("Rollback cancelled.", "info");
+        return;
+      }
+      
+      // Re-open the bead
+      try {
+        await pi.exec("br", ["update", beadId, "--status", "open"], { cwd: ctx.cwd, timeout: 5000 });
+      } catch (err: any) {
+        ctx.ui.notify(`❌ Failed to update bead status: ${err.message ?? err}`, "error");
+        return;
+      }
+      
+      // Remove from results
+      if (oc.state.beadResults) {
+        delete oc.state.beadResults[beadId];
+      }
+      oc.persistState();
+      
+      ctx.ui.notify(
+        `↩️ Rolled back bead **${beadId}** to open status.\n\n` +
+        `To undo code changes, you can:\n` +
+        `• \`git revert HEAD\` — revert last commit\n` +
+        `• \`git checkout -- <files>\` — discard specific changes\n\n` +
+        `Run \`/orchestrate\` to resume and re-implement this bead.`,
+        "info"
+      );
     },
   });
 }

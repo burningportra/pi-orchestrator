@@ -193,11 +193,33 @@ export default function (pi: ExtensionAPI) {
     if (lastStateEntry) {
         state = lastStateEntry;
 
-        // If a previous orchestration was mid-flight, reset it
-        // (stale iterating/implementing state from a prior session)
+        // If a previous orchestration was mid-flight, notify user instead of silent reset
         if (state.phase === "iterating" || state.phase === "implementing" || state.phase === "reviewing") {
-          state.phase = "complete";
-          state.currentGateIndex = 0;
+          const openBeads = (state.activeBeadIds ?? []).filter(
+            id => !state.beadResults?.[id] || state.beadResults[id].status !== "success"
+          );
+          const completedCount = Object.values(state.beadResults ?? {}).filter(r => r.status === "success").length;
+          const totalCount = state.activeBeadIds?.length ?? 0;
+          const progressStr = totalCount > 0 ? ` (${completedCount}/${totalCount} beads completed)` : "";
+          
+          ctx.ui.notify(
+            `⚠️ Session interrupted during **${state.phase}** phase${progressStr}.\n` +
+            `${openBeads.length} bead(s) were in progress. ` +
+            `Run \`/orchestrate\` to resume or \`/orchestrate-stop\` to reset.`,
+            "warning"
+          );
+          // Don't auto-reset - keep state for user to decide
+          orchestratorActive = false;
+        } else if (state.phase !== "idle" && state.phase !== "complete") {
+          // Session was in a non-active phase - show resume prompt
+          const beadProgress = state.activeBeadIds?.length
+            ? `${Object.values(state.beadResults ?? {}).filter(r => r.status === "success").length}/${state.activeBeadIds.length} beads`
+            : "";
+          ctx.ui.notify(
+            `🔄 Previous session detected: **${state.phase}** phase${beadProgress ? ` (${beadProgress})` : ""}.\n` +
+            `Run \`/orchestrate\` to resume or \`/orchestrate-stop\` to reset.`,
+            "info"
+          );
           orchestratorActive = false;
         } else {
           orchestratorActive = state.phase !== "idle" && state.phase !== "complete";

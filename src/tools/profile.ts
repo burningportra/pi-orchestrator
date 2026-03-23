@@ -7,6 +7,7 @@ import {
   formatRepoProfile,
   discoveryInstructions,
   beadCreationPrompt,
+  workflowRoadmap,
 } from "../prompts.js";
 import { runGoalRefinement, extractConstraints } from "../goal-refinement.js";
 import { detectCoordinationBackend, selectMode, selectStrategy } from "../coordination.js";
@@ -75,14 +76,23 @@ export function registerProfileTool(oc: OrchestratorContext) {
         ? `\n⚠️ Foundation gaps detected:\n${foundationGaps.join("\n")}\n`
         : "";
 
-      // Coordination backend summary
+      // Coordination backend summary with upgrade hints
       const coordParts: string[] = [];
       if (coordBackend.beads) coordParts.push("beads");
       if (coordBackend.agentMail) coordParts.push("agent-mail");
       if (coordBackend.sophia) coordParts.push("sophia");
+      
+      const missingTools: string[] = [];
+      if (!coordBackend.beads) missingTools.push("`br init` for task tracking");
+      if (!coordBackend.agentMail) missingTools.push("`agent-mail` for multi-agent coordination");
+      
       const coordLine = coordParts.length > 0
         ? `🤝 Coordination: ${coordParts.join(" + ")} → strategy: **${coordStrategy}**`
         : "🤝 Coordination: bare worktrees (no beads/agent-mail/sophia detected)";
+      
+      const upgradeHint = missingTools.length > 0 && coordParts.length < 2
+        ? `\n💡 **Upgrade available:** Install ${missingTools.join(", ")} for enhanced coordination. Run \`/orchestrate-setup\` for guided install.`
+        : "";
 
       // Read CASS memory context for this repo/goal
       const { readMemory } = await import("../memory.js");
@@ -128,12 +138,15 @@ export function registerProfileTool(oc: OrchestratorContext) {
         oc.persistState();
 
         const instructions = beadCreationPrompt(goal, formatted, constraints);
+        
+        // Workflow roadmap for custom goal path (skips discover/select)
+        const customRoadmap = workflowRoadmap("creating_beads");
 
         return {
           content: [
             {
               type: "text",
-              text: `**NEXT: Create beads for this goal using \`br create\` and \`br dep add\` in bash NOW.**\n\nGoal: "${goal}"\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}${foundationWarning}\n\n${formatted}${memoryContext}\n\n${instructions}`,
+              text: `**Workflow:** ${customRoadmap}\n\n**NEXT: Create beads for this goal using \`br create\` and \`br dep add\` in bash NOW.**\n\nGoal: "${goal}"\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}${upgradeHint}${foundationWarning}\n\n${formatted}${memoryContext}\n\n${instructions}`,
             },
           ],
           details: { profile, scanResult, customGoal: goal },
@@ -144,11 +157,14 @@ export function registerProfileTool(oc: OrchestratorContext) {
 
       const discoveryPrompt = `**NEXT: Call \`orch_discover\` with your top 5 ideas and next 5-10 honorable mentions NOW.**\n\n${modeInstructions}`;
 
+      // Workflow roadmap for user orientation
+      const roadmap = workflowRoadmap("discovering");
+
       return {
         content: [
           {
             type: "text",
-            text: `${discoveryPrompt}\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}${foundationWarning}\n\n${formatted}${memoryContext}`,
+            text: `**Workflow:** ${roadmap}\n\n${discoveryPrompt}\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}${upgradeHint}${foundationWarning}\n\n${formatted}${memoryContext}`,
           },
         ],
         details: { profile, scanResult },
