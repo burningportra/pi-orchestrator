@@ -5,28 +5,26 @@ import path from "node:path";
 
 export default async function beadsRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/beads — list all beads
-  app.get("/beads", async (_req, reply) => {
+  app.get("/beads", async (_req, _reply) => {
     const result = await execCmd("br", ["list", "--json"]);
-    if (result.code !== 0) {
-      return reply.status(500).send({ error: "br list failed", stderr: result.stderr });
-    }
+    if (result.code !== 0) return [];
     try {
-      return JSON.parse(result.stdout);
+      const data = JSON.parse(result.stdout);
+      return Array.isArray(data) ? data : data?.issues ?? [];
     } catch {
-      return reply.status(500).send({ error: "Failed to parse br output", stdout: result.stdout });
+      return [];
     }
   });
 
   // GET /api/beads/ready — list ready (unblocked) beads
-  app.get("/beads/ready", async (_req, reply) => {
+  app.get("/beads/ready", async (_req, _reply) => {
     const result = await execCmd("br", ["ready", "--json"]);
-    if (result.code !== 0) {
-      return reply.status(500).send({ error: "br ready failed", stderr: result.stderr });
-    }
+    if (result.code !== 0) return [];
     try {
-      return JSON.parse(result.stdout);
+      const data = JSON.parse(result.stdout);
+      return Array.isArray(data) ? data : data?.issues ?? [];
     } catch {
-      return reply.status(500).send({ error: "Failed to parse br output", stdout: result.stdout });
+      return [];
     }
   });
 

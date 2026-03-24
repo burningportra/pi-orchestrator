@@ -16,9 +16,9 @@ const STATUS_BADGES: Record<string, { label: string; color: string }> = {
 
 export default function Dashboard() {
   const { data: state, isLoading: stateLoading, error: stateError } = useOrchestratorState();
-  const { data: beads, isLoading: beadsLoading } = useBeads();
+  const { data: beads } = useBeads();
 
-  if (stateLoading || beadsLoading) {
+  if (stateLoading) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="animate-spin text-accent" size={24} />
@@ -35,12 +35,12 @@ export default function Dashboard() {
     );
   }
 
-  const phase = state?.phase ?? "";
+  const phase = state?.phase ?? "idle";
   const allBeads = beads ?? [];
-  const total = allBeads.length;
-  const open = allBeads.filter((b) => b.status === "open").length;
-  const inProgress = allBeads.filter((b) => b.status === "in_progress").length;
-  const closed = allBeads.filter((b) => b.status === "closed").length;
+  const total = allBeads.length > 0 ? allBeads.length : (state?.totalBeads ?? 0);
+  const open = allBeads.length > 0 ? allBeads.filter((b) => b.status === "open").length : (state?.openBeads ?? 0);
+  const inProgress = allBeads.length > 0 ? allBeads.filter((b) => b.status === "in_progress").length : (state?.inProgressBeads ?? 0);
+  const closed = allBeads.length > 0 ? allBeads.filter((b) => b.status === "closed").length : (state?.closedBeads ?? 0);
   const completionPct = total > 0 ? Math.round((closed / total) * 100) : 0;
 
   const polishRounds = state?.polishRounds ?? [];

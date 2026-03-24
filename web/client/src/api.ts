@@ -18,7 +18,11 @@ export interface Bead {
 
 export interface OrchestratorState {
   phase: string;
-  beads: Bead[];
+  totalBeads: number;
+  openBeads: number;
+  inProgressBeads: number;
+  closedBeads: number;
+  deferredBeads: number;
   currentBeadId?: string;
   polishRounds?: { round: number; changes: number }[];
   gates?: GateStatus[];
@@ -119,8 +123,8 @@ export function fetchBeadDeps(id: string): Promise<string[]> {
 }
 
 export function updateBeadStatus(id: string, status: string): Promise<void> {
-  return fetchJSON("/api/beads/" + id, {
-    method: "PATCH",
+  return fetchJSON("/api/beads/" + id + "/status", {
+    method: "POST",
     body: JSON.stringify({ status }),
   });
 }
@@ -130,11 +134,11 @@ export function fetchState(): Promise<OrchestratorState> {
 }
 
 export function fetchInsights(): Promise<BvInsights | null> {
-  return fetchJSON<BvInsights | null>("/api/bv/insights");
+  return fetchJSON<BvInsights | null>("/api/insights");
 }
 
 export function fetchNext(): Promise<BvNextPick | null> {
-  return fetchJSON<BvNextPick | null>("/api/bv/next");
+  return fetchJSON<BvNextPick | null>("/api/next");
 }
 
 export function fetchPlan(): Promise<{ content: string } | null> {
@@ -153,14 +157,14 @@ export function fetchPlanAudit(): Promise<PlanAudit> {
 }
 
 export function submitReview(data: ReviewData): Promise<unknown> {
-  return fetchJSON("/api/review", {
+  return fetchJSON("/api/commands/review", {
     method: "POST",
     body: JSON.stringify(data),
   });
 }
 
 export function triggerCommand(cmd: string, body?: unknown): Promise<unknown> {
-  return fetchJSON(`/api/command/${cmd}`, {
+  return fetchJSON(`/api/commands/${cmd}`, {
     method: "POST",
     body: body ? JSON.stringify(body) : undefined,
   });
