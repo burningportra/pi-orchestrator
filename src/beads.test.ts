@@ -181,6 +181,17 @@ describe("validateBeads", () => {
     expect(result.cycles).toBe(false);
   });
 
+  it("does not treat successful br dep cycles output as a cycle", async () => {
+    const pi = makePi(async () => ({
+      code: 0,
+      stdout: "✓ No dependency cycles detected.",
+      stderr: "",
+    }));
+    const result = await validateBeads(pi, CWD);
+    expect(result.ok).toBe(true);
+    expect(result.cycles).toBe(false);
+  });
+
   it("detects cycles", async () => {
     const pi = makePi(async () => ({
       code: 1,
@@ -609,6 +620,121 @@ describe("validateBeads shallowBeads", () => {
     expect(result.shallowBeads).toHaveLength(1);
     expect(result.shallowBeads[0].id).toBe("shallow-1");
     expect(result.shallowBeads[0].reason).toContain("too short");
+  });
+});
+
+describe("validateBeads template hygiene", () => {
+  beforeEach(() => resetBvCache());
+
+  function makeValidationPi(beads: Bead[]) {
+    return {
+      exec: vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "which") throw new Error("not found");
+        if (cmd === "br" && args[0] === "dep" && args[1] === "cycles") {
+          return { code: 0, stdout: "OK", stderr: "" };
+        }
+        if (cmd === "br" && args[0] === "list") {
+          return { code: 0, stdout: JSON.stringify(beads), stderr: "" };
+        }
+        if (cmd === "br" && args[0] === "dep" && args[1] === "list") {
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        return { code: 0, stdout: "[]", stderr: "" };
+      }),
+    } as unknown as ExtensionAPI;
+  }
+
+  it("flags raw template markers and shorthand in open beads", async () => {
+    const beads = [
+      makeBead({
+        id: "tmpl-1",
+        description: `This bead still needs expansion.\n[Use template: add-api-endpoint]\nsee template for the rest\n### Files:\n- src/api/users.ts\n- src/api/users.test.ts\n- [ ] one\n- [ ] two`,
+      }),
+    ];
+
+    const result = await validateBeads(makeValidationPi(beads), CWD);
+    expect(result.ok).toBe(false);
+    expect(result.templateIssues.some((issue) => issue.issueType === "raw-template-marker")).toBe(true);
+    expect(result.templateIssues.some((issue) => issue.issueType === "template-shorthand")).toBe(true);
+  });
+
+  it("flags unresolved placeholder syntax", async () => {
+    const beads = [
+      makeBead({
+        id: "tmpl-2",
+        description: `Implement endpoint for {{endpointPath}} with schema in <SCHEMA_NAME>.\n### Files:\n- src/api/users.ts\n- src/api/users.test.ts\n- [ ] one\n- [ ] two`,
+      }),
+    ];
+
+    const result = await validateBeads(makeValidationPi(beads), CWD);
+    expect(result.templateIssues.filter((issue) => issue.issueType === "unresolved-placeholder")).toHaveLength(2);
+    expect(result.templateIssues.every((issue) => issue.beadId === "tmpl-2")).toBe(true);
+  });
+
+  it("does not flag generic type syntax as unresolved placeholders", async () => {
+    const beads = [
+      makeBead({
+        id: "tmpl-typed",
+        description: `Document that this helper returns Promise<Result<T>> and integrates with <ErrorBoundary> in docs.\n\n### Files:\n- src/parser.ts\n- src/parser.test.ts\n\n- [ ] explain the typing\n- [ ] keep tests passing`,
+      }),
+    ];
+
+    const result = await validateBeads(makeValidationPi(beads), CWD);
+    expect(result.templateIssues).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not flag legitimate mentions of template in prose", async () => {
+    const beads = [
+      makeBead({
+        id: "tmpl-3",
+        description: `This bead follows the singleton template pattern used in the parser and documents why that pattern matters for maintainability.\n\n### Files:\n- src/parser.ts\n- src/parser.test.ts\n\n- [ ] explain the pattern\n- [ ] keep tests passing`,
+      }),
+    ];
+
+    const result = await validateBeads(makeValidationPi(beads), CWD);
+    expect(result.templateIssues).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("ignores closed beads with template markers", async () => {
+    const beads = [
+      makeBead({
+        id: "tmpl-4",
+        status: "closed",
+        description: `[Use template: add-tests]\nsee template\n{{featureName}}`,
+      }),
+    ];
+
+    const result = await validateBeads(makeValidationPi(beads), CWD);
+    expect(result.templateIssues).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("adds a missing-structure issue when template artifacts remain without concrete bead sections", async () => {
+    const beads = [
+      makeBead({
+        id: "tmpl-5",
+        description: `Use template: add-api-endpoint\n{{endpointPath}}`,
+      }),
+    ];
+
+    const result = await validateBeads(makeValidationPi(beads), CWD);
+    expect(result.templateIssues.some((issue) => issue.issueType === "template-missing-structure")).toBe(true);
+  });
+
+  it("surfaces template hygiene failures through qualityCheckBeads", async () => {
+    const beads = [
+      makeBead({
+        id: "tmpl-6",
+        description: `This bead needs follow-up.\n[Use template: add-api-endpoint]\n### Files:\n- src/api/users.ts\n- src/api/users.test.ts\n\n- [ ] one\n- [ ] two\n\n${"word ".repeat(60)}`,
+      }),
+    ];
+    const pi = makeValidationPi(beads);
+
+    const result = await qualityCheckBeads(pi, CWD);
+    expect(result.passed).toBe(false);
+    expect(result.failures.some((failure) => failure.check === "template-hygiene")).toBe(true);
   });
 });
 

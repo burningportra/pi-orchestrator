@@ -1,5 +1,6 @@
 import type { RepoProfile, Bead, BeadResult, ScanResult, OrchestratorPhase } from "./types.js";
 import type { PlanToBeadAudit } from "./beads.js";
+import { formatTemplatesForPrompt } from "./bead-templates.js";
 
 // ─── Workflow Roadmap ───────────────────────────────────────
 const WORKFLOW_PHASES: { key: OrchestratorPhase; label: string }[] = [
@@ -277,6 +278,34 @@ Each subtask should be a single coherent unit of work that one agent can complet
 - Acceptance criteria should be specific and testable
 - Include test beads where appropriate
 
+## Template Library
+${formatTemplatesForPrompt()}
+
+Templates are optional shortcuts for common bead shapes, not requirements. If a template fits, use its ID as a drafting aid, substitute concrete placeholder values, and expand it into a fully self-contained bead description before running \`br create\`.
+
+Example — starting from template \`add-api-endpoint\` with all placeholders substituted (\`{{endpointPath}} → /api/users\`, \`{{moduleName}} → user-management\`, \`{{endpointPurpose}} → return a filtered user list\`, \`{{httpMethod}} → GET\`, \`{{implementationFile}} → src/api/users.ts\`, \`{{testFile}} → src/api/users.test.ts\`):
+
+> Implement a new API endpoint for /api/users in the user-management area.
+> Add request validation, success/error responses, and any supporting wiring
+> needed so the endpoint behaves consistently with the existing API surface.
+>
+> Why this bead exists:
+> - The feature needs a concrete endpoint for return a filtered user list.
+> - The work should land with validation, error handling, and test coverage instead of a stub.
+>
+> Acceptance criteria:
+> - [ ] Add the GET /api/users endpoint with validation for the expected inputs.
+> - [ ] Return clear success and failure responses for the main path and obvious edge cases.
+> - [ ] Add tests covering the happy path and at least one error path.
+>
+> ### Files:
+> - src/api/users.ts
+> - src/api/users.test.ts
+
+Notice: every placeholder is resolved and the final text is fully expanded — no template IDs, no placeholders.
+
+If no template fits, write a custom bead normally. Final beads must not say \`[Use template: ...]\`, \`see template\`, or leave unresolved \`{{placeholderName}}\` markers behind.
+
 Verify with \`br list\` and \`br dep cycles\` (must show no cycles).
 
 Use ultrathink.`;
@@ -368,6 +397,34 @@ br dep add <child-id> <parent-id>
 - Acceptance criteria should be specific and testable
 - Include test beads where appropriate
 
+## Template Library
+${formatTemplatesForPrompt()}
+
+The plan is your primary source. Use templates only to accelerate structure, not replace plan details.
+Templates are optional: if one fits, expand it with plan-specific details; if none fit, write a custom bead normally.
+Do not emit final beads that say \`[Use template: ...]\`, raw template IDs, \`see template\`, or unresolved \`{{placeholderName}}\` markers.
+
+Example — plan says "add a users endpoint with validation and tests", template \`add-api-endpoint\` fits. Substitute all placeholders (\`{{endpointPath}} → /api/users\`, \`{{moduleName}} → user-management\`, \`{{endpointPurpose}} → return a filtered user list\`, \`{{httpMethod}} → GET\`, \`{{implementationFile}} → src/api/users.ts\`, \`{{testFile}} → src/api/users.test.ts\`):
+
+> Implement a new API endpoint for /api/users in the user-management area.
+> Add request validation, success/error responses, and any supporting wiring
+> needed so the endpoint behaves consistently with the existing API surface.
+>
+> Why this bead exists:
+> - The feature needs a concrete endpoint for return a filtered user list.
+> - The work should land with validation, error handling, and test coverage instead of a stub.
+>
+> Acceptance criteria:
+> - [ ] Add the GET /api/users endpoint with validation for the expected inputs.
+> - [ ] Return clear success and failure responses for the main path and obvious edge cases.
+> - [ ] Add tests covering the happy path and at least one error path.
+>
+> ### Files:
+> - src/api/users.ts
+> - src/api/users.test.ts
+
+Notice: every placeholder is resolved and the final text is fully expanded with plan context — no template IDs, no placeholders, no "see template" references.
+
 Verify with \`br list\` and \`br dep cycles\` (must show no cycles).
 
 Use ultrathink.`;
@@ -375,7 +432,8 @@ Use ultrathink.`;
 
 // ─── Bead Refinement Prompt ──────────────────────────────────
 export function beadRefinementPrompt(roundNumber?: number, priorChanges?: number[]): string {
-  const roundInfo = roundNumber != null ? `This is polish round ${roundNumber + 1}.\n\n` : "";
+  const hasRoundNumber = roundNumber !== undefined && roundNumber !== null;
+  const roundInfo = hasRoundNumber ? `This is polish round ${roundNumber + 1}.\n\n` : "";
   const changesInfo = priorChanges && priorChanges.length > 0
     ? `Prior rounds: ${priorChanges.map((n, i) => `Round ${i + 1}: ${n} change${n !== 1 ? "s" : ""}`).join(", ")}.\n\n`
     : "";
@@ -392,7 +450,7 @@ ${roundInfo}${changesInfo}Check over each bead super carefully via \`br list\` a
 5. Is the \`### Files:\` section accurate and complete?
 6. Are dependencies correct? Would \`br ready\` return the right parallel groups?
 7. Are any beads too large? Could they be split into 2-3 subtasks for better parallelism and clearer scope?
-7. Could a fresh agent implement this bead without ANY external context? If not, what background/reasoning is missing?
+8. Could a fresh agent implement this bead without ANY external context? If not, what background/reasoning is missing?
 
 ### Actions
 - Revise with \`br update <id> --description "..."\` for any improvements
@@ -408,11 +466,7 @@ ${roundInfo}${changesInfo}Check over each bead super carefully via \`br list\` a
 Use ultrathink.`;
 }
 
-/**
- * Fresh-context refinement prompt for sub-agent bead review.
- * Derived from Agent Flywheel Section 5: "Check your beads N times, implement once."
- * Fresh conversations prevent the model from anchoring on its own prior output.
- */
+/** Fresh-context refinement prompt for sub-agent bead review. */
 export function freshContextRefinementPrompt(cwd: string, goal: string, roundNumber: number): string {
   return `## Fresh-Context Bead Refinement (Round ${roundNumber + 1})
 
@@ -443,9 +497,9 @@ cd ${cwd}`;
 }
 
 /**
- * Compute convergence score (0-1) from polish round history.
+ * Convergence score (0-1) from polish round history.
  * Weights: change velocity (40%), output size delta (30%), consecutive zero-change rounds (30%).
- * Score ≥ 0.75 means ready to implement; ≥ 0.90 means diminishing returns.
+ * ≥ 0.75 = ready to implement, ≥ 0.90 = diminishing returns.
  */
 export function computeConvergenceScore(
   changes: number[],
@@ -763,11 +817,7 @@ A skill is worth creating if:
 }
 
 // ─── Strategic Drift Detection ───────────────────────────────
-// Derived from Agent Flywheel Section 7: "Watch for strategic drift."
-/**
- * Proactive drift check that runs every N completed beads.
- * Asks: "Do we actually have the thing we are trying to build?"
- */
+/** Proactive drift check that runs every N completed beads. */
 export function strategicDriftCheckInstructions(
   goal: string,
   beads: Bead[],
@@ -804,10 +854,9 @@ ${beads.map((b) => {
 }
 
 // ─── Blunder Hunt (Overshoot Mismatch Technique) ────────────
-// Derived from Agent Flywheel Section 5: "Lie to them and give them a huge number."
 /**
- * The overshoot mismatch hunt prompt. Models stop finding problems after ~20-25 issues;
- * claiming 80+ errors forces them to keep searching exhaustively.
+ * Overshoot mismatch prompt. Claiming 80+ errors forces exhaustive search
+ * past the ~20-25 issue plateau.
  */
 export function blunderHuntInstructions(cwd: string, passNumber: number, domainExtras?: string): string {
   return `## Blunder Hunt — Pass ${passNumber}/5
@@ -836,11 +885,7 @@ cd ${cwd}`;
 }
 
 // ─── Random Code Exploration Review ──────────────────────────
-// Derived from Agent Flywheel Section 8: alternating review patterns.
-/**
- * Random exploration breaks the locality trap by forcing the reviewer
- * to pick files NOT in the changed artifacts list.
- */
+/** Force the reviewer to pick files outside the changed artifacts list. */
 export function randomExplorationInstructions(
   goal: string,
   changedFiles: string[],
@@ -875,7 +920,6 @@ cd ${cwd}`;
 }
 
 // ─── De-Slopification ───────────────────────────────────────
-// Derived from Agent Flywheel Section 8: "De-Slopification"
 /** Extensible catalogue of AI slop patterns to detect and fix. */
 export const AI_SLOP_PATTERNS = [
   { pattern: "emdash overuse (-)", fix: "Replace with semicolons, commas, or sentence splits" },
@@ -914,7 +958,6 @@ ${patternList}
 }
 
 // ─── Landing the Plane ──────────────────────────────────────
-// Derived from Agent Flywheel Section 8: "Landing the Plane"
 export function landingChecklistInstructions(cwd: string): string {
   return `## Landing the Plane - Session Completion Checklist
 
@@ -936,7 +979,6 @@ cd ${cwd}`;
 }
 
 // ─── Swarm Marching Orders ──────────────────────────────────
-// Derived from Agent Flywheel Section 7: canonical swarm kickoff prompt.
 export function swarmMarchingOrders(cwd: string, beadId?: string): string {
   return `## Swarm Marching Orders
 
@@ -956,10 +998,7 @@ export const SWARM_STAGGER_DELAY_MS = 30_000; // 30 seconds between agent starts
 
 /**
  * Model rotation for refinement rounds.
- * Different models have different "tastes" and blind spots.
- * Rotating prevents anchoring AND provides diverse perspectives.
- * Derived from Agent Flywheel Section 3: "Passing a plan through a gauntlet
- * of different models is the cheapest way to buy architectural robustness."
+ * Different models have different blind spots; rotating prevents anchoring.
  */
 export const REFINEMENT_MODELS = [
   "anthropic/claude-sonnet-4-5",
@@ -973,7 +1012,6 @@ export function pickRefinementModel(round: number): string {
 }
 
 // ─── Bead Quality Scoring ───────────────────────────────────
-// Derived from Agent Flywheel Section 4: beads as "executable memory"
 /**
  * Prompt for LLM-based quality scoring of a bead on WHAT/WHY/HOW axes.
  */
@@ -1016,10 +1054,7 @@ ${description}
 }
 
 // ─── Research & Reimagine Workflow ───────────────────────────
-// Derived from Agent Flywheel Section 6: "Major Features: Research and Reimagine"
-/**
- * Step 1: Investigate an external project and propose reimagined ideas.
- */
+/** Step 1: Investigate an external project and propose reimagined ideas. */
 export function researchInvestigatePrompt(externalUrl: string, projectName: string, cwd: string): string {
   return `## Research & Reimagine - Step 1: Investigate
 
@@ -1036,20 +1071,16 @@ Make the proposal genuinely novel, not a shallow port. Use ultrathink.
 cd ${cwd}`;
 }
 
-/**
- * Step 2: Iterative deepening - push past conservative initial suggestions.
- */
+/** Step 2: Push past conservative initial suggestions. */
 export function researchDeepenPrompt(): string {
   return `## Research & Reimagine - Step 2: Deepen
 
-That's a decent start, but you barely scratched the surface. Go way deeper - more ambition, more boldness. Come up with ideas that are genuinely surprising and high-impact because they are so compelling, useful, and accretive.
+That's a decent start, but you barely scratched the surface. Go way deeper - more ambition, more boldness. Come up with ideas that are genuinely surprising and high-impact.
 
-Push past the conservative initial suggestions. Use ultrathink.`;
+Go deeper. Use ultrathink.`;
 }
 
-/**
- * Step 3: Inversion analysis - what can WE do that THEY cannot?
- */
+/** Step 3: Inversion analysis — what can WE do that THEY cannot? */
 export function researchInversionPrompt(projectName: string, externalName: string): string {
   return `## Research & Reimagine - Step 3: Inversion Analysis
 
@@ -1231,7 +1262,7 @@ Return ONLY the synthesized markdown plan.`;
 export function planDocumentPrompt(goal: string, profile: RepoProfile, scanResult?: ScanResult): string {
   const repoContext = formatRepoProfile(profile, scanResult);
 
-  return `You are an expert software architect. Use ultrathink to produce a comprehensive implementation plan.
+  return `You are an expert software architect. Use ultrathink to produce a detailed implementation plan.
 
 ## Goal
 ${goal}
@@ -1304,12 +1335,8 @@ Focus on substance over style. Each round should find fewer issues as the plan c
 
 /**
  * Fresh-context plan refinement prompt for sub-agent use.
- * Unlike planRefinementPrompt(), this embeds the full plan text so the
- * sub-agent (which has zero session context) can evaluate it without
- * needing to read artifacts.
- *
- * Derived from Agent Flywheel Section 3: "Fresh conversations prevent
- * the model from anchoring on its own prior output."
+ * Embeds the full plan text so the sub-agent (zero session context)
+ * can evaluate without reading artifacts.
  */
 export function freshPlanRefinementPrompt(
   planText: string,

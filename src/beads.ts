@@ -1,6 +1,13 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { Bead, BvInsights, BvNextPick } from "./types.js";
 
+export interface TemplateHygieneIssue {
+  beadId: string;
+  issueType: "raw-template-marker" | "template-shorthand" | "unresolved-placeholder" | "template-missing-structure";
+  excerpt: string;
+  reason: string;
+}
+
 export interface PlanAuditMatch {
   beadId: string;
   title: string;
@@ -336,11 +343,12 @@ export async function remediateOrphans(
 export async function validateBeads(
   pi: ExtensionAPI,
   cwd: string
-): Promise<{ ok: boolean; orphaned: string[]; cycles: boolean; warnings: string[]; shallowBeads: { id: string; reason: string }[] }> {
+): Promise<{ ok: boolean; orphaned: string[]; cycles: boolean; warnings: string[]; shallowBeads: { id: string; reason: string }[]; templateIssues: TemplateHygieneIssue[] }> {
   let cycles = false;
   let orphaned: string[] = [];
   const warnings: string[] = [];
   const shallowBeads: { id: string; reason: string }[] = [];
+  const templateIssues: TemplateHygieneIssue[] = [];
 
   // Try bv insights first for richer analysis
   const insights = await bvInsights(pi, cwd);
@@ -365,9 +373,13 @@ export async function validateBeads(
     // Fallback: manual cycle/orphan detection
     try {
       const cycleResult = await pi.exec("br", ["dep", "cycles"], { timeout: 10000, cwd });
-      if (cycleResult.stdout.toLowerCase().includes("cycle")) {
-        cycles = true;
-      }
+      const cycleOutput = cycleResult.stdout.toLowerCase();
+      const confirmsNoCycles =
+        cycleOutput.includes("no dependency cycles detected") ||
+        cycleOutput.includes("all dependency checks passed");
+      const indicatesCycles =
+        /detected\s+cycle|cycle\s+detected|dependency\s+cycles\s+detected/.test(cycleOutput);
+      cycles = !confirmsNoCycles && indicatesCycles;
     } catch {
       // Non-fatal
     }
@@ -396,25 +408,79 @@ export async function validateBeads(
     }
   }
 
-  // Detect shallow beads
+  // Detect shallow beads and template hygiene problems
   try {
     const beadsToCheck = await readBeads(pi, cwd);
     for (const bead of beadsToCheck) {
-      if (bead.status !== "open" && bead.status !== "in_progress") continue;
       const desc = bead.description ?? "";
-      if (desc.length === 0) {
-        shallowBeads.push({ id: bead.id, reason: "Empty description" });
-      } else if (desc.length < 50) {
-        shallowBeads.push({ id: bead.id, reason: `Description too short (${desc.length} chars)` });
-      } else if (!desc.includes("### Files:") && !/^[-*]\s+(?:src|lib|test|tests|dist|docs)\/\S+/m.test(desc)) {
-        shallowBeads.push({ id: bead.id, reason: "Missing ### Files: section" });
+      if (bead.status === "open" || bead.status === "in_progress") {
+        if (desc.length === 0) {
+          shallowBeads.push({ id: bead.id, reason: "Empty description" });
+        } else if (desc.length < 50) {
+          shallowBeads.push({ id: bead.id, reason: `Description too short (${desc.length} chars)` });
+        } else if (!desc.includes("### Files:") && !/^[-*]\s+(?:src|lib|test|tests|dist|docs)\/\S+/m.test(desc)) {
+          shallowBeads.push({ id: bead.id, reason: "Missing ### Files: section" });
+        }
+      }
+
+      if (bead.status !== "open") continue;
+
+      const lines = desc.split("\n");
+      const hasFilesSection = desc.includes("### Files:") || /^[-*]\s+(?:src|lib|test|tests|dist|docs)\/\S+/m.test(desc);
+      const acceptanceCriteriaCount = lines.filter((line) => line.trim().startsWith("- [ ]") || line.trim().startsWith("- [x]")).length;
+      const templateSignals = new Set<TemplateHygieneIssue["issueType"]>();
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+
+        if (/^\[?use template:/i.test(line)) {
+          templateSignals.add("raw-template-marker");
+          templateIssues.push({
+            beadId: bead.id,
+            issueType: "raw-template-marker",
+            excerpt: line,
+            reason: `bead ${bead.id} has a raw template marker instead of expanded instructions`,
+          });
+          continue;
+        }
+
+        if (/^see template\b/i.test(line) || /^use the template\b/i.test(line)) {
+          templateSignals.add("template-shorthand");
+          templateIssues.push({
+            beadId: bead.id,
+            issueType: "template-shorthand",
+            excerpt: line,
+            reason: `bead ${bead.id} uses template shorthand without expanded implementation details`,
+          });
+        }
+      }
+
+      for (const match of desc.matchAll(/{{\s*\w+\s*}}|<[A-Z][A-Z0-9_]{2,}>/g)) {
+        const excerpt = match[0];
+        templateSignals.add("unresolved-placeholder");
+        templateIssues.push({
+          beadId: bead.id,
+          issueType: "unresolved-placeholder",
+          excerpt,
+          reason: `bead ${bead.id} still contains an unresolved template placeholder`,
+        });
+      }
+
+      if (templateSignals.size > 0 && (!hasFilesSection || acceptanceCriteriaCount < 2)) {
+        templateIssues.push({
+          beadId: bead.id,
+          issueType: "template-missing-structure",
+          excerpt: !hasFilesSection ? "missing ### Files:" : `acceptance criteria count: ${acceptanceCriteriaCount}`,
+          reason: `bead ${bead.id} has template artifacts but is missing concrete file scope or enough acceptance criteria`,
+        });
       }
     }
   } catch {
     // Non-fatal
   }
 
-  return { ok: !cycles && orphaned.length === 0, orphaned, cycles, warnings, shallowBeads };
+  return { ok: !cycles && orphaned.length === 0 && templateIssues.length === 0, orphaned, cycles, warnings, shallowBeads, templateIssues };
 }
 
 /**
@@ -445,10 +511,17 @@ export async function qualityCheckBeads(
 
   if (openBeads.length === 0) return { passed: true, failures };
 
-  // Check cycles
+  // Check cycles and template hygiene
   const validation = await validateBeads(pi, cwd);
   if (validation.cycles) {
     failures.push({ beadId: "*", check: "no-cycles", reason: "Dependency cycles detected in bead graph" });
+  }
+  for (const issue of validation.templateIssues) {
+    failures.push({
+      beadId: issue.beadId,
+      check: "template-hygiene",
+      reason: `${issue.issueType}: ${issue.excerpt}`,
+    });
   }
 
   // Build dep graph for connectivity check

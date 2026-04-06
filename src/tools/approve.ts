@@ -547,9 +547,12 @@ export function registerApproveTool(oc: OrchestratorContext) {
       const shallowWarning = validation.shallowBeads?.length
         ? `\n📝 Shallow beads: ${validation.shallowBeads.map((s) => `${s.id} (${s.reason})`).join(", ")}`
         : "";
+      const templateWarning = validation.templateIssues?.length
+        ? `\n🧩 Template hygiene: ${validation.templateIssues.map((issue) => `${issue.beadId} (${issue.issueType}: ${issue.excerpt})`).join(", ")}`
+        : "";
       const validationWarning = (!validation.ok
         ? `\n\n⚠️ Validation issues: ${validation.cycles ? "dependency cycles detected" : ""} ${validation.orphaned.length > 0 ? `orphaned: ${validation.orphaned.join(", ")}` : ""}`
-        : "") + bvWarnings + shallowWarning;
+        : "") + bvWarnings + shallowWarning + templateWarning;
 
       const insights = await bvInsights(oc.pi, ctx.cwd);
       const bottleneckWarning = insights?.Bottlenecks?.length

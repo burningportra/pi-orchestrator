@@ -13,6 +13,7 @@ import {
   researchDeepenPrompt,
   researchInversionPrompt,
   discoveryInstructions,
+  beadCreationPrompt,
   planDocumentPrompt,
   planRefinementPrompt,
   freshPlanRefinementPrompt,
@@ -26,6 +27,7 @@ import {
   pickRefinementModel,
   implementerInstructions,
 } from "./prompts.js";
+import { formatTemplatesForPrompt } from "./bead-templates.js";
 import type { Bead, BeadResult } from "./types.js";
 
 // ─── Convergence Score ──────────────────────────────────────
@@ -454,6 +456,29 @@ describe("pickRefinementModel", () => {
   });
 });
 
+describe("beadCreationPrompt", () => {
+  it("includes a template library section and shared template listing", () => {
+    const prompt = beadCreationPrompt("Build feature X", "repo context", []);
+    expect(prompt).toContain("## Template Library");
+    expect(prompt).toContain(formatTemplatesForPrompt());
+    expect(prompt).toContain("Templates are optional shortcuts");
+  });
+
+  it("warns against lazy template references in final beads", () => {
+    const prompt = beadCreationPrompt("Build feature X", "repo context", []);
+    expect(prompt).toContain("[Use template: ...]");
+    expect(prompt).toContain("see template");
+    expect(prompt).toContain("{{placeholderName}}");
+  });
+
+  it("shows a fully expanded example, not just substitution steps", () => {
+    const prompt = beadCreationPrompt("Build feature X", "repo context", []);
+    // The example should contain concrete expanded text, not a description of what to do
+    expect(prompt).toContain("Implement a new API endpoint for /api/users");
+    expect(prompt).toContain("the final text is fully expanded");
+  });
+});
+
 describe("planToBeadsPrompt", () => {
   const profile = {
     name: "test-repo",
@@ -487,6 +512,27 @@ describe("planToBeadsPrompt", () => {
     expect(prompt).toContain('see the plan');
     expect(prompt).toContain('refer to plan');
     expect(prompt).toContain('per approved plan');
+  });
+
+  it("includes a template library section and shared template listing", () => {
+    const prompt = planToBeadsPrompt("plans/feature-x.md", "Build feature X", profile as any);
+    expect(prompt).toContain("## Template Library");
+    expect(prompt).toContain(formatTemplatesForPrompt());
+    expect(prompt).toContain("The plan is your primary source");
+    expect(prompt).toContain("Templates are optional");
+  });
+
+  it("warns against lazy template references in final output", () => {
+    const prompt = planToBeadsPrompt("plans/feature-x.md", "Build feature X", profile as any);
+    expect(prompt).toContain("[Use template: ...]");
+    expect(prompt).toContain("see template");
+    expect(prompt).toContain("{{placeholderName}}");
+  });
+
+  it("shows a fully expanded example with plan context", () => {
+    const prompt = planToBeadsPrompt("plans/feature-x.md", "Build feature X", profile as any);
+    expect(prompt).toContain("Implement a new API endpoint for /api/users");
+    expect(prompt).toContain("the final text is fully expanded with plan context");
   });
 });
 

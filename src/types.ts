@@ -181,6 +181,33 @@ export interface BeadReview {
   revisionInstructions?: string;
 }
 
+export interface BeadTemplatePlaceholder {
+  name: string;
+  description: string;
+  example: string;
+  required: boolean;
+}
+
+export interface BeadTemplateExample {
+  description: string;
+}
+
+export interface BeadTemplate {
+  id: string;
+  label: string;
+  summary: string;
+  descriptionTemplate: string;
+  placeholders: BeadTemplatePlaceholder[];
+  acceptanceCriteria: string[];
+  filePatterns: string[];
+  dependencyHints?: string;
+  examples: BeadTemplateExample[];
+}
+
+export type ExpandTemplateResult =
+  | { success: true; description: string }
+  | { success: false; error: string };
+
 // ─── Discovery ───────────────────────────────────────────────
 export interface IdeaScores {
   useful: number;     // 1-5: solves a real, frequent pain

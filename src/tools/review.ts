@@ -471,7 +471,10 @@ export function registerReviewTool(oc: OrchestratorContext) {
             const allBeads = await readBeads(oc.pi, ctx.cwd);
             const summary = getBeadsSummary(allBeads);
             const warningsStr = validation.warnings?.length ? `\n⚠️ ${validation.warnings.join("\n⚠️ ")}` : "";
-            beadsReviewInfo = `\n\n**Beads:** ${summary}${!validation.ok ? `\n⚠️ ${validation.cycles ? "Cycles detected" : ""} ${validation.orphaned.length > 0 ? `Orphaned: ${validation.orphaned.join(", ")}` : ""}` : ""}${warningsStr}`;
+            const templateStr = validation.templateIssues?.length
+              ? `\n⚠️ Template hygiene: ${validation.templateIssues.map((issue) => `${issue.beadId} (${issue.issueType}: ${issue.excerpt})`).join(", ")}`
+              : "";
+            beadsReviewInfo = `\n\n**Beads:** ${summary}${!validation.ok ? `\n⚠️ ${validation.cycles ? "Cycles detected" : ""} ${validation.orphaned.length > 0 ? `Orphaned: ${validation.orphaned.join(", ")}` : ""}` : ""}${warningsStr}${templateStr}`;
           }
 
           // Clean up worktrees and tender (safe cleanup preserves uncommitted work)
