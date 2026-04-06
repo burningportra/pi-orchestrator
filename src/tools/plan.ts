@@ -9,6 +9,7 @@ import {
   competingPlanAgentPrompt,
   planSynthesisPrompt,
   planDocumentPrompt,
+  DEEP_PLAN_MODELS,
 } from "../prompts.js";
 
 function slugifyGoal(goal: string): string {
@@ -72,17 +73,17 @@ export function registerPlanTool(oc: OrchestratorContext) {
       const planners: DeepPlanAgent[] = [
         {
           name: "correctness",
-          model: "openai/gpt-5",
+          model: DEEP_PLAN_MODELS.correctness,
           task: competingPlanAgentPrompt("correctness", goal, profile, scanResult),
         },
         {
           name: "robustness",
-          model: "anthropic/claude-sonnet-4.5",
+          model: DEEP_PLAN_MODELS.robustness,
           task: competingPlanAgentPrompt("robustness", goal, profile, scanResult),
         },
         {
           name: "ergonomics",
-          model: "google/gemini-2.5-pro",
+          model: DEEP_PLAN_MODELS.ergonomics,
           task: competingPlanAgentPrompt("ergonomics", goal, profile, scanResult),
         },
       ];
@@ -90,13 +91,20 @@ export function registerPlanTool(oc: OrchestratorContext) {
       const planResults = await runDeepPlanAgents(oc.pi, ctx.cwd, planners, signal);
       const successfulPlans = planResults.filter((result) => result.exitCode === 0 && result.plan.trim().length > 0);
       if (successfulPlans.length === 0) {
-        throw new Error("All competing planning agents failed.");
+        const failures = planResults
+          .map((r) => `  - ${r.name} (${r.model}): exit=${r.exitCode}${r.error ? `, error=${r.error}` : ""}${r.plan ? `, output=${r.plan.slice(0, 200)}` : ""}`)
+          .join("\n");
+        throw new Error(
+          `All competing planning agents failed. Details:\n${failures}\n\n` +
+          `This usually means the model IDs are not available in your pi configuration. ` +
+          `Try \`orch_plan({ mode: "single_model" })\` as a fallback, or check \`/models\` for available model IDs.`
+        );
       }
 
       const synthesisResult = await runDeepPlanAgents(
         oc.pi,
         ctx.cwd,
-        [{ name: "synthesis", model: "openai/gpt-5", task: planSynthesisPrompt(successfulPlans) }],
+        [{ name: "synthesis", model: DEEP_PLAN_MODELS.synthesis, task: planSynthesisPrompt(successfulPlans) }],
         signal
       );
       const synthesizedPlan = synthesisResult[0]?.plan?.trim();

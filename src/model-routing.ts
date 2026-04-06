@@ -11,6 +11,7 @@
  */
 
 import type { Bead } from "./types.js";
+import { MODEL_ROUTING_TIERS } from "./prompts.js";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -36,16 +37,16 @@ export interface ModelTier {
 
 const DEFAULT_TIERS: Record<BeadComplexity, ModelTier> = {
   simple: {
-    implementation: "anthropic/claude-haiku-4",
-    review: "anthropic/claude-sonnet-4-5",
+    implementation: MODEL_ROUTING_TIERS.simple.implementation,
+    review: MODEL_ROUTING_TIERS.simple.review,
   },
   medium: {
-    implementation: "anthropic/claude-sonnet-4-5",
-    review: "openai/gpt-5",
+    implementation: MODEL_ROUTING_TIERS.medium.implementation,
+    review: MODEL_ROUTING_TIERS.medium.review,
   },
   complex: {
-    implementation: "anthropic/claude-opus-4",
-    review: "google/gemini-2.5-pro",
+    implementation: MODEL_ROUTING_TIERS.complex.implementation,
+    review: MODEL_ROUTING_TIERS.complex.review,
   },
 };
 

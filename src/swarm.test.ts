@@ -47,12 +47,13 @@ describe("recommendComposition", () => {
     expect(comp.total).toBe(3);
   });
 
-  it("includes diverse models", () => {
+  it("includes diverse models from centralized constants", () => {
     const comp = recommendComposition(100);
     const models = comp.models.map((m) => m.model);
-    expect(models).toContain("anthropic/claude-sonnet-4-5");
-    expect(models).toContain("openai/gpt-5");
-    expect(models).toContain("google/gemini-2.5-pro");
+    // Should use the centralized SWARM_MODELS constants
+    expect(models).toContain("anthropic/claude-opus-4-6");
+    expect(models).toContain("openai-codex/gpt-5.4");
+    expect(models).toContain("anthropic/claude-haiku-4-5");
   });
 
   it("includes rationale with bead count", () => {

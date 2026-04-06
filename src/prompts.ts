@@ -103,7 +103,7 @@ export function orchestratorSystemPrompt(
 The orchestrator uses **beads** for task lifecycle and **agent-mail** for inter-agent messaging and file reservations.
 
 ### Beads (task tracking)
-- Create beads via \`br create "Title" -t task -p <priority> --description "..."\` in bash
+- Create beads via \`br create "Title" -t task -p <priority> -d "..."\` in bash
 - Set dependencies via \`br dep add <child-id> <parent-id>\`
 - Bead status tracks implementation: open → in_progress → closed
 - \`br sync --flush-only\` persists state to .beads/ (git-visible JSONL)
@@ -247,7 +247,7 @@ ${constraints.length > 0 ? constraints.map((c) => `- ${c}`).join("\n") : "None s
 ### Instructions
 For each bead, run in bash:
 \`\`\`
-br create "Title" -t task -p <priority 1-5> --description "Detailed description including:
+br create "Title" -t task -p <priority 1-5> -d "Detailed description including:
 - What to implement
 - Why it matters
 - Acceptance criteria (as checklist):
@@ -263,11 +263,13 @@ br dep add <child-id> <parent-id>
 
 For complex beads that would take more than a few hours, break them into subtasks:
 \`\`\`
-br create "Subtask title" -t task -p <priority> --description "..."
+br create "Subtask title" -t task -p <priority> -d "..."
 br dep add <subtask-id> <parent-id> --type parent-child
 \`\`\`
 
 Each subtask should be a single coherent unit of work that one agent can complete independently.
+
+**\`br create\` flag reference**: \`-d\` = description (long: \`--description\`), \`-t\` = type, \`-p\` = priority. Do NOT abbreviate to \`--desc\` — it does not exist and will error.
 
 ### Requirements
 - Make beads self-documenting - include background, reasoning, and anything a future agent needs
@@ -374,7 +376,7 @@ The approved plan lives at: \`${planPath}\`
 ### Bead Format
 For each bead, run in bash:
 \`\`\`
-br create "Title" -t task -p <priority 1-5> --description "Detailed description including:
+br create "Title" -t task -p <priority 1-5> -d "Detailed description including:
 - What to implement
 - Why it matters
 - Key context pulled forward from the approved plan
@@ -453,7 +455,7 @@ ${roundInfo}${changesInfo}Check over each bead super carefully via \`br list\` a
 8. Could a fresh agent implement this bead without ANY external context? If not, what background/reasoning is missing?
 
 ### Actions
-- Revise with \`br update <id> --description "..."\` for any improvements
+- Revise with \`br update <id> -d "..."\` for any improvements
 - Validate: \`br dep cycles\` (must show no cycles)
 
 ### Rules
@@ -482,7 +484,7 @@ You are reviewing beads for a project with NO prior context. This is deliberate 
    - Are acceptance criteria specific and testable?
    - Are dependencies correct?
    - Could the architecture be improved?
-3. Make improvements directly via \`br update <id> --description "..."\`
+3. Make improvements directly via \`br update <id> -d "..."\`
 4. Check for missing beads and create them with \`br create\`
 5. Run \`br dep cycles\` to verify no cycles
 
@@ -876,7 +878,7 @@ Reread the beads carefully. I am POSITIVE that you missed or screwed up at least
 
 For each issue found:
 - State the bead ID and the specific problem
-- Fix it directly via \`br update <id> --description "..."\`
+- Fix it directly via \`br update <id> -d "..."\`
 - Or create missing beads via \`br create\`
 
 Do NOT be satisfied with finding only a few issues. Keep looking. Use ultrathink.
@@ -996,14 +998,52 @@ cd ${cwd}`;
 /** Stagger delay configuration for thundering herd prevention. */
 export const SWARM_STAGGER_DELAY_MS = 30_000; // 30 seconds between agent starts
 
+// ─── Centralized Model IDs ──────────────────────────────────
+// All model references go through these constants so typos and
+// provider mismatches are caught in one place.
+//
+// Format: "provider/modelId" as accepted by `pi --model`.
+// Update these when new model versions ship or providers change.
+
+/** Models used by the multi-model deep planning agents. */
+export const DEEP_PLAN_MODELS = {
+  correctness: "openai-codex/gpt-5.4",
+  robustness: "anthropic/claude-opus-4-6",
+  ergonomics: "google-antigravity/gemini-3.1-pro-high",
+  synthesis: "openai-codex/gpt-5.4",
+} as const;
+
+/** Models used by the swarm launcher. */
+export const SWARM_MODELS = {
+  opus: "anthropic/claude-opus-4-6",
+  gpt: "openai-codex/gpt-5.4",
+  haiku: "anthropic/claude-haiku-4-5",
+} as const;
+
+/** Models used by cost-aware model routing tiers. */
+export const MODEL_ROUTING_TIERS = {
+  simple: {
+    implementation: "anthropic/claude-haiku-4-5",
+    review: "anthropic/claude-opus-4-6",
+  },
+  medium: {
+    implementation: "anthropic/claude-opus-4-6",
+    review: "openai-codex/gpt-5.4",
+  },
+  complex: {
+    implementation: "anthropic/claude-opus-4-6",
+    review: "openai-codex/gpt-5.4",
+  },
+} as const;
+
 /**
  * Model rotation for refinement rounds.
  * Different models have different blind spots; rotating prevents anchoring.
  */
 export const REFINEMENT_MODELS = [
-  "anthropic/claude-sonnet-4-5",
-  "openai/gpt-5",
-  "google/gemini-2.5-pro",
+  "anthropic/claude-opus-4-6",
+  "openai-codex/gpt-5.4",
+  "google-antigravity/gemini-3.1-pro-high",
 ] as const;
 
 /** Pick a refinement model based on round number (rotates through available models). */

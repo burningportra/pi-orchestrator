@@ -5,7 +5,7 @@
  * and SwarmTender monitoring integration.
  */
 
-import { swarmMarchingOrders, SWARM_STAGGER_DELAY_MS } from "./prompts.js";
+import { swarmMarchingOrders, SWARM_STAGGER_DELAY_MS, SWARM_MODELS } from "./prompts.js";
 import type { Bead } from "./types.js";
 import type { AgentStatus } from "./tender.js";
 
@@ -41,9 +41,9 @@ export function recommendComposition(openBeadCount: number): SwarmComposition {
     return {
       total: 10,
       models: [
-        { model: "anthropic/claude-sonnet-4-5", count: 4 },
-        { model: "openai/gpt-5", count: 4 },
-        { model: "google/gemini-2.5-pro", count: 2 },
+        { model: SWARM_MODELS.opus, count: 4 },
+        { model: SWARM_MODELS.gpt, count: 4 },
+        { model: SWARM_MODELS.haiku, count: 2 },
       ],
       rationale: `${openBeadCount} open beads — large project, full swarm recommended`,
     };
@@ -52,9 +52,9 @@ export function recommendComposition(openBeadCount: number): SwarmComposition {
     return {
       total: 8,
       models: [
-        { model: "anthropic/claude-sonnet-4-5", count: 3 },
-        { model: "openai/gpt-5", count: 3 },
-        { model: "google/gemini-2.5-pro", count: 2 },
+        { model: SWARM_MODELS.opus, count: 3 },
+        { model: SWARM_MODELS.gpt, count: 3 },
+        { model: SWARM_MODELS.haiku, count: 2 },
       ],
       rationale: `${openBeadCount} open beads — medium project, moderate swarm`,
     };
@@ -62,9 +62,9 @@ export function recommendComposition(openBeadCount: number): SwarmComposition {
   return {
     total: 3,
     models: [
-      { model: "anthropic/claude-sonnet-4-5", count: 1 },
-      { model: "openai/gpt-5", count: 1 },
-      { model: "google/gemini-2.5-pro", count: 1 },
+      { model: SWARM_MODELS.opus, count: 1 },
+      { model: SWARM_MODELS.gpt, count: 1 },
+      { model: SWARM_MODELS.haiku, count: 1 },
     ],
     rationale: `${openBeadCount} open beads — small project, minimal swarm`,
   };
