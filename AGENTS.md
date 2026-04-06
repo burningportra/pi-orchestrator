@@ -4,12 +4,32 @@ This file provides guidance for AI coding agents working in this repository.
 
 ## Project Context
 pi-orchestrator is a pi extension (TypeScript) that provides `/orchestrate` — scan, plan, implement, review in one command. Key files:
-- src/beads.ts — bead helpers (readBeads, validateBeads, etc.)
+- src/beads.ts — bead helpers (readBeads, validateBeads, template hygiene checks, etc.)
+- src/bead-templates.ts — built-in bead template library
 - src/tools/approve.ts — bead approval + refinement flow  
 - src/tools/review.ts — per-bead review + next-bead selection
-- src/prompts.ts — all prompt templates
-- src/types.ts — TypeScript interfaces
+- src/prompts.ts — all prompt templates and bead-planning instructions
+- src/types.ts — TypeScript interfaces, including bead template types
 - src/deep-plan.ts — multi-model planning agents
+
+## Bead template workflow
+
+The bead template library exists to speed up planning for a few common bead shapes while keeping final beads readable by a fresh agent. Current built-in templates are:
+- `add-api-endpoint`
+- `refactor-module`
+- `add-tests`
+
+Templates are optional scaffolds, not required syntax. Use them only as drafting aids, then expand them into a normal self-contained bead description before creating or approving the bead.
+
+Correct usage pattern:
+- Start from a built-in template
+- Fill placeholders such as `{{endpointPath}}`, `{{moduleName}}`, and `{{testFile}}`
+- Create a normal kebab-case bead id such as `add-users-endpoint`
+- Ensure the final bead text includes the real rationale, acceptance criteria, and `### Files:` section directly
+
+Do not leave template shorthand in final beads. Validation in `src/beads.ts` rejects unresolved artifacts such as `[Use template: ...]`, `see template`, and raw `{{placeholderName}}` markers. Final beads must be fully expanded and self-contained.
+
+To add a new template, append an entry to `BUILTIN_TEMPLATES` in `src/bead-templates.ts`, add a matching expansion case to `src/_verify-templates.test.ts` (which proves example text matches expansion output), and run `npm test`.
 
 ## Build & Test
 ```bash

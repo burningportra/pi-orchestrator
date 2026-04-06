@@ -159,6 +159,20 @@ Before implementation begins, a deduplication prompt scans for overlapping beads
 
 Dependencies are managed via `br dep add <child> <parent>`. The `br ready` command returns beads whose dependencies are all satisfied. Cycle detection is handled by the br CLI.
 
+#### Bead Template Library
+
+The planner also exposes a small built-in template library from `src/bead-templates.ts` for common bead shapes:
+
+- `add-api-endpoint`
+- `refactor-module`
+- `add-tests`
+
+These templates exist to improve drafting consistency for recurring work. They are optional scaffolds, not a second bead format. The final bead still has to be fully expanded, self-contained, and ready for a fresh agent without any hidden template context.
+
+A correct draft can start with placeholders such as `{{endpointPath}}`, `{{moduleName}}`, or `{{testFile}}`, but the bead that gets created must resolve them all and use a normal kebab-case bead id such as `add-users-endpoint`.
+
+`src/prompts.ts` tells planners to expand templates before calling `br create`, and `src/beads.ts` validates the result. Open beads are rejected if they still contain template artifacts like `[Use template: ...]`, `see template`, or unresolved `{{placeholderName}}` markers.
+
 ### 3. Implementation
 
 #### Bead-Based Execution
@@ -289,9 +303,10 @@ src/
 ├── index.ts           # Extension runtime: commands, tools, and orchestrator state machine
 ├── scan.ts            # First-class scan contract + provider entrypoint
 ├── profiler.ts        # Built-in repo profiling (find, git, grep) + detection
-├── prompts.ts         # Flywheel-derived prompt templates
-├── types.ts           # Shared TypeScript types: scan, state, beads, reviews
-├── beads.ts           # br CLI wrapper: list, ready, done, create beads + quality checks
+├── prompts.ts         # Flywheel-derived prompt templates + template-aware bead planning instructions
+├── types.ts           # Shared TypeScript types: scan, state, beads, reviews, templates
+├── bead-templates.ts  # Built-in bead template library and placeholder expansion
+├── beads.ts           # br CLI wrapper: list, ready, done, create beads + quality/template checks
 ├── bead-review.ts     # Cross-model bead review via alternative AI model
 ├── commands.ts        # Command registration (/orchestrate, /orchestrate-status, /orchestrate-reset)
 ├── coordination.ts    # Coordination backend detection (beads, sophia, agent-mail)

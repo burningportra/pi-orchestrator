@@ -29,6 +29,7 @@ You: /orchestrate
 
 - **Multi-model planning** — Have 3 different AI models compete on your plan, then synthesize the best parts
 - **Bead-based execution** — Tasks created as beads with dependency tracking via br CLI
+- **Bead template library** — Optional scaffolds for common bead shapes: `add-api-endpoint`, `refactor-module`, and `add-tests`
 - **4-agent review** — Fresh-eyes, polish, ergonomics, and reality-check reviewers run in parallel
 - **CASS memory** — Procedural memory via [cm CLI](https://github.com/Dicklesworthstone/cass_memory_system) — relevance-scored rules, anti-patterns, and cross-session learning
 - **Coordination backends** — Beads (br CLI), Sophia, and agent-mail for multi-agent coordination
@@ -55,7 +56,37 @@ See [docs/setup.md](docs/setup.md) for detailed configuration.
 ## Learn more
 
 - [Setup & Configuration](docs/setup.md) — prerequisites, ccc, subscriptions, Sophia
-- [Architecture](docs/architecture.md) — scan pipeline, context priority, and workflow internals
+- [Architecture](docs/architecture.md) — scan pipeline, context priority, bead templates, and workflow internals
+
+## Bead template library
+
+The planner includes a small built-in bead template library to speed up drafting common tasks. It exists to give the LLM a reliable starting structure for recurring work without making templates mandatory.
+
+Built-in templates:
+- `add-api-endpoint`
+- `refactor-module`
+- `add-tests`
+
+Templates are optional scaffolds. They help shape a first draft, but the final bead must be fully expanded and self-contained before it is created. Final beads should carry forward the real rationale, acceptance criteria, and `### Files:` scope directly in the description.
+
+Correct usage example:
+
+```txt
+Start from template add-api-endpoint with placeholders:
+- {{endpointPath}} = /api/users
+- {{moduleName}} = user-management
+- {{endpointPurpose}} = return a filtered user list
+- {{httpMethod}} = GET
+- {{implementationFile}} = src/api/users.ts
+- {{testFile}} = src/api/users.test.ts
+
+Final bead id: add-users-endpoint
+Final bead title: Add users endpoint
+```
+
+That placeholder syntax is only for drafting. The bead that gets created must resolve every `{{placeholderName}}` and must not contain template shorthand like `[Use template: ...]` or `see template`.
+
+Validation in `src/beads.ts` enforces this hygiene. Open beads fail validation if they still contain unresolved template artifacts such as `[Use template: ...]`, `see template`, or raw `{{placeholderName}}` markers.
 
 ## Development
 
