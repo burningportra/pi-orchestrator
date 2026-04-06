@@ -13,3 +13,4 @@ dist/
 
 # bv (beads viewer) local config and caches
 .bv/
+/.pi/orchestrator-feedback
