@@ -111,7 +111,7 @@ The orchestrator uses **beads** for task lifecycle and **agent-mail** for inter-
 ### Agent Mail (coordination)
 - Each parallel agent bootstraps with \`macro_start_session\` using this repo's absolute path as \`project_key\`
 - File reservations prevent conflicts: \`file_reservation_paths(project_key, agent_name, paths, ttl_seconds=3600, exclusive=true)\`
-- Thread ID = bead ID — all progress updates, review findings, and handoffs are scoped to the task
+- Thread ID = bead ID - all progress updates, review findings, and handoffs are scoped to the task
 - Check inbox with \`fetch_inbox\` before advancing; urgent messages may require attention
 - Release reservations when done: \`release_file_reservations(project_key, agent_name)\`
 
@@ -130,9 +130,9 @@ The orchestrator uses Sophia for change request and task management. When beads 
 ## Parallel Execution with Worktree Isolation
 When beads are independent (no shared files), use \`parallel_subagents\` with git worktree isolation:
 
-1. The orchestrator creates a **WorktreePool** — each parallel bead gets its own git worktree checkout
+1. The orchestrator creates a **WorktreePool** - each parallel bead gets its own git worktree checkout
 2. For each parallel group, spawn sub-agents via \`parallel_subagents\`, passing the worktree path as the working directory
-3. Each sub-agent works in isolation — no file conflicts between parallel beads
+3. Each sub-agent works in isolation - no file conflicts between parallel beads
 4. After all agents in a group complete, worktree changes are merged back to the main branch sequentially
 5. Worktrees are cleaned up after merge
 
@@ -157,11 +157,11 @@ Each bead goes through multiple review passes:
 2. **Adversarial review**: A second pass with fresh eyes checks for bugs, oversights, ergonomics issues
 3. **Cross-agent review**: After ALL beads complete, an independent reviewer sub-agent audits the full diff
 
-This mirrors the "check over everything again with fresh eyes" pattern — don't skip it.
+This mirrors the "check over everything again with fresh eyes" pattern - don't skip it.
 
 ## Post-Completion
 After all beads and reviews pass, the orchestrator offers:
-- **Polish pass**: De-slopify — improve clarity, remove generic AI patterns, maximize ergonomics
+- **Polish pass**: De-slopify - improve clarity, remove generic AI patterns, maximize ergonomics
 - **Commit strategy**: Group changes into logical commits with detailed messages
 - **Skill extraction**: Check if the work product should become a reusable skill
 
@@ -192,19 +192,19 @@ export function discoveryInstructions(profile: RepoProfile, scanResult?: ScanRes
 ${repoContext}
 
 ## Process (do this internally before outputting)
-1. **Ground yourself** — study the repo profile, scan findings, TODOs, commits, and any memory context carefully
-2. **Generate broadly** — come up with at least 25–30 candidate ideas (do NOT output these)
+1. **Ground yourself** - study the repo profile, scan findings, TODOs, commits, and any memory context carefully
+2. **Generate broadly** - come up with at least 25-30 candidate ideas (do NOT output these)
 3. **Score each candidate** against these 5 axes (1-5 scale):
-   - **Useful** (2× weight) — does it solve a real, frequent pain?
-   - **Pragmatic** (2× weight) — is it realistic to build in hours/days?
-   - **Accretive** (1.5× weight) — does it clearly add value beyond what exists?
-   - **Robust** (1× weight) — will it handle edge cases and work reliably?
-   - **Ergonomic** (1× weight) — does it reduce friction or cognitive load?
-4. **Cut** — remove anything scoring <3 average, anything duplicative, anything already addressed
-5. **Rank** — sort by weighted score
-6. **Merge overlaps** — if two ideas are variants of the same thing, combine into one stronger idea
-7. **Balance** — ensure at least 2 different categories in the top 5
-8. **Tier** — label your best 5 as tier "top", next 5-10 as tier "honorable"
+   - **Useful** (2× weight) - does it solve a real, frequent pain?
+   - **Pragmatic** (2× weight) - is it realistic to build in hours/days?
+   - **Accretive** (1.5× weight) - does it clearly add value beyond what exists?
+   - **Robust** (1× weight) - will it handle edge cases and work reliably?
+   - **Ergonomic** (1× weight) - does it reduce friction or cognitive load?
+4. **Cut** - remove anything scoring <3 average, anything duplicative, anything already addressed
+5. **Rank** - sort by weighted score
+6. **Merge overlaps** - if two ideas are variants of the same thing, combine into one stronger idea
+7. **Balance** - ensure at least 2 different categories in the top 5
+8. **Tier** - label your best 5 as tier "top", next 5-10 as tier "honorable"
 
 ## Output requirements
 For each surviving idea, provide:
@@ -214,10 +214,10 @@ For each surviving idea, provide:
 - **category**: feature | refactor | docs | dx | performance | reliability | security | testing
 - **effort**: low | medium | high
 - **impact**: low | medium | high
-- **rationale**: 2-3 sentences explaining why this beat other candidates. Cite specific repo evidence. Do NOT write generic rationale like "this would improve the project" — explain what specific signals support this and what alternatives you considered.
+- **rationale**: 2-3 sentences explaining why this beat other candidates. Cite specific repo evidence. Do NOT write generic rationale like "this would improve the project" - explain what specific signals support this and what alternatives you considered.
 - **tier**: "top" or "honorable"
-- **sourceEvidence**: array of strings — what repo signals prompted this (e.g. "TODO in src/scan.ts:45", "ccc finding: no error recovery", "recent commits all touch prompts.ts")
-- **scores**: { useful, pragmatic, accretive, robust, ergonomic } — your 1-5 ratings
+- **sourceEvidence**: array of strings - what repo signals prompted this (e.g. "TODO in src/scan.ts:45", "ccc finding: no error recovery", "recent commits all touch prompts.ts")
+- **scores**: { useful, pragmatic, accretive, robust, ergonomic } - your 1-5 ratings
 - **risks**: (optional) known downsides
 - **synergies**: (optional) ids of complementary ideas
 
@@ -269,8 +269,8 @@ br dep add <subtask-id> <parent-id> --type parent-child
 Each subtask should be a single coherent unit of work that one agent can complete independently.
 
 ### Requirements
-- Make beads self-documenting — include background, reasoning, and anything a future agent needs
-- The beads should be so detailed that a fresh agent never needs to consult back to the original goal. Include relevant background, reasoning/justification, considerations — anything a future agent needs about goals, intentions, and thought process.
+- Make beads self-documenting - include background, reasoning, and anything a future agent needs
+- The beads should be so detailed that a fresh agent never needs to consult back to the original goal. Include relevant background, reasoning/justification, considerations - anything a future agent needs about goals, intentions, and thought process.
 - Each bead MUST include a \`### Files:\` section listing files to create/modify
 - Order by priority: foundations first, integration last
 - Set dependency edges so \`br ready\` returns the correct parallel groups
@@ -293,7 +293,7 @@ export function formatPlanToBeadAuditWarnings(audit: PlanToBeadAudit): string {
     lines.push(
       "Uncovered plan sections:",
       ...audit.uncoveredSections.slice(0, 5).map((section) =>
-        `- **${section.heading}**${section.summary ? ` — ${section.summary}` : ""}`
+        `- **${section.heading}**${section.summary ? ` - ${section.summary}` : ""}`
       )
     );
   }
@@ -416,7 +416,7 @@ Use ultrathink.`;
 export function freshContextRefinementPrompt(cwd: string, goal: string, roundNumber: number): string {
   return `## Fresh-Context Bead Refinement (Round ${roundNumber + 1})
 
-You are reviewing beads for a project with NO prior context. This is deliberate — fresh eyes catch what anchored reviewers miss.
+You are reviewing beads for a project with NO prior context. This is deliberate - fresh eyes catch what anchored reviewers miss.
 
 **Goal:** ${goal}
 
@@ -513,7 +513,7 @@ ${done}/${total} beads completed.
 
 ${beads.map((b) => {
   const r = results.find((r) => r.beadId === b.id);
-  return `- Bead ${b.id}: ${r?.status ?? "not started"} — ${b.title}: ${b.description}${r?.summary ? `\n  Summary: ${r.summary}` : ""}`;
+  return `- Bead ${b.id}: ${r?.status ?? "not started"} - ${b.title}: ${b.description}${r?.summary ? `\n  Summary: ${r.summary}` : ""}`;
 }).join("\n")}
 
 ### Questions to answer honestly
@@ -534,7 +534,7 @@ export function implementerInstructions(
   const prevContext =
     previousResults.length > 0
       ? `\n## Previous Beads Completed\n${previousResults
-          .map((r) => `- Bead ${r.beadId}: ${r.status} — ${r.summary}`)
+          .map((r) => `- Bead ${r.beadId}: ${r.status} - ${r.summary}`)
           .join("\n")}`
       : "";
 
@@ -568,7 +568,7 @@ ${prevContext}
 First read the relevant files to fully understand the code and technical architecture.
 Use \`orch_memory\` to search for relevant learnings from prior orchestrations if applicable.
 Then implement this bead using the standard code tools (read, write, edit, bash).
-Work systematically and meticulously. Don't get stuck in analysis — be proactive.
+Work systematically and meticulously. Don't get stuck in analysis - be proactive.
 Make focused, targeted changes. Stay within scope.
 
 **After implementing, do a fresh-eyes review:** carefully read over ALL the new code you just wrote and any existing code you modified, looking super carefully for any obvious bugs, errors, problems, issues, or confusion. Fix anything you uncover.
@@ -615,16 +615,17 @@ If FAIL, provide specific revision instructions.`;
 // ─── Adversarial Review Instructions ─────────────────────────
 export function adversarialReviewInstructions(
   bead: Bead,
-  implementationSummary: string
+  implementationSummary: string,
+  domainExtras?: string
 ): string {
   const criteriaLines = bead.description
     .split("\n")
     .filter((line) => line.trim().startsWith("- [ ]") || line.trim().startsWith("- [x]"))
     .map((line) => line.trim().replace(/^- \[.\] /, ""));
 
-  return `## Adversarial "Fresh Eyes" Review — Bead ${bead.id}
+  return `## Adversarial "Fresh Eyes" Review - Bead ${bead.id}
 
-You are reviewing this bead as if you've never seen it before. The first review already passed — your job is to catch what it missed.
+You are reviewing this bead as if you've never seen it before. The first review already passed - your job is to catch what it missed.
 
 ### What was implemented
 ${implementationSummary}
@@ -633,14 +634,14 @@ ${implementationSummary}
 ${criteriaLines.length > 0 ? criteriaLines.map((c) => `- ${c}`).join("\n") : "See bead description."}
 
 ### Check specifically for:
-1. **Blunders & bugs** — off-by-one errors, null derefs, race conditions, missing error handling
-2. **Ergonomics** — is this maximally intuitive for coding agents to use? Would YOU want to use this if you came in fresh?
-3. **Oversights** — edge cases not covered, missing validation, assumptions that don't hold
-4. **Security** — injection, path traversal, secrets in output, unsafe defaults
-5. **Style** — generic AI slop, unnecessary verbosity, unclear naming
+1. **Blunders & bugs** - off-by-one errors, null derefs, race conditions, missing error handling
+2. **Ergonomics** - is this maximally intuitive for coding agents to use? Would YOU want to use this if you came in fresh?
+3. **Oversights** - edge cases not covered, missing validation, assumptions that don't hold
+4. **Security** - injection, path traversal, secrets in output, unsafe defaults
+5. **Style** — generic AI slop, unnecessary verbosity, unclear naming${domainExtras ?? ""}
 
 Be harsh. If you find issues, provide specific file:line references and fixes.
-If everything is genuinely clean, say so briefly — don't invent problems.`;
+If everything is genuinely clean, say so briefly — don’t invent problems.`;
 }
 
 // ─── Cross-Agent Review Instructions ─────────────────────────
@@ -666,12 +667,12 @@ ${beads
   .join("\n")}
 
 ### Your Review Checklist
-1. **Correctness** — Does the implementation actually achieve the stated goal?
-2. **Consistency** — Do all the pieces fit together? Any contradictions between beads?
-3. **Completeness** — Anything missing that the beads promised?
-4. **Code quality** — Clean, well-structured, follows project conventions?
-5. **Agent ergonomics** — Would another coding agent find this easy to understand and modify?
-6. **Regressions** — Could any change break existing functionality?
+1. **Correctness** - Does the implementation actually achieve the stated goal?
+2. **Consistency** - Do all the pieces fit together? Any contradictions between beads?
+3. **Completeness** - Anything missing that the beads promised?
+4. **Code quality** - Clean, well-structured, follows project conventions?
+5. **Agent ergonomics** - Would another coding agent find this easy to understand and modify?
+6. **Regressions** - Could any change break existing functionality?
 
 ### Output
 Provide:
@@ -693,11 +694,11 @@ ${goal}
 ${artifacts.map((a) => `- ${a}`).join("\n")}
 
 ### What to fix:
-1. **Remove AI slop** — generic filler ("leverage", "utilize", "comprehensive"), unnecessary caveats, hollow qualifiers
-2. **Improve clarity** — rename vague variables, simplify convoluted logic, add comments only where non-obvious
-3. **Maximize ergonomics** — make this the code YOU would want to read if coming in fresh
-4. **Consistent style** — match the project's existing conventions
-5. **Trim fat** — remove dead code, unused imports, unnecessary abstractions
+1. **Remove AI slop** - generic filler ("leverage", "utilize", "comprehensive"), unnecessary caveats, hollow qualifiers
+2. **Improve clarity** - rename vague variables, simplify convoluted logic, add comments only where non-obvious
+3. **Maximize ergonomics** - make this the code YOU would want to read if coming in fresh
+4. **Consistent style** - match the project's existing conventions
+5. **Trim fat** - remove dead code, unused imports, unnecessary abstractions
 
 Make targeted edits. Don't rewrite things that are already good.`;
 }
@@ -808,7 +809,7 @@ ${beads.map((b) => {
  * The overshoot mismatch hunt prompt. Models stop finding problems after ~20-25 issues;
  * claiming 80+ errors forces them to keep searching exhaustively.
  */
-export function blunderHuntInstructions(cwd: string, passNumber: number): string {
+export function blunderHuntInstructions(cwd: string, passNumber: number, domainExtras?: string): string {
   return `## Blunder Hunt — Pass ${passNumber}/5
 
 Reread the beads carefully. I am POSITIVE that you missed or screwed up at least 80 elements in the bead definitions. Check for:
@@ -822,7 +823,7 @@ Reread the beads carefully. I am POSITIVE that you missed or screwed up at least
 7. **Wrong file paths** in ### Files sections
 8. **Duplicative or overlapping beads**
 9. **Missing error handling expectations**
-10. **Architectural inconsistencies**
+10. **Architectural inconsistencies**${domainExtras ?? ""}
 
 For each issue found:
 - State the bead ID and the specific problem
@@ -866,7 +867,7 @@ ${goal}
    - Assumptions that don't hold
 4. Fix any issues you find directly using the edit tool
 
-Be thorough. The bugs that survive to this phase live in utility modules, error handling paths, and edge-case branches — the places nobody looks.
+Be thorough. The bugs that survive to this phase live in utility modules, error handling paths, and edge-case branches - the places nobody looks.
 
 Use ultrathink.
 
@@ -877,7 +878,7 @@ cd ${cwd}`;
 // Derived from Agent Flywheel Section 8: "De-Slopification"
 /** Extensible catalogue of AI slop patterns to detect and fix. */
 export const AI_SLOP_PATTERNS = [
-  { pattern: "emdash overuse (—)", fix: "Replace with semicolons, commas, or sentence splits" },
+  { pattern: "emdash overuse (-)", fix: "Replace with semicolons, commas, or sentence splits" },
   { pattern: '"It\'s not X, it\'s Y"', fix: "Recast the contrast without the formulaic structure" },
   { pattern: '"Here\'s why" / "Here\'s why it matters:"', fix: "Remove the clickbait lead-in" },
   { pattern: '"Let\'s dive in" / "Let us dive in"', fix: "Remove forced enthusiasm" },
@@ -896,7 +897,7 @@ export function deSlopifyInstructions(files: string[]): string {
 
   return `## De-Slopification Pass
 
-Read through the following files carefully and remove telltale AI writing patterns. You MUST manually read each line and revise — NO regex or script-based replacement.
+Read through the following files carefully and remove telltale AI writing patterns. You MUST manually read each line and revise - NO regex or script-based replacement.
 
 ### Files to review
 ${files.map(f => `- ${f}`).join("\n")}
@@ -915,7 +916,7 @@ ${patternList}
 // ─── Landing the Plane ──────────────────────────────────────
 // Derived from Agent Flywheel Section 8: "Landing the Plane"
 export function landingChecklistInstructions(cwd: string): string {
-  return `## Landing the Plane — Session Completion Checklist
+  return `## Landing the Plane - Session Completion Checklist
 
 Work is NOT complete until every item below passes. A session is only "landable" when a future swarm can pick it back up from artifacts alone.
 
@@ -953,6 +954,24 @@ cd ${cwd}`;
 /** Stagger delay configuration for thundering herd prevention. */
 export const SWARM_STAGGER_DELAY_MS = 30_000; // 30 seconds between agent starts
 
+/**
+ * Model rotation for refinement rounds.
+ * Different models have different "tastes" and blind spots.
+ * Rotating prevents anchoring AND provides diverse perspectives.
+ * Derived from Agent Flywheel Section 3: "Passing a plan through a gauntlet
+ * of different models is the cheapest way to buy architectural robustness."
+ */
+export const REFINEMENT_MODELS = [
+  "anthropic/claude-sonnet-4-5",
+  "openai/gpt-5",
+  "google/gemini-2.5-pro",
+] as const;
+
+/** Pick a refinement model based on round number (rotates through available models). */
+export function pickRefinementModel(round: number): string {
+  return REFINEMENT_MODELS[round % REFINEMENT_MODELS.length];
+}
+
 // ─── Bead Quality Scoring ───────────────────────────────────
 // Derived from Agent Flywheel Section 4: beads as "executable memory"
 /**
@@ -977,12 +996,12 @@ ${description}
 **WHY (Rationale & Context)**: Does it explain the reasoning, intent, and background?
 - 5: Full rationale, design decisions, tradeoffs documented
 - 3: Some context but gaps in reasoning
-- 1: No rationale — just a bare task description
+- 1: No rationale - just a bare task description
 
 **HOW (Verification)**: Does it include acceptance criteria, test expectations, verification steps?
 - 5: Specific, testable criteria with edge cases covered
 - 3: Basic criteria but missing edge cases
-- 1: No criteria — "just make it work"
+- 1: No criteria - "just make it work"
 
 ### Output Format (JSON)
 \`\`\`json
@@ -1002,7 +1021,7 @@ ${description}
  * Step 1: Investigate an external project and propose reimagined ideas.
  */
 export function researchInvestigatePrompt(externalUrl: string, projectName: string, cwd: string): string {
-  return `## Research & Reimagine — Step 1: Investigate
+  return `## Research & Reimagine - Step 1: Investigate
 
 Clone or scrape ${externalUrl} and investigate it thoroughly. Look for useful ideas that we can take and reimagine in highly accretive ways on top of ${projectName}'s existing capabilities.
 
@@ -1018,21 +1037,21 @@ cd ${cwd}`;
 }
 
 /**
- * Step 2: Iterative deepening — push past conservative initial suggestions.
+ * Step 2: Iterative deepening - push past conservative initial suggestions.
  */
 export function researchDeepenPrompt(): string {
-  return `## Research & Reimagine — Step 2: Deepen
+  return `## Research & Reimagine - Step 2: Deepen
 
-That's a decent start, but you barely scratched the surface. Go way deeper — more ambition, more boldness. Come up with ideas that are genuinely surprising and high-impact because they are so compelling, useful, and accretive.
+That's a decent start, but you barely scratched the surface. Go way deeper - more ambition, more boldness. Come up with ideas that are genuinely surprising and high-impact because they are so compelling, useful, and accretive.
 
 Push past the conservative initial suggestions. Use ultrathink.`;
 }
 
 /**
- * Step 3: Inversion analysis — what can WE do that THEY cannot?
+ * Step 3: Inversion analysis - what can WE do that THEY cannot?
  */
 export function researchInversionPrompt(projectName: string, externalName: string): string {
-  return `## Research & Reimagine — Step 3: Inversion Analysis
+  return `## Research & Reimagine - Step 3: Inversion Analysis
 
 Now "invert" the analysis: what are things that ${projectName} can do because of its unique primitives/capabilities that ${externalName} simply could never do even if they wanted to, because they are working from less rich primitives?
 
@@ -1049,19 +1068,19 @@ The user wants to work on this goal:
 ${formatRepoProfile(profile)}
 
 ## Your Task
-Analyze the goal against the repository context above. Generate clarifying questions that will sharpen the goal into an unambiguous, actionable plan. Each question should reference specific aspects of the repo (languages, frameworks, file structure, recent commits) — do NOT ask generic questions.
+Analyze the goal against the repository context above. Generate clarifying questions that will sharpen the goal into an unambiguous, actionable plan. Each question should reference specific aspects of the repo (languages, frameworks, file structure, recent commits) - do NOT ask generic questions.
 
-**Adaptive depth:** If the goal is already specific and detailed, generate fewer questions (as few as 1–2). If it's vague or broad, generate up to 5. Assess specificity before generating.
+**Adaptive depth:** If the goal is already specific and detailed, generate fewer questions (as few as 1-2). If it's vague or broad, generate up to 5. Assess specificity before generating.
 
-**Required:** One question MUST ask about constraints and non-goals — things the user explicitly does NOT want changed or wants to avoid.
+**Required:** One question MUST ask about constraints and non-goals - things the user explicitly does NOT want changed or wants to avoid.
 
 ## Output Format
 Return a JSON array of question objects. Each question has:
 - \`id\`: kebab-case identifier (e.g. "target-framework")
 - \`label\`: short display label (e.g. "Target Framework")
 - \`prompt\`: the full question text, referencing repo context where relevant
-- \`options\`: array of 3–5 options, each with \`value\` (kebab-case), \`label\` (display text), and optional \`description\`
-- \`allowOther\`: boolean — whether the user can type a custom answer
+- \`options\`: array of 3-5 options, each with \`value\` (kebab-case), \`label\` (display text), and optional \`description\`
+- \`allowOther\`: boolean - whether the user can type a custom answer
 
 ## Example Output
 \`\`\`json
@@ -1257,7 +1276,7 @@ Produce a detailed markdown plan document covering ALL of the following sections
 
 ## Output
 Save the plan as a session artifact using write_artifact with a descriptive name like 'plans/<goal-slug>.md'.
-Ground every recommendation in the repository context above — do not hallucinate capabilities or files that don't exist.`;
+Ground every recommendation in the repository context above - do not hallucinate capabilities or files that don't exist.`;
 }
 
 export function planRefinementPrompt(planPath: string, roundNumber: number): string {
@@ -1265,11 +1284,11 @@ export function planRefinementPrompt(planPath: string, roundNumber: number): str
 
 ## Round ${roundNumber} Refinement
 
-This is refinement round ${roundNumber}. Each round uses a fresh conversation to prevent anchoring bias — you should evaluate the plan with completely fresh eyes.
+This is refinement round ${roundNumber}. Each round uses a fresh conversation to prevent anchoring bias - you should evaluate the plan with completely fresh eyes.
 
 ## Instructions
 1. Read the plan artifact at: ${planPath}
-2. Evaluate it critically — look for:
+2. Evaluate it critically - look for:
    - Missing edge cases or failure modes
    - Overly complex designs that could be simplified
    - Incorrect assumptions about the codebase
@@ -1277,10 +1296,54 @@ This is refinement round ${roundNumber}. Each round uses a fresh conversation to
    - Sequencing issues or missing dependencies
    - Vague sections that need concrete detail
 3. If the plan needs improvement, rewrite the FULL refined plan and save it back to the SAME artifact with \`write_artifact\` using the exact same artifact name: ${planPath}
-4. Preserve the strongest parts of the current plan while fixing weaknesses — do not regress coverage or specificity
+4. Preserve the strongest parts of the current plan while fixing weaknesses - do not regress coverage or specificity
 5. If the plan is already solid, make no artifact changes and say \`NO_CHANGES\` with a brief explanation
 
 Focus on substance over style. Each round should find fewer issues as the plan converges.`;
+}
+
+/**
+ * Fresh-context plan refinement prompt for sub-agent use.
+ * Unlike planRefinementPrompt(), this embeds the full plan text so the
+ * sub-agent (which has zero session context) can evaluate it without
+ * needing to read artifacts.
+ *
+ * Derived from Agent Flywheel Section 3: "Fresh conversations prevent
+ * the model from anchoring on its own prior output."
+ */
+export function freshPlanRefinementPrompt(
+  planText: string,
+  planArtifactPath: string,
+  roundNumber: number,
+  cwd: string
+): string {
+  return `You are a fresh reviewer with ZERO prior context. You have never seen this plan before. Use ultrathink.
+
+## Round ${roundNumber} Refinement
+
+Critically evaluate this implementation plan. Each refinement round uses a completely fresh session to prevent anchoring bias.
+
+## The Plan
+
+${planText}
+
+## Instructions
+1. Evaluate the plan critically - look for:
+   - Missing edge cases or failure modes
+   - Overly complex designs that could be simplified
+   - Incorrect assumptions about the codebase
+   - Gaps in testing strategy
+   - Sequencing issues or missing dependencies
+   - Vague sections that need concrete detail
+   - User workflows that lack step-by-step detail
+   - Architectural decisions without rationale
+2. If improvements are needed, output the FULL refined plan (not just diffs)
+3. Preserve the strongest parts while fixing weaknesses - do not regress coverage or specificity
+4. If the plan is already solid with only marginal improvements possible, output \`NO_CHANGES\` and briefly explain why
+
+Focus on substance over style. Be specific about what is weak and why.
+
+cd ${cwd}`;
 }
 
 export function learningsExtractionPrompt(goal: string, beadIds: string[]): string {
@@ -1316,5 +1379,5 @@ cm add '<learning>' --category orchestration --json
 
 Use appropriate categories: \`orchestration\`, \`architecture\`, \`gotcha\`, \`pattern\`, \`tooling\`
 
-Add 3–7 rules. Each should be specific, actionable, and traceable to beads: ${beadIds.join(", ")}`;
+Add 3-7 rules. Each should be specific, actionable, and traceable to beads: ${beadIds.join(", ")}`;
 }

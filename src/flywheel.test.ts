@@ -15,12 +15,15 @@ import {
   discoveryInstructions,
   planDocumentPrompt,
   planRefinementPrompt,
+  freshPlanRefinementPrompt,
   planToBeadsPrompt,
   competingPlanAgentPrompt,
   planSynthesisPrompt,
   learningsExtractionPrompt,
   AI_SLOP_PATTERNS,
   SWARM_STAGGER_DELAY_MS,
+  REFINEMENT_MODELS,
+  pickRefinementModel,
   implementerInstructions,
 } from "./prompts.js";
 import type { Bead, BeadResult } from "./types.js";
@@ -401,6 +404,56 @@ describe("planRefinementPrompt", () => {
   });
 });
 
+describe("freshPlanRefinementPrompt", () => {
+  it("embeds the full plan text for sub-agent use", () => {
+    const prompt = freshPlanRefinementPrompt(
+      "# My Plan\nStep 1: do stuff",
+      "plans/my-plan.md",
+      2,
+      "/tmp/repo"
+    );
+    expect(prompt).toContain("# My Plan");
+    expect(prompt).toContain("Step 1: do stuff");
+  });
+
+  it("references the round number", () => {
+    const prompt = freshPlanRefinementPrompt("plan", "plans/x.md", 3, "/tmp");
+    expect(prompt).toContain("Round 3");
+  });
+
+  it("emphasizes zero prior context", () => {
+    const prompt = freshPlanRefinementPrompt("plan", "plans/x.md", 1, "/tmp");
+    expect(prompt).toContain("ZERO prior context");
+    expect(prompt).toContain("never seen this plan");
+  });
+
+  it("includes the cwd", () => {
+    const prompt = freshPlanRefinementPrompt("plan", "plans/x.md", 1, "/my/project");
+    expect(prompt).toContain("/my/project");
+  });
+});
+
+describe("pickRefinementModel", () => {
+  it("rotates through available models", () => {
+    const m0 = pickRefinementModel(0);
+    const m1 = pickRefinementModel(1);
+    const m2 = pickRefinementModel(2);
+    const m3 = pickRefinementModel(3);
+    expect(m0).not.toBe(m1);
+    expect(m1).not.toBe(m2);
+    // Round 3 wraps back to round 0's model
+    expect(m3).toBe(m0);
+  });
+
+  it("returns valid model strings", () => {
+    for (let i = 0; i < 5; i++) {
+      const model = pickRefinementModel(i);
+      expect(model).toContain("/");
+      expect(REFINEMENT_MODELS).toContain(model);
+    }
+  });
+});
+
 describe("planToBeadsPrompt", () => {
   const profile = {
     name: "test-repo",
@@ -475,6 +528,6 @@ describe("learningsExtractionPrompt", () => {
     expect(output).toContain("What would you do differently next time?");
     expect(output).toContain("Were there any tool issues or workflow friction?");
     expect(output).toContain("cm add");
-    expect(output).toContain("3–7 rules");
+    expect(output).toContain("3-7 rules");
   });
 });

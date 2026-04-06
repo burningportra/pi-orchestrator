@@ -1,0 +1,293 @@
+/**
+ * Research-Reimagine Pipeline
+ *
+ * A formalized 7-phase pipeline for studying an external project and
+ * reimagining its strongest ideas through the lens of your own project.
+ *
+ * Derived from Agent Flywheel Section 5b: "Major Features: Research
+ * and Reimagine" — study external project, deepen, invert, 5x blunder
+ * hunt, multi-model feedback, synthesize.
+ *
+ * Phases:
+ * 1. Investigate — study external project, propose reimagined ideas
+ * 2. Deepen — push past conservative suggestions
+ * 3. Inversion — what can WE do that THEY can't?
+ * 4. 5x Blunder Hunt — stress-test the proposal
+ * 5. User Review — human reviews and edits
+ * 6. Multi-model Feedback — 3 models critique in parallel
+ * 7. Synthesis — merge best feedback into final proposal
+ */
+
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { DeepPlanResult } from "./deep-plan.js";
+import {
+  researchInvestigatePrompt,
+  researchDeepenPrompt,
+  researchInversionPrompt,
+  pickRefinementModel,
+} from "./prompts.js";
+
+// ─── Types ──────────────────────────────────────────────────
+
+export type ResearchPhase =
+  | "investigate"
+  | "deepen"
+  | "inversion"
+  | "blunder_hunt"
+  | "user_review"
+  | "multi_model"
+  | "synthesis"
+  | "complete";
+
+export interface ResearchPipelineState {
+  externalUrl: string;
+  externalName: string;
+  projectName: string;
+  currentPhase: ResearchPhase;
+  proposal: string;
+  artifactName: string;
+  phasesCompleted: ResearchPhase[];
+}
+
+export interface ResearchPhaseResult {
+  phase: ResearchPhase;
+  success: boolean;
+  proposal: string;
+  model?: string;
+  error?: string;
+}
+
+// ─── Additional Prompts ─────────────────────────────────────
+
+/**
+ * Blunder hunt for research proposals.
+ * Same "overshoot mismatch" technique as bead blunder hunts, but
+ * applied to the proposal document.
+ */
+export function researchBlunderHuntPrompt(proposal: string, passNumber: number): string {
+  return `## Research Proposal Blunder Hunt — Pass ${passNumber}/5
+
+I am POSITIVE that you missed or screwed up at least 50 elements in this proposal. Read it carefully and find every issue.
+
+### Proposal
+${proposal}
+
+### Check for:
+1. **Architectural flaws** — will the proposed integration actually work?
+2. **Missing edge cases** — what happens when X fails?
+3. **Unrealistic assumptions** — does this assume capabilities that don't exist?
+4. **Missing dependencies** — what needs to exist before this can work?
+5. **Contradictions** — do different parts of the proposal conflict?
+6. **Shallow reimagining** — is this just a port, or genuinely novel?
+7. **Missing security/performance implications**
+8. **Vague sections** that need concrete detail
+9. **Missing testing/validation strategy**
+10. **Over-engineering** — is this more complex than needed?
+
+For each issue:
+- State the problem specifically
+- Propose a fix
+
+Then output the FULL revised proposal with all fixes applied.
+If the proposal is genuinely solid with only marginal improvements, output \`NO_CHANGES\` and briefly explain.
+
+Use ultrathink.`;
+}
+
+/**
+ * Multi-model feedback prompt.
+ * Sent to 3 different models for competing critique.
+ */
+export function researchFeedbackPrompt(proposal: string): string {
+  return `## Research Proposal Critique
+
+Review this proposal and provide specific, actionable improvements.
+
+### Proposal
+${proposal}
+
+### Provide feedback on:
+1. **Architectural soundness** — will this integration work as described?
+2. **Completeness** — what's missing?
+3. **Feasibility** — is the scope realistic?
+4. **Innovation quality** — is this genuinely novel or just a port?
+5. **Risk assessment** — what could go wrong?
+
+### Output Format
+Provide your improvements as a numbered list of specific, actionable suggestions.
+For each, explain what's wrong and how to fix it.
+Be critical but constructive — don't invent problems, but don't be gentle either.`;
+}
+
+/**
+ * Synthesis prompt — merge feedback from multiple models.
+ */
+export function researchSynthesisPrompt(
+  proposal: string,
+  feedbackResults: DeepPlanResult[]
+): string {
+  const feedbackList = feedbackResults
+    .filter((r) => r.exitCode === 0 && r.plan.trim().length > 0)
+    .map((r, i) => `### Feedback ${i + 1} (${r.model})\n${r.plan}`)
+    .join("\n\n---\n\n");
+
+  return `## Research Proposal Synthesis
+
+Take the original proposal and the competing feedback from multiple models, and produce a "best of all worlds" revised proposal.
+
+### Original Proposal
+${proposal}
+
+### Competing Feedback
+${feedbackList}
+
+### Instructions
+1. Identify the strongest suggestions from each feedback source
+2. Resolve contradictions — pick the approach with better justification
+3. Apply all valuable improvements to the proposal
+4. Preserve the original proposal's strongest ideas
+5. Output the FULL revised proposal
+
+Be aggressive about incorporating good feedback. The goal is a proposal that's stronger than any single model could produce alone.`;
+}
+
+// ─── Pipeline Runner ────────────────────────────────────────
+
+/**
+ * Run a single phase of the research pipeline.
+ * Returns the updated proposal text.
+ */
+export async function runResearchPhase(
+  pi: ExtensionAPI,
+  cwd: string,
+  phase: ResearchPhase,
+  state: ResearchPipelineState,
+  signal?: AbortSignal
+): Promise<ResearchPhaseResult> {
+  const { runDeepPlanAgents } = await import("./deep-plan.js");
+
+  switch (phase) {
+    case "investigate": {
+      const prompt = researchInvestigatePrompt(state.externalUrl, state.projectName, cwd);
+      const results = await runDeepPlanAgents(pi, cwd, [{
+        name: "research-investigate",
+        model: pickRefinementModel(0),
+        task: prompt,
+      }], signal);
+      const proposal = results[0]?.plan?.trim() ?? "";
+      return {
+        phase,
+        success: proposal.length > 100,
+        proposal: proposal || state.proposal,
+        model: results[0]?.model,
+      };
+    }
+
+    case "deepen": {
+      const prompt = `${researchDeepenPrompt()}\n\n## Current Proposal\n${state.proposal}`;
+      const results = await runDeepPlanAgents(pi, cwd, [{
+        name: "research-deepen",
+        model: pickRefinementModel(1),
+        task: prompt,
+      }], signal);
+      const proposal = results[0]?.plan?.trim() ?? "";
+      return {
+        phase,
+        success: proposal.length > 100,
+        proposal: proposal || state.proposal,
+        model: results[0]?.model,
+      };
+    }
+
+    case "inversion": {
+      const prompt = `${researchInversionPrompt(state.projectName, state.externalName)}\n\n## Current Proposal\n${state.proposal}`;
+      const results = await runDeepPlanAgents(pi, cwd, [{
+        name: "research-inversion",
+        model: pickRefinementModel(2),
+        task: prompt,
+      }], signal);
+      const proposal = results[0]?.plan?.trim() ?? "";
+      return {
+        phase,
+        success: proposal.length > 100,
+        proposal: proposal || state.proposal,
+        model: results[0]?.model,
+      };
+    }
+
+    case "blunder_hunt": {
+      let proposal = state.proposal;
+      for (let pass = 1; pass <= 5; pass++) {
+        const prompt = researchBlunderHuntPrompt(proposal, pass);
+        const results = await runDeepPlanAgents(pi, cwd, [{
+          name: `research-blunder-${pass}`,
+          model: pickRefinementModel(pass),
+          task: prompt,
+        }], signal);
+        const output = results[0]?.plan?.trim() ?? "";
+        if (output.length > 100 && !output.includes("NO_CHANGES")) {
+          proposal = output;
+        }
+      }
+      return { phase, success: true, proposal };
+    }
+
+    case "multi_model": {
+      const feedbackPrompt = researchFeedbackPrompt(state.proposal);
+      const feedbackAgents = [
+        { name: "research-feedback-1", model: pickRefinementModel(0), task: feedbackPrompt },
+        { name: "research-feedback-2", model: pickRefinementModel(1), task: feedbackPrompt },
+        { name: "research-feedback-3", model: pickRefinementModel(2), task: feedbackPrompt },
+      ];
+      const feedbackResults = await runDeepPlanAgents(pi, cwd, feedbackAgents, signal);
+      const successful = feedbackResults.filter((r) => r.exitCode === 0);
+      if (successful.length === 0) {
+        return { phase, success: false, proposal: state.proposal, error: "All feedback agents failed" };
+      }
+      // Store feedback but don't change proposal yet — synthesis does that
+      return {
+        phase,
+        success: true,
+        proposal: state.proposal,
+        // Stash feedback in proposal field as a marker — synthesis will use it
+        model: successful.map((r) => r.model).join(", "),
+      };
+    }
+
+    case "synthesis": {
+      // Re-run feedback to get the actual results (since we can't pass complex state)
+      const feedbackPrompt = researchFeedbackPrompt(state.proposal);
+      const feedbackAgents = [
+        { name: "research-synth-fb-1", model: pickRefinementModel(0), task: feedbackPrompt },
+        { name: "research-synth-fb-2", model: pickRefinementModel(1), task: feedbackPrompt },
+        { name: "research-synth-fb-3", model: pickRefinementModel(2), task: feedbackPrompt },
+      ];
+      const feedbackResults = await runDeepPlanAgents(pi, cwd, feedbackAgents, signal);
+
+      const synthPrompt = researchSynthesisPrompt(state.proposal, feedbackResults);
+      const synthResults = await runDeepPlanAgents(pi, cwd, [{
+        name: "research-synthesis",
+        model: pickRefinementModel(0),
+        task: synthPrompt,
+      }], signal);
+      const proposal = synthResults[0]?.plan?.trim() ?? "";
+      return {
+        phase,
+        success: proposal.length > 100,
+        proposal: proposal || state.proposal,
+        model: synthResults[0]?.model,
+      };
+    }
+
+    default:
+      return { phase, success: true, proposal: state.proposal };
+  }
+}
+
+/**
+ * Extract a short name from a GitHub URL.
+ */
+export function extractProjectName(url: string): string {
+  const match = url.match(/github\.com\/[\w.-]+\/([\w.-]+)/);
+  return match?.[1]?.replace(/\.git$/, "") ?? url.split("/").pop() ?? "external-project";
+}

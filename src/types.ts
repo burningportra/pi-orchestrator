@@ -314,6 +314,16 @@ export interface OrchestratorState {
   planRefinementRound?: number;
   /** Plan convergence score (0-1). */
   planConvergenceScore?: number;
+  /** Plan quality readiness score from the Plan Quality Oracle. */
+  planReadinessScore?: import("./plan-quality.js").PlanQualityScore;
+
+  // ─── Ideation funnel state ─────────────────────────────────
+  /** Raw ideas from broad ideation (phase 1 of 30→5→15 funnel). */
+  funnelRawIdeas?: CandidateIdea[];
+  /** Winnowed top ideas (phase 2 of funnel). */
+  funnelWinnowedIds?: string[];
+  /** Foregone conclusion score — composite readiness assessment. */
+  foregoneScore?: import("./foregone.js").ForegoneScore;
 }
 
 export function createInitialState(): OrchestratorState {

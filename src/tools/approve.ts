@@ -4,8 +4,9 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import type { OrchestratorContext, Bead, CoordinationMode } from "../types.js";
-import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS, beadCreationPrompt, planRefinementPrompt, planToBeadsPrompt, formatPlanToBeadAuditWarnings } from "../prompts.js";
+import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS, beadCreationPrompt, planRefinementPrompt, freshPlanRefinementPrompt, planToBeadsPrompt, formatPlanToBeadAuditWarnings, pickRefinementModel } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
+import { planQualityScoringPrompt, parsePlanQualityScore, formatPlanQualityScore, type PlanQualityScore } from "../plan-quality.js";
 
 // ─── Module-level bead snapshots for change detection ────────
 // These live at module scope so they persist across multiple calls to
@@ -304,13 +305,53 @@ export function registerApproveTool(oc: OrchestratorContext) {
           ? `\n🔄 Plan refinement round ${planRound}${changesInfo}${convergenceInfo}${oc.state.polishConverged ? "\n✅ Steady-state reached (0 changes for 2 consecutive rounds)" : ""}`
           : "";
 
+        // ── Plan Quality Oracle ──────────────────────────────────
+        // Run quality scoring on first view and after each refinement round.
+        // The score is computed by asking the LLM to evaluate the plan and
+        // return structured JSON, which we parse and cache in state.
+        // Flywheel Section 2: "Planning is the cheapest place to buy
+        // correctness, coherence, and ambition."
+        let qualityInfo = "";
+        const shouldScore = !oc.state.planReadinessScore || returningFromRefinement;
+        if (shouldScore) {
+          const scoringPrompt = planQualityScoringPrompt(plan, oc.state.selectedGoal!);
+          try {
+            const { runDeepPlanAgents } = await import("../deep-plan.js");
+            const scoreResults = await runDeepPlanAgents(oc.pi, ctx.cwd, [{
+              name: "plan-quality",
+              task: scoringPrompt,
+            }]);
+            const scoreOutput = scoreResults[0]?.plan ?? "";
+            const parsed = parsePlanQualityScore(scoreOutput);
+            if (parsed) {
+              oc.state.planReadinessScore = parsed;
+              oc.persistState();
+            }
+          } catch {
+            // Quality scoring is best-effort — don't block the flow
+          }
+        }
+
+        const qualityScore = oc.state.planReadinessScore;
+        if (qualityScore) {
+          qualityInfo = `\n\n${formatPlanQualityScore(qualityScore)}`;
+        }
+
+        // Build options — gate "Accept" if quality score says "block"
+        const planOptions: string[] = [];
+        if (qualityScore?.recommendation === "block") {
+          // Don't offer Accept when score is too low
+          planOptions.push(`🔍 Refine plan (round ${planRound + 1}) — score too low to accept`);
+          planOptions.push("✅ Accept anyway (override quality gate)");
+        } else {
+          planOptions.push("✅ Accept plan and create beads");
+          planOptions.push(`🔍 Refine plan (round ${planRound + 1})`);
+        }
+        planOptions.push("❌ Reject plan");
+
         const choice = await ctx.ui.select(
-          `Review plan for: ${oc.state.selectedGoal}${roundHeader}\n\n${formatPlanSummary(plan)}`,
-          [
-            "✅ Accept plan and create beads",
-            `🔍 Refine plan (round ${planRound + 1})`,
-            "❌ Reject plan",
-          ]
+          `Review plan for: ${oc.state.selectedGoal}${roundHeader}${qualityInfo}\n\n${formatPlanSummary(plan)}`,
+          planOptions
         );
 
         if (!choice || choice.startsWith("❌")) {
@@ -318,6 +359,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
           oc.state.planDocument = undefined;
           oc.state.planRefinementRound = 0;
           oc.state.planConvergenceScore = undefined;
+          oc.state.planReadinessScore = undefined;
           oc.state.polishChanges = [];
           oc.state.polishOutputSizes = [];
           oc.state.polishConverged = false;
@@ -333,12 +375,29 @@ export function registerApproveTool(oc: OrchestratorContext) {
         if (choice.startsWith("🔍")) {
           oc.setPhase("planning", ctx);
           oc.persistState();
+
+          // Flywheel Section 3: "Fresh conversations prevent the model from
+          // anchoring on its own prior output." Plan refinement MUST use a
+          // sub-agent (truly fresh context) with a different model each round.
+          const refinementModel = pickRefinementModel(planRound);
+          const freshPrompt = freshPlanRefinementPrompt(
+            plan,
+            oc.state.planDocument!,
+            planRound + 1,
+            ctx.cwd
+          );
+
           return {
             content: [{
               type: "text",
-              text: `**NEXT: Refine the saved plan artifact, then call \`orch_approve_beads\` again.**\n\nArtifact: \`${oc.state.planDocument}\`\n\n${planRefinementPrompt(oc.state.planDocument, planRound + 1)}\n\n---\n\nCurrent plan summary:\n${formatPlanSummary(plan)}`,
+              text: `**NEXT: Spawn a fresh sub-agent for plan refinement, then call \`orch_approve_beads\` again.**\n\nUse \`subagent\` with these parameters:\n\`\`\`json\n${JSON.stringify({
+                name: `plan-refine-r${planRound + 1}`,
+                task: `${freshPrompt}\n\nAfter refining, write the updated plan to the artifact: \`${oc.state.planDocument}\`\nUse write_artifact with name \"${oc.state.planDocument}\".`,
+                model: refinementModel,
+                cwd: ctx.cwd,
+              }, null, 2)}\n\`\`\`\n\nThis uses **${refinementModel}** (model rotation prevents taste convergence).\nThe sub-agent has NO prior conversation context — this is deliberate.\n\nAfter the sub-agent completes, call \`orch_approve_beads\` to review changes.`,
             }],
-            details: { approved: false, plan: true, refining: true, planDocument: oc.state.planDocument, planRound },
+            details: { approved: false, plan: true, refining: true, freshAgent: true, model: refinementModel, planDocument: oc.state.planDocument, planRound },
           };
         }
 
@@ -351,9 +410,15 @@ export function registerApproveTool(oc: OrchestratorContext) {
         oc.setPhase("creating_beads", ctx);
         oc.persistState();
 
-        const creationPrompt = oc.state.repoProfile
+        let creationPrompt = oc.state.repoProfile
           ? planToBeadsPrompt(oc.state.planDocument, oc.state.selectedGoal, oc.state.repoProfile)
           : `${beadCreationPrompt(oc.state.selectedGoal, "", oc.state.constraints)}\n\n### Approved Plan Artifact\nRead the approved plan artifact at \`${oc.state.planDocument}\` before creating beads, and carry the needed context directly into each bead description.`;
+
+        // Auto-inject CASS context into bead creation prompt
+        try {
+          const { withCassContext } = await import("../feedback.js");
+          creationPrompt = withCassContext(creationPrompt, ctx.cwd, `creating beads for: ${oc.state.selectedGoal}`);
+        } catch { /* best-effort */ }
 
         return {
           content: [{
@@ -386,6 +451,12 @@ export function registerApproveTool(oc: OrchestratorContext) {
         if (_lastBeadSnapshot) {
           const changes = countChanges(_lastBeadSnapshot, currentSnapshot);
           oc.state.polishChanges.push(changes);
+
+          // Track prompt effectiveness for the self-improvement loop
+          try {
+            const { trackPromptUse } = await import("../feedback.js");
+            trackPromptUse("beadRefinement", changes);
+          } catch { /* best-effort */ }
         }
         // Track output size (total description length) for convergence scoring
         const totalDescSize = beads.reduce((sum, b) => sum + b.description.length, 0);
@@ -492,6 +563,12 @@ export function registerApproveTool(oc: OrchestratorContext) {
           const planAudit = auditPlanToBeads(plan, beads);
           planAuditWarning = formatPlanToBeadAuditWarnings(planAudit);
           if (planAuditWarning) planAuditWarning = `\n\n${planAuditWarning}`;
+
+          // Plan-to-bead coverage dashboard (fast keyword-based)
+          const { coverageFromKeywordAudit, formatPlanCoverage } = await import("../plan-coverage.js");
+          const coverageResult = coverageFromKeywordAudit(planAudit);
+          const coverageDisplay = formatPlanCoverage(coverageResult);
+          if (coverageDisplay) planAuditWarning += `\n\n${coverageDisplay}`;
         } catch {
           // Non-fatal: missing or unreadable plan artifact should not block approval.
         }
@@ -528,7 +605,59 @@ export function registerApproveTool(oc: OrchestratorContext) {
         ? `\n🔄 Polish round ${round}${changesInfo}${convergenceInfo}${converged ? "\n✅ Steady-state reached (0 changes for 2 consecutive rounds)" : ""}`
         : "";
 
-      const startLabel = maxReached
+      // ── Foregone Conclusion Detector ─────────────────
+      // Composite readiness score from all available signals.
+      // Flywheel: "Once beads are good enough, implementation is
+      // a foregone conclusion."
+      let foregoneInfo = "";
+      if (round >= 2) {
+        try {
+          const { computeForegoneScore, formatForegoneScore } = await import("../foregone.js");
+          const { bvInsights: getBvInsights } = await import("../beads.js");
+
+          // Gather bead quality pass rate from qualityPreview
+          const failingBeadIds = new Set(qualityPreview.failures.map((f: { beadId: string }) => f.beadId));
+          const beadQualityPassRate = {
+            passed: beads.length - failingBeadIds.size,
+            total: beads.length,
+          };
+
+          // Gather graph insights (best-effort)
+          let graphInsights = null;
+          try { graphInsights = await getBvInsights(oc.pi, ctx.cwd); } catch { /* bv unavailable */ }
+
+          // Gather plan coverage (already computed above as keyword audit)
+          let planCoverageResult = null;
+          if (oc.state.planDocument) {
+            try {
+              const { coverageFromKeywordAudit: covFromAudit } = await import("../plan-coverage.js");
+              const planText = readFileSync(sessionArtifactPath(ctx, oc.state.planDocument), "utf8");
+              const audit = auditPlanToBeads(planText, beads);
+              planCoverageResult = covFromAudit(audit);
+            } catch { /* non-fatal */ }
+          }
+
+          const foregone = computeForegoneScore({
+            planQuality: oc.state.planReadinessScore ?? null,
+            convergenceScore: convergenceScore ?? null,
+            beadQualityPassRate,
+            graphInsights,
+            planCoverage: planCoverageResult,
+          });
+
+          oc.state.foregoneScore = foregone;
+          oc.persistState();
+
+          foregoneInfo = `\n\n${formatForegoneScore(foregone)}`;
+        } catch {
+          // Foregone scoring is best-effort
+        }
+      }
+
+      const foregoneReady = oc.state.foregoneScore?.recommendation === "foregone";
+      const startLabel = foregoneReady
+        ? "🎯 Launch — foregone conclusion reached!"
+        : maxReached
         ? "▶️  Start implementing (max rounds reached)"
         : converged
           ? "▶️  Start implementing (steady-state reached ✅)"
@@ -595,7 +724,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
 
       if (choice === undefined) {
         choice = await ctx.ui.select(
-          `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}${bottleneckWarning}${planAuditWarning}\n\n${beadListText}${validationWarning}${convergenceTip}`,
+          `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}${bottleneckWarning}${planAuditWarning}${foregoneInfo}\n\n${beadListText}${validationWarning}${convergenceTip}`,
           options
         );
       }
@@ -639,6 +768,8 @@ export function registerApproveTool(oc: OrchestratorContext) {
         oc.persistState();
         await syncBeads(oc.pi, ctx.cwd);
 
+        // Model rotation: different model each round for diverse perspectives
+        const refinementModel = pickRefinementModel(round);
         const freshPrompt = freshContextRefinementPrompt(ctx.cwd, oc.state.selectedGoal!, round);
         return {
           content: [
@@ -647,12 +778,12 @@ export function registerApproveTool(oc: OrchestratorContext) {
               text: `**NEXT: Spawn a fresh sub-agent for bead refinement, then call \`orch_approve_beads\` again.**\n\nUse \`subagent\` with these parameters:\n\`\`\`json\n${JSON.stringify({
                 name: `fresh-refine-r${round + 1}`,
                 task: freshPrompt,
-                interactive: false,
+                model: refinementModel,
                 cwd: ctx.cwd,
-              }, null, 2)}\n\`\`\`\n\nThe sub-agent has NO prior conversation context — this is deliberate. Fresh eyes catch what anchored reviewers miss.\n\nAfter the sub-agent completes, call \`orch_approve_beads\` to see the changes.`,
+              }, null, 2)}\n\`\`\`\n\nThis uses **${refinementModel}** (model rotation prevents taste convergence).\nThe sub-agent has NO prior conversation context — this is deliberate. Fresh eyes catch what anchored reviewers miss.\n\nAfter the sub-agent completes, call \`orch_approve_beads\` to see the changes.`,
             },
           ],
-          details: { approved: false, refining: true, freshAgent: true, beadCount: beads.length, polishRound: round },
+          details: { approved: false, refining: true, freshAgent: true, model: refinementModel, beadCount: beads.length, polishRound: round },
         };
       }
 
@@ -679,6 +810,8 @@ export function registerApproveTool(oc: OrchestratorContext) {
         oc.persistState();
         await syncBeads(oc.pi, ctx.cwd);
 
+        // Model rotation: different model each round for diverse perspectives
+        const refinementModel = pickRefinementModel(round);
         const freshPrompt = freshContextRefinementPrompt(ctx.cwd, oc.state.selectedGoal!, round);
         return {
           content: [
@@ -687,12 +820,12 @@ export function registerApproveTool(oc: OrchestratorContext) {
               text: `**NEXT: Spawn a fresh sub-agent for bead refinement, then call \`orch_approve_beads\` again.**\n\nUse \`subagent\` with these parameters:\n\`\`\`json\n${JSON.stringify({
                 name: `fresh-refine-r${round + 1}`,
                 task: freshPrompt,
-                interactive: false,
+                model: refinementModel,
                 cwd: ctx.cwd,
-              }, null, 2)}\n\`\`\`\n\nThe sub-agent has NO prior conversation context — this is deliberate. Fresh eyes catch what anchored reviewers miss.\n\nAfter the sub-agent completes, call \`orch_approve_beads\` to see the changes.`,
+              }, null, 2)}\n\`\`\`\n\nThis uses **${refinementModel}** (model rotation prevents taste convergence).\nThe sub-agent has NO prior conversation context — this is deliberate. Fresh eyes catch what anchored reviewers miss.\n\nAfter the sub-agent completes, call \`orch_approve_beads\` to see the changes.`,
             },
           ],
-          details: { approved: false, refining: true, freshAgent: true, beadCount: beads.length, polishRound: round },
+          details: { approved: false, refining: true, freshAgent: true, model: refinementModel, beadCount: beads.length, polishRound: round },
         };
       }
 
@@ -704,8 +837,12 @@ export function registerApproveTool(oc: OrchestratorContext) {
         await syncBeads(oc.pi, ctx.cwd);
 
         // Build 5 sequential blunder hunt passes as a single task
+        // Inject domain-specific checklist items if we know the tech stack
+        const { getDomainChecklist, formatDomainBlunderItems } = await import("../domain-knowledge.js");
+        const domainChecklist = oc.state.repoProfile ? getDomainChecklist(oc.state.repoProfile) : null;
+        const domainExtras = domainChecklist ? formatDomainBlunderItems(domainChecklist) : undefined;
         const passes = Array.from({ length: 5 }, (_, i) =>
-          blunderHuntInstructions(ctx.cwd, i + 1)
+          blunderHuntInstructions(ctx.cwd, i + 1, domainExtras)
         ).join("\n\n---\n\n");
 
         return {
@@ -804,22 +941,54 @@ cd ${ctx.cwd}`;
         }
 
         if (subChoice?.startsWith("✂️")) {
-          // Bottleneck splitting: send to LLM refinement focused on splitting
+          // Bottleneck splitting: generate concrete split proposals via LLM
           oc.setPhase("refining_beads", ctx);
           oc.persistState();
           await syncBeads(oc.pi, ctx.cwd);
 
-          const bottleneckDetails = bottleneckIds.map(id => {
-            const bead = beads.find(b => b.id === id);
-            return bead ? `### ${id}: ${bead.title}\n${bead.description.split("\n").slice(0, 5).join("\n")}` : `### ${id} (details unavailable)`;
-          }).join("\n\n");
+          const { beadSplitProposalPrompt, parseSplitProposal, formatSplitProposal, formatSplitCommands } = await import("../bead-splitting.js");
+          const { runDeepPlanAgents } = await import("../deep-plan.js");
+
+          // Generate split proposals for each bottleneck via sub-agents
+          const proposalAgents = bottleneckIds.map((id) => {
+            const bead = beads.find((b) => b.id === id);
+            const betweenness = insights?.Bottlenecks?.find((b) => b.ID === id)?.Value ?? 0.5;
+            return {
+              name: `split-${id}`,
+              task: bead ? beadSplitProposalPrompt(bead, betweenness) : `Bead ${id} not found.`,
+              _beadId: id,
+              _beadTitle: bead?.title ?? id,
+              _betweenness: betweenness,
+            };
+          });
+
+          const proposalResults = await runDeepPlanAgents(
+            oc.pi, ctx.cwd,
+            proposalAgents.map(({ name, task }) => ({ name, task })),
+          );
+
+          const proposals = proposalResults.map((result, i) => {
+            const agent = proposalAgents[i];
+            return parseSplitProposal(
+              result.plan ?? "",
+              agent._beadId,
+              agent._beadTitle,
+              agent._betweenness,
+            );
+          });
+
+          const splittable = proposals.filter((p) => p.splittable);
+          const unsplittable = proposals.filter((p) => !p.splittable);
+
+          const proposalDisplay = proposals.map(formatSplitProposal).join("\n\n");
+          const commands = splittable.map(formatSplitCommands).filter(Boolean).join("\n\n");
 
           return {
             content: [{
               type: "text",
-              text: `**NEXT: Split these bottleneck beads into smaller tasks, then call \`orch_approve_beads\` again.**\n\n## Bottleneck Beads to Split\n\nThese beads have high betweenness centrality — many other beads depend on paths through them, creating serialization points.\n\nFor each bottleneck bead:\n1. Read the full bead via \`br show <id>\`\n2. Break it into 2-3 smaller beads that can be worked on in parallel\n3. Create the new beads with \`br create\` and set up dependencies with \`br dep add\`\n4. Close the original bottleneck bead with \`br update <id> --status closed\`\n5. Transfer dependencies: anything that depended on the bottleneck should depend on the appropriate sub-bead\n\n${bottleneckDetails}\n\ncd ${ctx.cwd}`,
+              text: `**NEXT: Review these split proposals and execute the commands below, then call \`orch_approve_beads\` again.**\n\n## Bottleneck Split Proposals\n\n${proposalDisplay}\n\n${splittable.length > 0 ? `## Commands to Execute\n\n\`\`\`bash\n${commands}\n\`\`\`\n\nReview and run these commands to split the bottleneck beads.` : "No beads can be split — they are inherently sequential."}${unsplittable.length > 0 ? `\n\n## Cannot Split (${unsplittable.length})\n${unsplittable.map((p) => `- ${p.originalBeadId}: ${p.reason}`).join("\n")}` : ""}\n\ncd ${ctx.cwd}`,
             }],
-            details: { approved: false, remediation: "bottlenecks", bottleneckIds, beadCount: beads.length },
+            details: { approved: false, remediation: "bottlenecks", proposals, splittableCount: splittable.length, bottleneckIds, beadCount: beads.length },
           };
         }
 

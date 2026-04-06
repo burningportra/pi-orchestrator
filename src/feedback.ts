@@ -1,0 +1,259 @@
+/**
+ * Self-Improvement Loop — Feedback & Prompt Tracking
+ *
+ * Three mechanisms that make each orchestration improve the next:
+ *
+ * A. Post-orchestration feedback — structured survey saved after completion
+ * B. Automatic CASS context injection — prepend relevant rules to prompts
+ * C. Prompt effectiveness tracking — track which prompts produce real changes
+ *
+ * Derived from Agent Flywheel Section 10: "Your agent toolchain should
+ * improve itself using its own output as fuel."
+ */
+
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "fs";
+import { join } from "path";
+
+// ─── A. Post-Orchestration Feedback ─────────────────────────
+
+export interface OrchestrationFeedback {
+  /** ISO timestamp. */
+  timestamp: string;
+  /** The orchestration goal. */
+  goal: string;
+  /** Total beads created. */
+  beadCount: number;
+  /** Beads completed successfully. */
+  completedCount: number;
+  /** Total iteration rounds (gates). */
+  totalRounds: number;
+  /** Plan quality score (if computed). */
+  planQualityScore?: number;
+  /** Foregone conclusion score (if computed). */
+  foregoneScore?: number;
+  /** Polish rounds before bead approval. */
+  polishRounds: number;
+  /** Whether convergence was reached. */
+  converged: boolean;
+  /** Phases that triggered regression. */
+  regressions: string[];
+  /** Space violations detected. */
+  spaceViolationCount: number;
+}
+
+const FEEDBACK_DIR = ".pi/orchestrator-feedback";
+
+/**
+ * Collect feedback from the current orchestration state.
+ */
+export function collectFeedback(state: import("./types.js").OrchestratorState): OrchestrationFeedback {
+  const beadResults = Object.values(state.beadResults ?? {});
+  const completedCount = beadResults.filter((r) => r.status === "success").length;
+
+  return {
+    timestamp: new Date().toISOString(),
+    goal: state.selectedGoal ?? "unknown",
+    beadCount: state.activeBeadIds?.length ?? 0,
+    completedCount,
+    totalRounds: state.iterationRound,
+    planQualityScore: state.planReadinessScore?.overall,
+    foregoneScore: state.foregoneScore?.overall,
+    polishRounds: state.polishRound,
+    converged: state.polishConverged,
+    regressions: [], // Populated from session history if available
+    spaceViolationCount: 0, // Populated from session history if available
+  };
+}
+
+/**
+ * Save feedback to the project-local feedback directory.
+ */
+export function saveFeedback(cwd: string, feedback: OrchestrationFeedback): string {
+  const dir = join(cwd, FEEDBACK_DIR);
+  mkdirSync(dir, { recursive: true });
+  const filename = `feedback-${Date.now()}.json`;
+  const filepath = join(dir, filename);
+  writeFileSync(filepath, JSON.stringify(feedback, null, 2), "utf8");
+  return filepath;
+}
+
+/**
+ * Load all feedback files from the project.
+ */
+export function loadAllFeedback(cwd: string): OrchestrationFeedback[] {
+  const dir = join(cwd, FEEDBACK_DIR);
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir)
+      .filter((f) => f.endsWith(".json"))
+      .sort() // chronological order
+      .map((f) => {
+        try {
+          return JSON.parse(readFileSync(join(dir, f), "utf8")) as OrchestrationFeedback;
+        } catch {
+          return null;
+        }
+      })
+      .filter((f): f is OrchestrationFeedback => f != null);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Compute aggregate stats from all feedback.
+ */
+export interface FeedbackStats {
+  totalOrchestrations: number;
+  avgBeadCount: number;
+  avgCompletionRate: number;
+  avgPolishRounds: number;
+  convergenceRate: number;
+  avgPlanQuality: number | null;
+  avgForegoneScore: number | null;
+}
+
+export function computeFeedbackStats(feedbacks: OrchestrationFeedback[]): FeedbackStats {
+  if (feedbacks.length === 0) {
+    return {
+      totalOrchestrations: 0,
+      avgBeadCount: 0,
+      avgCompletionRate: 0,
+      avgPolishRounds: 0,
+      convergenceRate: 0,
+      avgPlanQuality: null,
+      avgForegoneScore: null,
+    };
+  }
+
+  const n = feedbacks.length;
+  const avgBeadCount = feedbacks.reduce((s, f) => s + f.beadCount, 0) / n;
+  const avgCompletionRate = feedbacks.reduce((s, f) => {
+    return s + (f.beadCount > 0 ? f.completedCount / f.beadCount : 1);
+  }, 0) / n;
+  const avgPolishRounds = feedbacks.reduce((s, f) => s + f.polishRounds, 0) / n;
+  const convergenceRate = feedbacks.filter((f) => f.converged).length / n;
+
+  const planScores = feedbacks.filter((f) => f.planQualityScore != null).map((f) => f.planQualityScore!);
+  const foregoneScores = feedbacks.filter((f) => f.foregoneScore != null).map((f) => f.foregoneScore!);
+
+  return {
+    totalOrchestrations: n,
+    avgBeadCount: Math.round(avgBeadCount * 10) / 10,
+    avgCompletionRate: Math.round(avgCompletionRate * 100),
+    avgPolishRounds: Math.round(avgPolishRounds * 10) / 10,
+    convergenceRate: Math.round(convergenceRate * 100),
+    avgPlanQuality: planScores.length > 0 ? Math.round(planScores.reduce((s, v) => s + v, 0) / planScores.length) : null,
+    avgForegoneScore: foregoneScores.length > 0 ? Math.round(foregoneScores.reduce((s, v) => s + v, 0) / foregoneScores.length) : null,
+  };
+}
+
+export function formatFeedbackStats(stats: FeedbackStats): string {
+  if (stats.totalOrchestrations === 0) return "No orchestration history yet.";
+  const lines = [
+    `📊 **Orchestration History** (${stats.totalOrchestrations} runs)`,
+    `  Avg beads/run:      ${stats.avgBeadCount}`,
+    `  Completion rate:     ${stats.avgCompletionRate}%`,
+    `  Avg polish rounds:   ${stats.avgPolishRounds}`,
+    `  Convergence rate:    ${stats.convergenceRate}%`,
+  ];
+  if (stats.avgPlanQuality != null) {
+    lines.push(`  Avg plan quality:    ${stats.avgPlanQuality}/100`);
+  }
+  if (stats.avgForegoneScore != null) {
+    lines.push(`  Avg foregone score:  ${stats.avgForegoneScore}/100`);
+  }
+  return lines.join("\n");
+}
+
+// ─── B. Automatic CASS Context Injection ────────────────────
+
+/**
+ * Prepend CASS context to a prompt if available.
+ * This is the mechanism that makes prior learnings flow into every prompt
+ * automatically, without requiring the agent to call orch_memory manually.
+ */
+export function withCassContext(prompt: string, cwd: string, taskDescription?: string): string {
+  try {
+    const { readMemory } = require("./memory.js");
+    const memory = readMemory(cwd, taskDescription);
+    if (!memory) return prompt;
+
+    return `## Context from Prior Orchestrations\n${memory}\n\n---\n\n${prompt}`;
+  } catch {
+    return prompt;
+  }
+}
+
+// ─── C. Prompt Effectiveness Tracking ───────────────────────
+
+export interface PromptRecord {
+  /** Prompt identifier (e.g., "beadRefinement", "blunderHunt"). */
+  name: string;
+  /** Number of times this prompt was used. */
+  uses: number;
+  /** Total changes produced across all uses. */
+  changesProduced: number;
+  /** Number of uses that produced at least 1 change. */
+  effectiveUses: number;
+}
+
+// In-memory tracking for the current session
+const _promptTracker: Map<string, PromptRecord> = new Map();
+
+/**
+ * Track a prompt use and its outcome.
+ */
+export function trackPromptUse(name: string, changesProduced: number): void {
+  const existing = _promptTracker.get(name) ?? { name, uses: 0, changesProduced: 0, effectiveUses: 0 };
+  existing.uses++;
+  existing.changesProduced += changesProduced;
+  if (changesProduced > 0) existing.effectiveUses++;
+  _promptTracker.set(name, existing);
+}
+
+/**
+ * Get all prompt tracking records for the current session.
+ */
+export function getPromptRecords(): PromptRecord[] {
+  return Array.from(_promptTracker.values());
+}
+
+/**
+ * Get the effectiveness rate for a specific prompt (0-1).
+ */
+export function getPromptEffectiveness(name: string): number | null {
+  const record = _promptTracker.get(name);
+  if (!record || record.uses === 0) return null;
+  return record.effectiveUses / record.uses;
+}
+
+/**
+ * Format prompt effectiveness for display.
+ */
+export function formatPromptEffectiveness(): string {
+  const records = getPromptRecords();
+  if (records.length === 0) return "";
+
+  const sorted = records.sort((a, b) => {
+    const aRate = a.uses > 0 ? a.effectiveUses / a.uses : 0;
+    const bRate = b.uses > 0 ? b.effectiveUses / b.uses : 0;
+    return bRate - aRate;
+  });
+
+  const lines = ["### Prompt Effectiveness (this session)"];
+  for (const r of sorted) {
+    const rate = r.uses > 0 ? Math.round((r.effectiveUses / r.uses) * 100) : 0;
+    const bar = "█".repeat(Math.round(rate / 10)) + "░".repeat(10 - Math.round(rate / 10));
+    lines.push(`  ${r.name}: ${bar} ${rate}% (${r.effectiveUses}/${r.uses} effective, ${r.changesProduced} total changes)`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Reset tracking (for testing).
+ */
+export function resetPromptTracking(): void {
+  _promptTracker.clear();
+}

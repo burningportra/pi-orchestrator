@@ -94,3 +94,46 @@ describe("gates.ts — auto-advance logic", () => {
     expect(doneSection).toContain("cm add");
   });
 });
+
+describe("gates.ts — phase regression support", () => {
+  it("defines a regressionHint constant", () => {
+    expect(gatesSource).toContain("regressionHint");
+  });
+
+  it("regressionHint references all three regression sentinels", () => {
+    expect(gatesSource).toContain("__regress_to_beads__");
+    expect(gatesSource).toContain("__regress_to_plan__");
+    expect(gatesSource).toContain("__regress_to_implement__");
+  });
+
+  it("attaches regressionHint to self-review gate", () => {
+    const selfReviewSection = gatesSource.slice(
+      gatesSource.indexOf('Fresh Self-Review'),
+      gatesSource.indexOf('Peer review', gatesSource.indexOf('Fresh Self-Review') + 1)
+    );
+    expect(selfReviewSection).toContain("regressionHint");
+  });
+
+  it("attaches regressionHint to test coverage gate", () => {
+    const testSection = gatesSource.slice(
+      gatesSource.indexOf('Test Coverage Check'),
+      gatesSource.indexOf('De-Slopify', gatesSource.indexOf('Test Coverage Check') + 1)
+    );
+    expect(testSection).toContain("regressionHint");
+  });
+
+  it("attaches regressionHint to peer review gate", () => {
+    const peerSection = gatesSource.slice(
+      gatesSource.indexOf('Peer Review'),
+      gatesSource.indexOf('Test Coverage', gatesSource.indexOf('Peer Review') + 1)
+    );
+    expect(peerSection).toContain("regressionHint");
+  });
+
+  it("attaches regressionHint to hit-me gate", () => {
+    const hitMeSection = gatesSource.slice(
+      gatesSource.indexOf('Hit me')
+    );
+    expect(hitMeSection).toContain("regressionHint");
+  });
+});

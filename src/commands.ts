@@ -204,8 +204,18 @@ export function registerCommands(oc: OrchestratorContext) {
 
   // ─── Command: /orchestrate-status ────────────────────────────
   pi.registerCommand("orchestrate-status", {
-    description: "Show orchestration status",
+    description: "Show orchestration status and history",
     handler: async (_args, ctx) => {
+      // Show feedback history stats if available
+      try {
+        const { loadAllFeedback, computeFeedbackStats, formatFeedbackStats } = await import("./feedback.js");
+        const feedbacks = loadAllFeedback(ctx.cwd);
+        if (feedbacks.length > 0) {
+          const stats = computeFeedbackStats(feedbacks);
+          ctx.ui.notify(formatFeedbackStats(stats), "info");
+        }
+      } catch { /* best-effort */ }
+
       if (!oc.orchestratorActive && oc.state.phase === "idle") {
         ctx.ui.notify("No orchestration session active.", "info");
         return;
@@ -539,6 +549,246 @@ export function registerCommands(oc: OrchestratorContext) {
         `• \`git revert HEAD\` — revert last commit\n` +
         `• \`git checkout -- <files>\` — discard specific changes\n\n` +
         `Run \`/orchestrate\` to resume and re-implement this bead.`,
+        "info"
+      );
+    },
+  });
+
+  // ─── Command: /orchestrate-research ──────────────────────
+  pi.registerCommand("orchestrate-research", {
+    description: "Study an external project and reimagine its ideas for this project (7-phase pipeline)",
+    handler: async (args, ctx) => {
+      const url = (args ?? "").trim();
+      if (!url) {
+        ctx.ui.notify(
+          "Usage: /orchestrate-research <github-url>\n\n" +
+          "Runs the Research & Reimagine pipeline:\n" +
+          "1. Investigate external project\n" +
+          "2. Deepen (push past conservative suggestions)\n" +
+          "3. Inversion analysis (what can WE do that THEY can't?)\n" +
+          "4. 5x blunder hunt\n" +
+          "5. Multi-model competing feedback\n" +
+          "6. Synthesize best feedback into final proposal\n" +
+          "7. Hand off to plan→beads→implement pipeline",
+          "info"
+        );
+        return;
+      }
+
+      const researchModule = await import("./research-pipeline.js");
+      const { extractProjectName, runResearchPhase } = researchModule;
+      const { writeFileSync, mkdirSync } = await import("fs");
+      const { dirname } = await import("path");
+
+      const externalName = extractProjectName(url);
+      const projectName = oc.state.repoProfile?.name ?? "this project";
+
+      // Session artifact for the proposal
+      const artifactName = `research/${externalName}-proposal.md`;
+      const sessionFile = ctx.sessionManager.getSessionFile();
+      const sessionId = ctx.sessionManager.getSessionId();
+      let artifactPath: string;
+      if (sessionFile && sessionId) {
+        const artifactRoot = sessionFile.includes("/sessions/")
+          ? sessionFile.replace(/\/sessions\/[^/]+$/, `/artifacts/${sessionId}`)
+          : (await import("path")).join((await import("path")).dirname(sessionFile), "..", "artifacts", sessionId);
+        artifactPath = (await import("path")).join(artifactRoot, artifactName);
+      } else {
+        artifactPath = (await import("path")).join(ctx.cwd, ".pi-orchestrator-artifacts", artifactName);
+      }
+      mkdirSync(dirname(artifactPath), { recursive: true });
+
+      const state = {
+        externalUrl: url,
+        externalName,
+        projectName,
+        currentPhase: "investigate",
+        proposal: "",
+        artifactName,
+        phasesCompleted: [],
+      };
+
+      const phases: Array<{ phase: string; label: string; emoji: string }> = [
+        { phase: "investigate", label: "Investigating external project", emoji: "📚" },
+        { phase: "deepen", label: "Deepening analysis", emoji: "🔍" },
+        { phase: "inversion", label: "Inversion analysis", emoji: "🔄" },
+        { phase: "blunder_hunt", label: "5x blunder hunt", emoji: "🔨" },
+        { phase: "multi_model", label: "Multi-model feedback", emoji: "🧠" },
+        { phase: "synthesis", label: "Synthesizing feedback", emoji: "🔗" },
+      ];
+
+      for (const { phase, label, emoji } of phases) {
+        ctx.ui.notify(`${emoji} Phase: ${label}...`, "info");
+        (state as any).currentPhase = phase;
+
+        try {
+          const result = await runResearchPhase(pi, ctx.cwd, phase as any, state as any);
+          if (result.proposal) {
+            state.proposal = result.proposal;
+            writeFileSync(artifactPath, state.proposal, "utf8");
+          }
+          (state as any).phasesCompleted.push(phase);
+
+          if (!result.success) {
+            ctx.ui.notify(`⚠️ ${label} had issues: ${result.error ?? "partial output"}. Continuing with current proposal.`, "warning");
+          }
+        } catch (err: any) {
+          ctx.ui.notify(`❌ ${label} failed: ${err.message ?? err}. Continuing with current proposal.`, "error");
+        }
+
+        // After blunder hunt, offer user review
+        if (phase === "blunder_hunt") {
+          ctx.ui.notify(
+            `✅ Proposal refined through 5x blunder hunt.\nSaved to: ${artifactName}\n\nReview the proposal before multi-model feedback.`,
+            "info"
+          );
+          const proceed = await ctx.ui.confirm(
+            "Continue to multi-model feedback?",
+            "The proposal will be sent to 3 competing models for critique."
+          );
+          if (!proceed) {
+            ctx.ui.notify(
+              `Research pipeline paused after blunder hunt.\nProposal saved to: ${artifactName}\n\n` +
+              `To resume, you can manually feed this proposal into the planning pipeline.`,
+              "info"
+            );
+            return;
+          }
+        }
+      }
+
+      // Hand off to planning pipeline
+      oc.state.selectedGoal = `Research-reimagine: ${externalName} ideas for ${projectName}`;
+      oc.state.planDocument = artifactName;
+      oc.state.planRefinementRound = 0;
+      oc.orchestratorActive = true;
+      oc.setPhase("awaiting_plan_approval", ctx);
+      oc.persistState();
+
+      ctx.ui.notify(
+        `✅ Research pipeline complete (${state.phasesCompleted.length}/6 phases).\n` +
+        `Proposal saved to: ${artifactName}\n\n` +
+        `The proposal has been loaded as a plan artifact. ` +
+        `Call \`orch_approve_beads\` to review it and convert to beads.`,
+        "info"
+      );
+
+      pi.sendUserMessage(
+        `Research pipeline complete for ${externalName}. ` +
+        `Call \`orch_approve_beads\` to review the proposal and create beads.`,
+        { deliverAs: "followUp" }
+      );
+    },
+  });
+
+  // ─── Command: /orchestrate-swarm ─────────────────────────
+  pi.registerCommand("orchestrate-swarm", {
+    description: "Launch a persistent agent swarm for parallel bead execution",
+    handler: async (args, ctx) => {
+      if (!oc.state.selectedGoal) {
+        ctx.ui.notify("No active orchestration with a goal. Run /orchestrate first.", "warning");
+        return;
+      }
+
+      const { readBeads, readyBeads } = await import("./beads.js");
+      const beads = await readBeads(pi, ctx.cwd);
+      const ready = await readyBeads(pi, ctx.cwd);
+      const openBeads = beads.filter((b) => b.status === "open" || b.status === "in_progress");
+
+      if (ready.length === 0 && openBeads.length === 0) {
+        ctx.ui.notify("No open or ready beads. All beads are either blocked or completed.", "info");
+        return;
+      }
+
+      const { recommendComposition, generateAgentConfigs, formatLaunchInstructions } = await import("./swarm.js");
+      const { ensureCoreRules } = await import("./agents-md.js");
+
+      // Ensure AGENTS.md has core rules before launching agents
+      await ensureCoreRules(ctx.cwd);
+
+      const composition = recommendComposition(openBeads.length);
+
+      // Let user adjust count
+      const countInput = await ctx.ui.input(
+        `How many agents? (suggested: ${composition.total} — ${composition.rationale})`,
+        `${composition.total}`
+      );
+      const count = Math.max(1, Math.min(20, parseInt(countInput || `${composition.total}`, 10)));
+
+      const configs = generateAgentConfigs(count, ctx.cwd, composition);
+      const instructions = formatLaunchInstructions(configs);
+
+      // Start SwarmTender for monitoring
+      const { SwarmTender } = await import("./tender.js");
+      const worktrees = configs.map((c, i) => ({ path: ctx.cwd, stepIndex: i }));
+      oc.swarmTender = new SwarmTender(pi, ctx.cwd, worktrees, {
+        config: {
+          pollInterval: 60_000,
+          stuckThreshold: 300_000,
+          idleThreshold: 120_000,
+        },
+        onStuck: (agent) => {
+          ctx.ui.notify(
+            `⚠️ Agent #${agent.stepIndex} appears stuck (no changes for 5 min). ` +
+            `Consider sending: "Reread AGENTS.md and check your current bead status."`,
+            "warning"
+          );
+        },
+        onConflict: (conflict) => {
+          ctx.ui.notify(
+            `🔴 File conflict: ${conflict.file} being edited by agents #${conflict.worktrees.join(", #")}`,
+            "error"
+          );
+        },
+      });
+      oc.swarmTender.start();
+
+      pi.sendUserMessage(
+        `${instructions}\n\n` +
+        `**NEXT: Spawn these agents using the \`subagent\` tool with the configs above.**\n\n` +
+        `SwarmTender is monitoring. Use \`/orchestrate-swarm-status\` to check health.`,
+        { deliverAs: "followUp" }
+      );
+    },
+  });
+
+  // ─── Command: /orchestrate-swarm-status ───────────────────
+  pi.registerCommand("orchestrate-swarm-status", {
+    description: "Show swarm health: active/idle/stuck agents, bead progress, conflicts",
+    handler: async (_args, ctx) => {
+      if (!oc.swarmTender) {
+        ctx.ui.notify("No swarm active. Launch one with /orchestrate-swarm.", "info");
+        return;
+      }
+
+      const { formatSwarmStatus } = await import("./swarm.js");
+      const { readBeads } = await import("./beads.js");
+
+      const agents = oc.swarmTender.getStatus();
+      const beads = await readBeads(pi, ctx.cwd);
+      const status = formatSwarmStatus(agents, beads);
+
+      ctx.ui.notify(status, "info");
+    },
+  });
+
+  // ─── Command: /orchestrate-swarm-stop ─────────────────────
+  pi.registerCommand("orchestrate-swarm-stop", {
+    description: "Stop the swarm tender and send landing prompts",
+    handler: async (_args, ctx) => {
+      if (!oc.swarmTender) {
+        ctx.ui.notify("No swarm active.", "info");
+        return;
+      }
+
+      oc.swarmTender.stop();
+      oc.swarmTender = undefined;
+
+      const { landingChecklistInstructions } = await import("./prompts.js");
+      ctx.ui.notify(
+        `🛑 Swarm tender stopped.\n\n` +
+        `Agents may still be running in their terminals. Send each the landing checklist:\n\n` +
+        `${landingChecklistInstructions(ctx.cwd).slice(0, 500)}...`,
         "info"
       );
     },

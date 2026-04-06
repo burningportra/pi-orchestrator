@@ -68,7 +68,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
       "Submit your implementation work for review. Provide a summary of what you changed. The tool evaluates against acceptance criteria and returns pass/fail.",
     promptSnippet: "Submit implementation for review against acceptance criteria",
     parameters: Type.Object({
-      beadId: Type.String({ description: "bead ID to review (from br list), or \"__gates__\" for guided gates" }),
+      beadId: Type.String({ description: "bead ID to review (from br list), \"__gates__\" for guided gates, or \"__regress_to_plan__\"/\"__regress_to_beads__\"/\"__regress_to_implement__\" for phase regression" }),
       summary: Type.String({ description: "brief summary of changes made" }),
       verdict: StringEnum(["pass", "fail"] as const, {
         description: "your self-assessment: did you meet all acceptance criteria?",
@@ -89,6 +89,88 @@ export function registerReviewTool(oc: OrchestratorContext) {
       // Sentinel: beadId === "__gates__" while iterating = show next gate
       if (oc.state.phase === "iterating" && params.beadId === "__gates__") {
         return await runGuidedGates(oc, oc.state, ctx, "");
+      }
+
+      // ── Phase Regression Sentinels ───────────────────────
+      // Flywheel: "If a gate fails, drop back a phase instead of
+      // pushing forward optimistically."
+      // These sentinels allow the LLM (or user) to mechanically
+      // regress to an earlier phase when a gate or review reveals
+      // a fundamental problem.
+
+      if (params.beadId === "__regress_to_plan__") {
+        // Reset bead + gate state, go back to plan refinement
+        oc.state.activeBeadIds = undefined;
+        oc.state.beadResults = {};
+        oc.state.beadReviews = {};
+        oc.state.currentGateIndex = 0;
+        oc.state.iterationRound = 0;
+        oc.state.polishRound = 0;
+        oc.state.polishChanges = [];
+        oc.state.polishConverged = false;
+        oc.state.planReadinessScore = undefined;
+        oc.setPhase("planning", ctx);
+        oc.persistState();
+        return {
+          content: [{
+            type: "text",
+            text: `⏪ Regressed to **plan phase**. Bead and review state has been reset.\n\n` +
+              (oc.state.planDocument
+                ? `Revise the plan at \`${oc.state.planDocument}\`, then call \`orch_approve_beads\` to re-enter the approval flow.`
+                : `Call \`orch_plan\` to generate a new plan, then \`orch_approve_beads\`.`),
+          }],
+          details: { regression: true, targetPhase: "planning" },
+        };
+      }
+
+      if (params.beadId === "__regress_to_beads__") {
+        // Keep plan, reset gate state, go back to bead creation/refinement
+        oc.state.currentGateIndex = 0;
+        oc.state.iterationRound = 0;
+        oc.setPhase("creating_beads", ctx);
+        oc.persistState();
+        return {
+          content: [{
+            type: "text",
+            text: `⏪ Regressed to **bead creation phase**.\n\n` +
+              `Create new beads for missing scope or revise existing beads, then call \`orch_approve_beads\`.\n\n` +
+              `Existing bead results are preserved — only add what's missing.`,
+          }],
+          details: { regression: true, targetPhase: "creating_beads" },
+        };
+      }
+
+      if (params.beadId === "__regress_to_implement__") {
+        // Keep beads, reset gates, re-open failed/partial beads
+        oc.state.currentGateIndex = 0;
+        oc.state.iterationRound = 0;
+        oc.setPhase("implementing", ctx);
+
+        // Re-open beads that were partial (not fully successful)
+        // Note: updateBeadStatus doesn't accept "open", so we call br CLI directly
+        const reopened: string[] = [];
+        for (const [id, result] of Object.entries(oc.state.beadResults ?? {})) {
+          if (result.status === "partial") {
+            try {
+              await oc.pi.exec("br", ["update", id, "--status", "open"], { cwd: ctx.cwd, timeout: 5000 });
+              delete oc.state.beadResults![id];
+              reopened.push(id);
+            } catch { /* best effort */ }
+          }
+        }
+        oc.persistState();
+
+        return {
+          content: [{
+            type: "text",
+            text: `⏪ Regressed to **implementation phase**.\n\n` +
+              (reopened.length > 0
+                ? `Re-opened ${reopened.length} partial bead(s): ${reopened.join(", ")}.\n\n`
+                : `No partial beads to re-open.\n\n`) +
+              `Use \`bv --robot-next\` or \`br ready\` to pick the next bead to implement.`,
+          }],
+          details: { regression: true, targetPhase: "implementing", reopened },
+        };
       }
 
       const bead = await getBeadById(oc.pi, ctx.cwd, params.beadId);
@@ -159,6 +241,68 @@ export function registerReviewTool(oc: OrchestratorContext) {
         oc.persistState();
 
         oc.setPhase("reviewing", ctx);
+
+        // ── Wrong-Space Detector ──────────────────────────────
+        // After a bead passes self-review, check for signals that the
+        // agent was doing plan-space work in code-space. This is the
+        // Flywheel's #1 diagnostic: "If you find yourself doing heavy
+        // cognitive work during implementation, planning was insufficient."
+        try {
+          const { detectSpaceViolations, formatSpaceViolations } = await import("../space-detector.js");
+          let filesChanged: string[] = [];
+          try {
+            const gitResult = await oc.pi.exec("git", ["diff", "--name-only", "HEAD~1"], { cwd: ctx.cwd, timeout: 5000 });
+            filesChanged = gitResult.stdout.trim().split("\n").filter(Boolean);
+          } catch {
+            // git diff may fail if no commits yet — skip detection
+          }
+
+          if (filesChanged.length > 0) {
+            const violations = detectSpaceViolations(bead, params.summary, params.feedback, filesChanged);
+            const actionable = violations.filter((v) => v.severity === "warning" || v.severity === "critical");
+
+            if (actionable.length > 0) {
+              const violationText = formatSpaceViolations(actionable);
+              const spaceAction = await ctx.ui.select(
+                `${violationText}`,
+                [
+                  "📋 Create new beads for unexpected scope",
+                  "🔄 Revise plan and regenerate affected beads",
+                  "✅ Acknowledge and continue (scope is intentional)",
+                ]
+              );
+
+              if (spaceAction?.startsWith("📋")) {
+                // Phase regression: go back to creating_beads
+                oc.setPhase("creating_beads", ctx);
+                oc.persistState();
+                return {
+                  content: [{
+                    type: "text",
+                    text: `⚠️ Space violation detected during bead ${params.beadId}. Regressing to bead creation.\n\n${violationText}\n\nCreate new beads to cover the unexpected scope, then call \`orch_approve_beads\`.`,
+                  }],
+                  details: { review: { beadId: params.beadId, passed: true }, spaceViolation: true, regression: "creating_beads" },
+                };
+              }
+
+              if (spaceAction?.startsWith("🔄")) {
+                // Phase regression: go back to planning
+                oc.setPhase("planning", ctx);
+                oc.persistState();
+                return {
+                  content: [{
+                    type: "text",
+                    text: `⚠️ Space violation detected during bead ${params.beadId}. Regressing to plan revision.\n\n${violationText}\n\nRevise the plan at \`${oc.state.planDocument ?? "(no plan artifact)"}\`, then call \`orch_approve_beads\`.`,
+                  }],
+                  details: { review: { beadId: params.beadId, passed: true }, spaceViolation: true, regression: "planning" },
+                };
+              }
+              // "Acknowledge" — fall through to normal flow
+            }
+          }
+        } catch {
+          // Space detection is best-effort — don't block the review flow
+        }
 
         // Hit-me flow uses two flags keyed by bead ID
         const hitMeWasTriggered = oc.state.beadHitMeTriggered?.[params.beadId] ?? false;

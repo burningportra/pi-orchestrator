@@ -4,6 +4,7 @@ import { polishInstructions, summaryInstructions, realityCheckInstructions, deSl
 import { readBeads, extractArtifacts as extractBeadArtifacts } from "./beads.js";
 import { agentMailTaskPreamble } from "./agent-mail.js";
 import { detectUbs } from "./coordination.js";
+import { getDomainChecklist, formatDomainReviewItems } from "./domain-knowledge.js";
 
 export async function runGuidedGates(
   oc: OrchestratorContext,
@@ -20,6 +21,10 @@ export async function runGuidedGates(
   const beadResults = Object.values(st.beadResults ?? {});
   const polish = polishInstructions(goal, allArtifacts);
   const summaryText = summaryInstructions(goal, activeBeads, beadResults);
+
+  // Domain-specific review items based on tech stack
+  const domainChecklist = st.repoProfile ? getDomainChecklist(st.repoProfile) : null;
+  const domainReviewExtras = domainChecklist ? formatDomainReviewItems(domainChecklist) : "";
 
   st.iterationRound = (st.iterationRound ?? 0) + 1;
   const round = st.iterationRound;
@@ -88,16 +93,41 @@ export async function runGuidedGates(
 
   const callbackHint = `\n\nAfter completing this, call \`orch_review\` with beadId "__gates__" and verdict "pass" for the next gate.`;
 
+  // Regression hint appended to gates where fundamental issues might surface.
+  // Flywheel: "If a gate fails, drop back a phase instead of pushing forward."
+  const regressionHint = `\n\n---\n**If this gate revealed fundamental issues:**\n` +
+    `- \`orch_review\` with beadId \"__regress_to_beads__\" → go back to bead creation\n` +
+    `- \`orch_review\` with beadId \"__regress_to_plan__\" → go back to plan refinement\n` +
+    `- \`orch_review\` with beadId \"__regress_to_implement__\" → go back to implementation`;
+
   if (chosen.startsWith("✅")) {
     oc.orchestratorActive = false;
     st.currentGateIndex = 0;
     oc.setPhase("complete", ctx);
     oc.persistState();
     const learningsText = learningsExtractionPrompt(goal, activeBeads.map((b) => b.id));
+
+    // Self-improvement loop: save structured feedback for future orchestrations
+    try {
+      const { collectFeedback, saveFeedback, formatPromptEffectiveness } = await import("./feedback.js");
+      const feedback = collectFeedback(st);
+      saveFeedback(ctx.cwd, feedback);
+    } catch {
+      // Feedback collection is best-effort
+    }
+
+    // Include prompt effectiveness summary if available
+    let promptEffectivenessInfo = "";
+    try {
+      const { formatPromptEffectiveness } = await import("./feedback.js");
+      const peInfo = formatPromptEffectiveness();
+      if (peInfo) promptEffectivenessInfo = `\n\n${peInfo}`;
+    } catch { /* best-effort */ }
+
     // Completion output must include explicit `cm add` commands so the landing prompt teaches CASS capture.
     return {
       content: [
-        { type: "text", text: `${summaryText}${extraInfo}\n\nOrchestration complete after ${round} round(s).\n\n---\n${learningsText}` },
+        { type: "text", text: `${summaryText}${extraInfo}\n\nOrchestration complete after ${round} round(s).${promptEffectivenessInfo}\n\n---\n${learningsText}` },
       ],
       details: { complete: true, rounds: round },
     };
@@ -108,7 +138,7 @@ export async function runGuidedGates(
       content: [
         {
           type: "text",
-          text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}${callbackHint}`,
+          text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}${callbackHint}${regressionHint}`,
         },
       ],
       details: { iterating: true, round, selfReview: true },
@@ -125,7 +155,7 @@ export async function runGuidedGates(
     const peerAgents = [
       {
         name: `peer-bugs-r${round}`,
-        task: `${peerPreamble(`peer-bugs-r${round}`)}Peer reviewer (round ${round}). Review code written by your fellow agents. Check for issues, bugs, errors, inefficiencies, security problems, reliability issues. Diagnose root causes using first-principle analysis. Don't restrict to latest commits — cast a wider net and go super deep!\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
+        task: `${peerPreamble(`peer-bugs-r${round}`)}Peer reviewer (round ${round}). Review code written by your fellow agents. Check for issues, bugs, errors, inefficiencies, security problems, reliability issues. Diagnose root causes using first-principle analysis. Don't restrict to latest commits — cast a wider net and go super deep!\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}${domainReviewExtras}\n\nFix issues directly using the edit tool. Your changes persist to disk.\n\ncd ${ctx.cwd}`,
       },
       {
         name: `peer-polish-r${round}`,
@@ -145,7 +175,7 @@ export async function runGuidedGates(
       content: [
         {
           type: "text",
-          text: `**NEXT: Call \`parallel_subagents\` NOW with the config below.**\n\n## 👥 Peer Review — Round ${round}\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` with beadId "__gates__" and verdict "pass".`,
+          text: `**NEXT: Call \`parallel_subagents\` NOW with the config below.**\n\n## 👥 Peer Review — Round ${round}\n\n\`\`\`json\n${peerJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` with beadId "__gates__" and verdict "pass".${regressionHint}`,
         },
       ],
       details: { iterating: true, round, peerReview: true },
@@ -161,7 +191,7 @@ export async function runGuidedGates(
       content: [
         {
           type: "text",
-          text: `## 🧪 Test Coverage Check — Round ${round}\n\nDo we have full unit test coverage without using mocks or fake stuff? What about complete e2e integration test scripts with great, detailed logging?\n\nReview the current state:\n- Goal: ${goal}\n- Files: ${allArtifacts.join(", ")}\n\nIf test coverage is incomplete, create specific tasks for each missing test, with subtasks and dependency structure. Each task should be self-contained — a fresh agent can execute it without extra context.\n\nFor unit tests: test real behavior, not mocked interfaces. For e2e: full integration scripts with detailed logging at each stage.${ubsHint}${callbackHint}`,
+          text: `## 🧪 Test Coverage Check — Round ${round}\n\nDo we have full unit test coverage without using mocks or fake stuff? What about complete e2e integration test scripts with great, detailed logging?\n\nReview the current state:\n- Goal: ${goal}\n- Files: ${allArtifacts.join(", ")}\n\nIf test coverage is incomplete, create specific tasks for each missing test, with subtasks and dependency structure. Each task should be self-contained — a fresh agent can execute it without extra context.\n\nFor unit tests: test real behavior, not mocked interfaces. For e2e: full integration scripts with detailed logging at each stage.${ubsHint}${callbackHint}${regressionHint}`,
         },
       ],
       details: { iterating: true, round, testCoverage: true },
@@ -241,7 +271,7 @@ export async function runGuidedGates(
   const agentConfigs = [
     {
       name: `fresh-eyes-r${round}`,
-      task: `${hitMePreamble(`fresh-eyes-r${round}`)}Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
+      task: `${hitMePreamble(`fresh-eyes-r${round}`)}Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}${domainReviewExtras}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
     },
     {
       name: `polish-r${round}`,
@@ -262,7 +292,7 @@ export async function runGuidedGates(
     content: [
       {
         type: "text",
-        text: `**NEXT: Call \`parallel_subagents\` NOW with the config below.**\n\n## 🔥 Hit me — Round ${round}\n\n\`\`\`json\n${gateJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` again.${callbackHint}`,
+        text: `**NEXT: Call \`parallel_subagents\` NOW with the config below.**\n\n## 🔥 Hit me — Round ${round}\n\n\`\`\`json\n${gateJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` again.${callbackHint}${regressionHint}`,
       },
     ],
     details: { iterating: true, round, agents: agentConfigs.map((a) => a.name) },

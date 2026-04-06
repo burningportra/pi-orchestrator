@@ -12,6 +12,13 @@ import {
 import { runGoalRefinement, extractConstraints } from "../goal-refinement.js";
 import { detectCoordinationBackend, selectMode, selectStrategy } from "../coordination.js";
 
+/** Compute weighted score for a candidate idea (for fallback sorting). */
+function weightedScore(idea: import("../types.js").CandidateIdea): number {
+  if (!idea.scores) return 0;
+  const s = idea.scores;
+  return s.useful * 2 + s.pragmatic * 2 + s.accretive * 1.5 + s.robust + s.ergonomic;
+}
+
 export function registerProfileTool(oc: OrchestratorContext) {
   oc.pi.registerTool({
     name: "orch_profile",
@@ -102,63 +109,156 @@ export function registerProfileTool(oc: OrchestratorContext) {
         ? `\n\n### Prior Context (CASS memory; secondary to live codebase scan)\n${memory}`
         : "";
 
+      // Workflow roadmap for user orientation
+      const roadmap = workflowRoadmap("discovering");
+
+      // Offer discovery mode choice — unified menu replaces the old two-step flow
       const discoveryMode = await ctx.ui.select(
-        "What would you like to do?",
+        "How should we discover improvement ideas?",
         [
-          "💡 Suggest improvements — scan and propose ideas",
-          "✏️  I know what I want — enter my own goal",
+          "💡 Standard discovery — generate 10-15 scored ideas",
+          "🔬 Deep discovery (30→5→15 funnel) — broader brainstorm with competitive winnowing",
+          "✏️  I know what I want — enter a custom goal",
         ]
       );
 
       if (discoveryMode?.startsWith("✏️")) {
-        const customGoal = await ctx.ui.input(
+        // Custom goal — same as existing "I know what I want" path
+        const goal = await ctx.ui.input(
           "Enter your goal:",
           "e.g., Add API rate limiting with Redis"
         );
-        if (!customGoal) {
-          oc.orchestratorActive = false;
-          oc.setPhase("idle", ctx);
-          oc.persistState();
+        if (!goal) {
           return {
-            content: [{ type: "text", text: "No goal entered. Orchestration stopped." }],
+            content: [{ type: "text", text: "No goal entered." }],
             details: { profile, scanResult },
           };
         }
-
-        // Refine the goal via LLM-generated questionnaire
-        const refinement = await runGoalRefinement(customGoal, profile, oc.pi, ctx);
-        const goal = refinement.enrichedGoal;
-        const constraints = refinement.skipped ? [] : extractConstraints(refinement.answers);
-
-        // Skip discovery entirely — go straight to planning
-        oc.state.selectedGoal = goal;
-        oc.state.candidateIdeas = [];
-        oc.state.constraints = constraints;
-        oc.setPhase("creating_beads", ctx);
+        const refinement = await runGoalRefinement(goal, profile, oc.pi, ctx);
+        oc.state.selectedGoal = refinement.enrichedGoal;
+        if (!refinement.skipped) {
+          oc.state.constraints = extractConstraints(refinement.answers);
+        }
+        oc.setPhase("planning", ctx);
         oc.persistState();
-
-        const instructions = beadCreationPrompt(goal, formatted, constraints);
-        
-        // Workflow roadmap for custom goal path (skips discover/select)
-        const customRoadmap = workflowRoadmap("creating_beads");
-
         return {
-          content: [
-            {
-              type: "text",
-              text: `**Workflow:** ${customRoadmap}\n\n**NEXT: Create beads for this goal using \`br create\` and \`br dep add\` in bash NOW.**\n\nGoal: "${goal}"\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}${upgradeHint}${foundationWarning}\n\n${formatted}${memoryContext}\n\n${instructions}`,
-            },
-          ],
+          content: [{
+            type: "text",
+            text: `**Workflow:** ${roadmap}\n\n**NEXT: Call \`orch_select\` NOW.**\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}${upgradeHint}${foundationWarning}\n\n${formatted}${memoryContext}`,
+          }],
           details: { profile, scanResult, customGoal: goal },
         };
       }
 
+      if (discoveryMode?.startsWith("🔬")) {
+        // Deep discovery: 30→5→15 funnel via sub-agents
+        oc.setPhase("discovering", ctx);
+        oc.persistState();
+
+        const { broadIdeationPrompt, winnowingPrompt, expandIdeasPrompt, parseIdeasJSON, parseWinnowingResult } = await import("../ideation-funnel.js");
+        const { runDeepPlanAgents } = await import("../deep-plan.js");
+        const { pickRefinementModel } = await import("../prompts.js");
+
+        // Phase 1: Generate 30 ideas (sub-agent)
+        ctx.ui.notify("💡 Phase 1/3: Generating 30 raw ideas...", "info");
+        const phase1Prompt = broadIdeationPrompt(profile, scanResult);
+        const phase1Results = await runDeepPlanAgents(oc.pi, ctx.cwd, [{
+          name: "ideation-broad",
+          model: pickRefinementModel(0),
+          task: phase1Prompt,
+        }]);
+        const rawIdeas = parseIdeasJSON(phase1Results[0]?.plan ?? "");
+
+        if (rawIdeas.length < 10) {
+          // Fallback to standard discovery if broad ideation failed
+          ctx.ui.notify(`⚠️ Broad ideation produced only ${rawIdeas.length} ideas. Falling back to standard discovery.`, "warning");
+          const modeInstructions = discoveryInstructions(profile, scanResult);
+          return {
+            content: [{
+              type: "text",
+              text: `**Workflow:** ${roadmap}\n\n**NEXT: Call \`orch_discover\` with your top 5 ideas and next 5-10 honorable mentions NOW.**\n\n${modeInstructions}\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}${upgradeHint}${foundationWarning}\n\n${formatted}${memoryContext}`,
+            }],
+            details: { profile, scanResult, funnelFallback: true },
+          };
+        }
+
+        oc.state.funnelRawIdeas = rawIdeas;
+        oc.persistState();
+        ctx.ui.notify(`✅ Phase 1 complete: ${rawIdeas.length} raw ideas generated.`, "info");
+
+        // Phase 2: Winnow to 5 (different model)
+        ctx.ui.notify("🔬 Phase 2/3: Competitive winnowing (30→5)...", "info");
+        const phase2Prompt = winnowingPrompt(rawIdeas, profile);
+        const phase2Results = await runDeepPlanAgents(oc.pi, ctx.cwd, [{
+          name: "ideation-winnow",
+          model: pickRefinementModel(1), // different model for diverse evaluation
+          task: phase2Prompt,
+        }]);
+        const winnowResult = parseWinnowingResult(phase2Results[0]?.plan ?? "");
+
+        if (winnowResult.keptIds.length === 0) {
+          ctx.ui.notify(`⚠️ Winnowing failed to parse results. Using top-scored ideas instead.`, "warning");
+          // Fallback: sort by weighted score and take top 5
+          winnowResult.keptIds.push(
+            ...rawIdeas
+              .sort((a, b) => weightedScore(b) - weightedScore(a))
+              .slice(0, 5)
+              .map((i) => i.id)
+          );
+        }
+
+        oc.state.funnelWinnowedIds = winnowResult.keptIds;
+        oc.persistState();
+
+        const top5 = winnowResult.keptIds
+          .map((id) => rawIdeas.find((i) => i.id === id))
+          .filter((i): i is NonNullable<typeof i> => i != null);
+
+        // Mark top 5 as tier "top"
+        for (const idea of top5) idea.tier = "top";
+
+        ctx.ui.notify(`✅ Phase 2 complete: ${winnowResult.cutCount} ideas cut, ${top5.length} kept.`, "info");
+
+        // Phase 3: Expand to 15 (10 more ideas)
+        ctx.ui.notify("💡 Phase 3/3: Generating 10 complementary ideas...", "info");
+        let existingBeadTitles: string[] = [];
+        try {
+          const { readBeads } = await import("../beads.js");
+          const beads = await readBeads(oc.pi, ctx.cwd);
+          existingBeadTitles = beads.map((b) => b.title);
+        } catch { /* no beads yet */ }
+
+        const phase3Prompt = expandIdeasPrompt(top5, existingBeadTitles, profile);
+        const phase3Results = await runDeepPlanAgents(oc.pi, ctx.cwd, [{
+          name: "ideation-expand",
+          model: pickRefinementModel(2), // yet another model
+          task: phase3Prompt,
+        }]);
+        const expandedIdeas = parseIdeasJSON(phase3Results[0]?.plan ?? "");
+
+        // Mark expanded ideas as honorable
+        for (const idea of expandedIdeas) idea.tier = "honorable";
+
+        // Combine: top 5 + expanded
+        const allIdeas = [...top5, ...expandedIdeas];
+        oc.state.candidateIdeas = allIdeas;
+        oc.setPhase("awaiting_selection", ctx);
+        oc.persistState();
+
+        ctx.ui.notify(`✅ Deep discovery complete: ${top5.length} top + ${expandedIdeas.length} honorable = ${allIdeas.length} total ideas.`, "info");
+
+        return {
+          content: [{
+            type: "text",
+            text: `**Workflow:** ${roadmap}\n\n**NEXT: Call \`orch_select\` NOW to present these ${allIdeas.length} ideas to the user.**\n\n---\n\n🔬 Deep discovery complete (30→5→${allIdeas.length} funnel)\n\n### Top 5 (winnowed from ${rawIdeas.length} raw ideas)\n${top5.map((i, n) => `${n + 1}. **${i.title}** [${i.category}] — ${i.description}`).join("\n")}\n\n### Complementary Ideas (${expandedIdeas.length})\n${expandedIdeas.map((i, n) => `${n + 1}. **${i.title}** [${i.category}] — ${i.description}`).join("\n")}`,
+          }],
+          details: { profile, scanResult, funnel: true, rawCount: rawIdeas.length, winnowedCount: top5.length, expandedCount: expandedIdeas.length },
+        };
+      }
+
+      // Standard discovery (default)
       const modeInstructions = discoveryInstructions(profile, scanResult);
-
       const discoveryPrompt = `**NEXT: Call \`orch_discover\` with your top 5 ideas and next 5-10 honorable mentions NOW.**\n\n${modeInstructions}`;
-
-      // Workflow roadmap for user orientation
-      const roadmap = workflowRoadmap("discovering");
 
       return {
         content: [

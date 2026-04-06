@@ -1,6 +1,38 @@
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from "fs";
 import { join } from "path";
 
+// ─── Core Rules ─────────────────────────────────────────────
+// Derived from Agent Flywheel Section 6: "Every AGENTS.md should include
+// these core rules." These are the 8 mandatory behavioral constraints
+// that prevent destructive actions and enable multi-agent coordination.
+
+const CORE_RULES_SECTION = `
+## Core Rules
+
+1. **Rule 0 — Override Prerogative**: The human's instructions override everything in this document.
+2. **Rule 1 — No File Deletion**: Never delete files without explicit human permission.
+3. **Rule 2 — No Destructive Git**: \`git reset --hard\`, \`git clean -fd\`, \`rm -rf\` are absolutely forbidden.
+4. **Rule 3 — Branch Policy**: All work happens on the designated branch (usually \`main\`). Never create feature branches unless explicitly told to.
+5. **Rule 4 — No Script-Based Code Changes**: Always make code changes manually via edit tools. No \`sed\`/\`awk\`/\`perl\` one-liners on source files.
+6. **Rule 5 — No File Proliferation**: No \`mainV2.ts\`, \`main_improved.ts\`, \`backup_main.ts\` variants. One canonical file per concern.
+7. **Rule 6 — Verify After Changes**: Always run the project's build/type-check/lint after modifying code. Verify no errors were introduced.
+8. **Rule 7 — Multi-Agent Awareness**: Never stash, revert, or overwrite other agents' changes. Treat unfamiliar changes as if you made them and forgot.
+`;
+
+const CORE_RULES_MARKER = "## Core Rules";
+
+// Keywords for each rule — used by scoreAgentsMd to check presence
+const CORE_RULE_KEYWORDS = [
+  "override",          // Rule 0
+  "no file deletion",  // Rule 1
+  "destructive git",   // Rule 2
+  "branch policy",     // Rule 3
+  "script-based",      // Rule 4
+  "file proliferation",// Rule 5
+  "verify after",      // Rule 6
+  "multi-agent",       // Rule 7
+];
+
 const AGENT_MAIL_SECTION = `
 ## MCP Agent Mail: coordination for multi-agent workflows
 
@@ -109,15 +141,109 @@ This file provides guidance for AI coding agents working in this repository.
 
 `;
 
+// ─── AGENTS.md Health Scoring ────────────────────────────────
+
+export interface AgentsMdHealth {
+  /** Overall health score 0-100. */
+  score: number;
+  /** Whether the 8 core rules are present. */
+  hasCoreRules: boolean;
+  /** Number of core rules detected (0-8). */
+  coreRuleCount: number;
+  /** Whether Agent Mail / coordination docs are present. */
+  hasCoordination: boolean;
+  /** Whether CASS memory section is present. */
+  hasMemory: boolean;
+  /** Missing sections that should be added. */
+  missing: string[];
+}
+
+/**
+ * Score an AGENTS.md file on completeness.
+ * Returns a health assessment with 0-100 score and list of missing sections.
+ */
+export function scoreAgentsMd(cwd: string): AgentsMdHealth {
+  const agentsMdPath = join(cwd, "AGENTS.md");
+
+  if (!existsSync(agentsMdPath)) {
+    return {
+      score: 0,
+      hasCoreRules: false,
+      coreRuleCount: 0,
+      hasCoordination: false,
+      hasMemory: false,
+      missing: ["AGENTS.md file", "Core Rules", "Agent Mail coordination", "CASS Memory"],
+    };
+  }
+
+  const content = readFileSync(agentsMdPath, "utf-8").toLowerCase();
+  const missing: string[] = [];
+
+  // Check core rules (50% of score)
+  let coreRuleCount = 0;
+  for (const keyword of CORE_RULE_KEYWORDS) {
+    if (content.includes(keyword.toLowerCase())) coreRuleCount++;
+  }
+  const hasCoreRules = coreRuleCount >= 6; // 6 of 8 is "has core rules"
+  if (!hasCoreRules) missing.push(`Core Rules (${coreRuleCount}/8 detected)`);
+
+  // Check coordination docs (30% of score)
+  const hasCoordination = content.includes("agent mail") || content.includes("coordination");
+  if (!hasCoordination) missing.push("Agent Mail coordination");
+
+  // Check memory (20% of score)
+  const hasMemory = content.includes("cass") || content.includes("memory system");
+  if (!hasMemory) missing.push("CASS Memory");
+
+  const score = Math.round(
+    (coreRuleCount / 8) * 50 +
+    (hasCoordination ? 30 : 0) +
+    (hasMemory ? 20 : 0)
+  );
+
+  return { score, hasCoreRules, coreRuleCount, hasCoordination, hasMemory, missing };
+}
+
+/**
+ * Ensure the Core Rules section is present in AGENTS.md.
+ * If AGENTS.md doesn't exist, creates it with header + core rules.
+ * If it exists but lacks core rules, appends them.
+ * Idempotent — safe to call multiple times.
+ */
+export async function ensureCoreRules(cwd: string): Promise<void> {
+  const agentsMdPath = join(cwd, "AGENTS.md");
+
+  if (!existsSync(agentsMdPath)) {
+    writeFileSync(agentsMdPath, DEFAULT_HEADER + CORE_RULES_SECTION.trimStart(), "utf-8");
+    return;
+  }
+
+  const content = readFileSync(agentsMdPath, "utf-8");
+  if (!content.includes(CORE_RULES_MARKER)) {
+    // Insert core rules after the header (before other sections) for visibility
+    appendFileSync(agentsMdPath, "\n" + CORE_RULES_SECTION.trimStart(), "utf-8");
+  }
+}
+
 export async function ensureAgentMailSection(cwd: string): Promise<void> {
   const agentsMdPath = join(cwd, "AGENTS.md");
 
   if (!existsSync(agentsMdPath)) {
-    writeFileSync(agentsMdPath, DEFAULT_HEADER + AGENT_MAIL_SECTION.trimStart() + "\n" + CASS_MEMORY_SECTION.trimStart(), "utf-8");
+    writeFileSync(
+      agentsMdPath,
+      DEFAULT_HEADER + CORE_RULES_SECTION.trimStart() + "\n" + AGENT_MAIL_SECTION.trimStart() + "\n" + CASS_MEMORY_SECTION.trimStart(),
+      "utf-8"
+    );
     return;
   }
 
   let content = readFileSync(agentsMdPath, "utf-8");
+
+  // Ensure core rules are present
+  if (!content.includes(CORE_RULES_MARKER)) {
+    appendFileSync(agentsMdPath, "\n" + CORE_RULES_SECTION.trimStart(), "utf-8");
+    content += "\n" + CORE_RULES_SECTION.trimStart();
+  }
 
   if (!content.includes(SECTION_MARKER)) {
     appendFileSync(agentsMdPath, "\n" + AGENT_MAIL_SECTION.trimStart(), "utf-8");
