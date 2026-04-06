@@ -1,16 +1,8 @@
 /**
  * Swarm Launcher & Configuration
  *
- * The Flywheel guide: "The swarm is a decentralized, self-organizing
- * system where agents independently query bv for optimal work, reserve
- * files via Agent Mail, communicate progress via threads, self-review
- * after each bead, and cross-review each other's work periodically."
- *
- * This module handles:
- * - Agent composition recommendations based on bead count
- * - Staggered launch configuration
- * - Swarm status formatting
- * - Integration with SwarmTender for monitoring
+ * Agent composition, staggered launch, status formatting,
+ * and SwarmTender monitoring integration.
  */
 
 import { swarmMarchingOrders, SWARM_STAGGER_DELAY_MS } from "./prompts.js";
@@ -43,13 +35,7 @@ export interface SwarmComposition {
 
 // ─── Agent Composition ──────────────────────────────────────
 
-/**
- * Recommend agent composition based on open bead count.
- * Derived from Flywheel Section 7 table:
- *   400+ beads → cc=4, cod=4, gmi=2
- *   100-399    → cc=3, cod=3, gmi=2
- *   <100       → cc=1, cod=1, gmi=1
- */
+/** Recommend agent composition based on open bead count. */
 export function recommendComposition(openBeadCount: number): SwarmComposition {
   if (openBeadCount >= 400) {
     return {

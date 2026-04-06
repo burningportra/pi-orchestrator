@@ -182,10 +182,6 @@ export function formatForegoneScore(score: ForegoneScore): string {
     return "█".repeat(filled) + "░".repeat(10 - filled);
   };
 
-  const emoji = score.recommendation === "foregone" ? "🎯"
-    : score.recommendation === "almost" ? "⚠️"
-    : "⛔";
-
   const header = score.recommendation === "foregone"
     ? `🎯 **Foregone Conclusion: ${score.overall}/100** — Ready to launch swarm!`
     : score.recommendation === "almost"

@@ -218,7 +218,7 @@ export function formatSplitCommands(proposal: SplitProposal): string {
     const desc = child.description.replace(/"/g, '\\"');
     const filesLine = child.files.length > 0 ? `\\n### Files: ${child.files.join(", ")}` : "";
     commands.push(
-      `br create "${child.title}" -t task -p ${2} --description "${desc}${filesLine}"`,
+      `br create "${child.title}" -t task -p 2 --description "${desc}${filesLine}"`,
     );
   }
 

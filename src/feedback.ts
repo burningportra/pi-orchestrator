@@ -1,14 +1,9 @@
 /**
  * Self-Improvement Loop — Feedback & Prompt Tracking
  *
- * Three mechanisms that make each orchestration improve the next:
- *
  * A. Post-orchestration feedback — structured survey saved after completion
  * B. Automatic CASS context injection — prepend relevant rules to prompts
  * C. Prompt effectiveness tracking — track which prompts produce real changes
- *
- * Derived from Agent Flywheel Section 10: "Your agent toolchain should
- * improve itself using its own output as fuel."
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "fs";
@@ -168,11 +163,7 @@ export function formatFeedbackStats(stats: FeedbackStats): string {
 
 // ─── B. Automatic CASS Context Injection ────────────────────
 
-/**
- * Prepend CASS context to a prompt if available.
- * This is the mechanism that makes prior learnings flow into every prompt
- * automatically, without requiring the agent to call orch_memory manually.
- */
+/** Prepend CASS context to a prompt if available. */
 export function withCassContext(prompt: string, cwd: string, taskDescription?: string): string {
   try {
     const { readMemory } = require("./memory.js");

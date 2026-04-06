@@ -43,14 +43,9 @@ export async function runGuidedGates(
     { emoji: "🛬", label: "Landing checklist", desc: "verify session is resumable", auto: false },
   ];
 
-  // Agent-mail threading: if agentMail is active, sub-agents (peer review / hit-me) bootstrap
-  // their own sessions via agentMailTaskPreamble() injected into their tasks.
-  // The orchestrator itself doesn't have an agent-mail identity — it's the spawner,
-  // not a participant. Sub-agents handle their own inbox checking via macro_start_session.
-  // Thread IDs are gate-scoped (e.g. "peer-review-r1", "hit-me-r1").
-  if (st.coordinationBackend?.agentMail) {
-    // Agent-mail threading is active — sub-agents will coordinate via thread messages
-  }
+  // Agent-mail threading: sub-agents bootstrap their own sessions via
+  // agentMailTaskPreamble() injected into their tasks. Thread IDs are
+  // gate-scoped (e.g. "peer-review-r1", "hit-me-r1").
 
   let chosen: string | undefined;
   const startGate = st.currentGateIndex ?? 0;
@@ -109,7 +104,7 @@ export async function runGuidedGates(
 
     // Self-improvement loop: save structured feedback for future orchestrations
     try {
-      const { collectFeedback, saveFeedback, formatPromptEffectiveness } = await import("./feedback.js");
+      const { collectFeedback, saveFeedback } = await import("./feedback.js");
       const feedback = collectFeedback(st);
       saveFeedback(ctx.cwd, feedback);
     } catch {
