@@ -123,7 +123,7 @@ export function registerProfileTool(oc: OrchestratorContext) {
       );
 
       if (discoveryMode?.startsWith("✏️")) {
-        // Custom goal — same as existing "I know what I want" path
+        // Custom goal — skip discovery + selection, go straight to workflow choice
         const goal = await ctx.ui.input(
           "Enter your goal:",
           "e.g., Add API rate limiting with Redis"
@@ -136,17 +136,103 @@ export function registerProfileTool(oc: OrchestratorContext) {
         }
         const refinement = await runGoalRefinement(goal, profile, oc.pi, ctx);
         oc.state.selectedGoal = refinement.enrichedGoal;
-        if (!refinement.skipped) {
+        const refinementUsed = !refinement.skipped;
+        if (refinementUsed) {
           oc.state.constraints = extractConstraints(refinement.answers);
         }
         oc.setPhase("planning", ctx);
         oc.persistState();
+
+        // Ask for constraints only if refinement didn't already capture them
+        if (!refinementUsed) {
+          const constraintInput = await ctx.ui.input(
+            "Any constraints? (comma-separated, or leave empty)",
+            "e.g., no new dependencies, keep backward compat"
+          );
+          oc.state.constraints = constraintInput
+            ? constraintInput.split(",").map((c) => c.trim()).filter(Boolean)
+            : [];
+        }
+        oc.persistState();
+
+        // Workflow choice: plan first, deep plan, or direct to beads
+        const workflowOptions = [
+          "📋 Plan first — generate a single plan document before creating beads",
+          "🧠 Multi-model plan — competing planners synthesize one plan document",
+          "🧠 Deep plan (beads) — multi-model planning agents create beads",
+          "⚡ Direct to beads — jump straight to bead creation",
+        ];
+
+        let workflowChoice: string | undefined;
+        try {
+          workflowChoice = await ctx.ui.select("🛤️ Choose a workflow:", workflowOptions);
+        } catch {
+          workflowChoice = workflowOptions[3]; // default to direct
+        }
+
+        if (workflowChoice === undefined) {
+          oc.orchestratorActive = false;
+          oc.setPhase("idle", ctx);
+          oc.persistState();
+          return {
+            content: [{ type: "text", text: "Workflow selection cancelled. Orchestration stopped." }],
+            details: { selected: false },
+          };
+        }
+
+        const enrichedGoal = refinement.enrichedGoal;
+        const constraintsSummary = oc.state.constraints.length > 0
+          ? `\nConstraints: ${oc.state.constraints.join(", ")}`
+          : "";
+        const repoContext = formatRepoProfile(profile, scanResult);
+
+        if (workflowChoice.startsWith("📋")) {
+          oc.state.planRefinementRound = 0;
+          oc.setPhase("planning", ctx);
+          oc.persistState();
+          return {
+            content: [{
+              type: "text",
+              text: `**NEXT: Call \`orch_plan\` with mode \`single_model\` NOW.**\n\nGoal: "${enrichedGoal}"${constraintsSummary}\n\nGenerate a detailed implementation plan as a markdown artifact. Once the plan is approved, beads will be created from it.`,
+            }],
+            details: { profile, scanResult, customGoal: goal, selected: true, goal: enrichedGoal, constraints: oc.state.constraints, workflow: "plan_first" },
+          };
+        }
+
+        if (workflowChoice.startsWith("🧠 Multi-model")) {
+          oc.state.planRefinementRound = 0;
+          oc.setPhase("planning", ctx);
+          oc.persistState();
+          return {
+            content: [{
+              type: "text",
+              text: `**NEXT: Call \`orch_plan\` with mode \`multi_model\` NOW.**\n\nGoal: "${enrichedGoal}"${constraintsSummary}\n\nRun competing planners for correctness, robustness, and ergonomics, then synthesize them into one plan document artifact.`,
+            }],
+            details: { profile, scanResult, customGoal: goal, selected: true, goal: enrichedGoal, constraints: oc.state.constraints, workflow: "multi_model_plan" },
+          };
+        }
+
+        if (workflowChoice.startsWith("🧠 Deep plan")) {
+          oc.setPhase("planning", ctx);
+          oc.persistState();
+          return {
+            content: [{
+              type: "text",
+              text: `**NEXT: Run deep planning with multi-model agents.**\n\nGoal: "${enrichedGoal}"${constraintsSummary}\n\nUse the deep planning system to generate beads via multi-model triangulation.`,
+            }],
+            details: { profile, scanResult, customGoal: goal, selected: true, goal: enrichedGoal, constraints: oc.state.constraints, workflow: "deep_plan" },
+          };
+        }
+
+        // Default: Direct to beads
+        const instructions = beadCreationPrompt(enrichedGoal, repoContext, oc.state.constraints);
+        oc.setPhase("creating_beads", ctx);
         return {
           content: [{
             type: "text",
-            text: `**Workflow:** ${roadmap}\n\n**NEXT: Call \`orch_select\` NOW.**\n\n---\n\nRepository profiled successfully.\n\n${scanSourceLine}\n${coordLine}${upgradeHint}${foundationWarning}\n\n${formatted}${memoryContext}`,
+            text: `**NEXT: Create beads for this goal using \`br create\` and \`br dep add\` in bash NOW.**\n\nGoal: "${enrichedGoal}"${constraintsSummary}\n\n---\n\n${instructions}`,
           }],
-          details: { profile, scanResult, customGoal: goal },
+          details: { profile, scanResult, customGoal: goal, selected: true, goal: enrichedGoal, constraints: oc.state.constraints, workflow: "direct" },
         };
       }
 
