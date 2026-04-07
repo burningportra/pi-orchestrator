@@ -524,6 +524,9 @@ export function registerApproveTool(oc: OrchestratorContext) {
         ? beadListParts.join("\n")
         : beadListParts.join("\n\n");
 
+      // Compact one-liner list for LLM context (avoids repeating full bead dump on every refinement call)
+      const compactBeadList = beads.map((b) => `• ${b.id}: ${b.title}`).join("\n");
+
       // Update full snapshot for next round
       _lastBeadSnapshotFull = currentSnapshotFull;
 
@@ -818,7 +821,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
           content: [
             {
               type: "text",
-              text: `**NEXT: Review and refine the beads using br CLI, then call \`orch_approve_beads\` again.**\n\n${beadRefinementPrompt(round, oc.state.polishChanges)}\n\n---\n\nCurrent beads:\n\n${beadListText}`,
+              text: `**NEXT: Review and refine the beads using br CLI, then call \`orch_approve_beads\` again.**\n\n${beadRefinementPrompt(round, oc.state.polishChanges)}\n\n---\n\nCurrent beads (${beads.length} total):\n${compactBeadList}\n\nUse \`br show <id>\` for full bead details.`,
             },
           ],
           details: { approved: false, refining: true, beadCount: beads.length, polishRound: round },
@@ -1178,7 +1181,7 @@ cd ${ctx.cwd}`;
             return {
               content: [{
                 type: "text",
-                text: `**NEXT: Apply this cross-model feedback, then call \`orch_approve_beads\` again.**\n\n### Raw cross-model feedback:\n${reviewResult.rawOutput}\n\n---\n\n${injectedPrompt}\n\n---\n\nCurrent beads:\n\n${beadListText}`,
+                text: `**NEXT: Apply this cross-model feedback, then call \`orch_approve_beads\` again.**\n\n### Raw cross-model feedback:\n${reviewResult.rawOutput}\n\n---\n\n${injectedPrompt}\n\n---\n\nCurrent beads (${beads.length} total):\n${compactBeadList}\n\nUse \`br show <id>\` for full bead details.`,
               }],
               details: { approved: false, refining: true, crossModelApplied: true, beadCount: beads.length, polishRound: oc.state.polishRound },
             };
@@ -1213,7 +1216,7 @@ cd ${ctx.cwd}`;
           return {
             content: [{
               type: "text",
-              text: `**NEXT: Apply these cross-model suggestions, then call \`orch_approve_beads\` again.**\n\n### Cross-model suggestions to apply:\n${suggestionsText}\n\n---\n\n${injectedPrompt}\n\n---\n\nCurrent beads:\n\n${beadListText}`,
+              text: `**NEXT: Apply these cross-model suggestions, then call \`orch_approve_beads\` again.**\n\n### Cross-model suggestions to apply:\n${suggestionsText}\n\n---\n\n${injectedPrompt}\n\n---\n\nCurrent beads (${beads.length} total):\n${compactBeadList}\n\nUse \`br show <id>\` for full bead details.`,
             }],
             details: { approved: false, refining: true, crossModelApplied: true, beadCount: beads.length, polishRound: oc.state.polishRound },
           };
@@ -1265,7 +1268,7 @@ cd ${ctx.cwd}`;
             content: [
               {
                 type: "text",
-                text: `**Quality gate failed. Fix these issues, then call \`orch_approve_beads\` again.**\n\n⚠️ Issues:\n${failureLines.join("\n")}\n\n---\n\n${beadRefinementPrompt(round, oc.state.polishChanges)}\n\n---\n\nCurrent beads:\n\n${beadListText}`,
+                text: `**Quality gate failed. Fix these issues, then call \`orch_approve_beads\` again.**\n\n⚠️ Issues:\n${failureLines.join("\n")}\n\n---\n\n${beadRefinementPrompt(round, oc.state.polishChanges)}\n\n---\n\nCurrent beads (${beads.length} total):\n${compactBeadList}\n\nUse \`br show <id>\` for full bead details.`,
               },
             ],
             details: { approved: false, refining: true, qualityGateFailed: true, beadCount: beads.length },

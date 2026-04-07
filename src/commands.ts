@@ -737,6 +737,8 @@ export function registerCommands(oc: OrchestratorContext) {
         return { accepted: true };
       };
 
+      const phaseLog: string[] = [];
+
       for (const { phase, label, emoji } of phases) {
         ctx.ui.notify(`${emoji} Phase: ${label}...`, "info");
         (state as any).currentPhase = phase;
@@ -755,10 +757,23 @@ export function registerCommands(oc: OrchestratorContext) {
           if (!result.success) {
             // user_review returning success=false means user chose to pause
             if (phase === "user_review") return;
-            ctx.ui.notify(`⚠️ ${label} had issues: ${result.error ?? "partial output"}. Continuing with current proposal.`, "warning");
+            const warn = `⚠️ ${emoji} **${label}** had issues: ${result.error ?? "partial output"}. Continuing.`;
+            ctx.ui.notify(warn, "warning");
+            phaseLog.push(warn);
+          } else if (phase !== "user_review" && phase !== "multi_model") {
+            // Emit a visible chat message after each substantive phase so there's proof of progress
+            const snippet = state.proposal.slice(0, 300).replace(/\n+/g, " ");
+            const hasProposal = state.proposal.length > 100;
+            const status = hasProposal
+              ? `✅ ${emoji} **${label}** complete${result.model ? ` (${result.model})` : ""} — proposal ${state.proposal.length} chars\n\n> ${snippet}${state.proposal.length > 300 ? "..." : ""}\n\n_Artifact: ${artifactName}_`
+              : `⚠️ ${emoji} **${label}** produced no output — check that the repo URL is accessible.`;
+            phaseLog.push(status);
+            ctx.ui.notify(status, hasProposal ? "info" : "warning");
           }
         } catch (err: any) {
-          ctx.ui.notify(`❌ ${label} failed: ${err.message ?? err}. Continuing with current proposal.`, "error");
+          const errMsg = `❌ ${emoji} **${label}** failed: ${err.message ?? err}. Continuing with current proposal.`;
+          ctx.ui.notify(errMsg, "error");
+          phaseLog.push(errMsg);
         }
       }
 
@@ -779,8 +794,9 @@ export function registerCommands(oc: OrchestratorContext) {
       );
 
       pi.sendUserMessage(
-        `Research pipeline complete for ${externalName}. ` +
-        `Call \`orch_approve_beads\` to review the proposal and create beads.`,
+        `Research pipeline complete for ${externalName} (${state.phasesCompleted.length}/${phases.length} phases).\n\n` +
+        `**Phase log:**\n${phaseLog.map((l) => `- ${l}`).join("\n")}\n\n` +
+        `Proposal saved to \`${artifactName}\`. Call \`orch_approve_beads\` to review it and create beads.`,
         { deliverAs: "followUp" }
       );
     },

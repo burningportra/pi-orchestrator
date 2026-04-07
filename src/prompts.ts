@@ -1167,17 +1167,42 @@ ${description}
 // ─── Research & Reimagine Workflow ───────────────────────────
 /** Step 1: Investigate an external project and propose reimagined ideas. */
 export function researchInvestigatePrompt(externalUrl: string, projectName: string, cwd: string): string {
+  const repoSlug = externalUrl.replace(/\.git$/, "").split("/").slice(-2).join("-");
+  const cloneDir = `/tmp/pi-research-${repoSlug}`;
   return `## Research & Reimagine - Step 1: Investigate
 
-Clone or scrape ${externalUrl} and investigate it. Find ideas worth reimagining on top of ${projectName}'s existing capabilities.
+Study ${externalUrl} and find ideas worth reimagining on top of ${projectName}'s existing capabilities.
 
-Write up a proposal document that:
-1. Summarizes the external project's architecture and key ideas
-2. Identifies the strongest patterns and design decisions
-3. Proposes how to reimagine each through the lens of ${projectName}'s unique strengths
+### Step 1 — Clone the repo
+\`\`\`bash
+git clone --depth 1 ${externalUrl} ${cloneDir} 2>&1 || echo "Clone failed — repo may not exist or require auth"
+\`\`\`
+
+If clone fails, output the error and stop — do NOT invent a proposal.
+
+### Step 2 — Explore the codebase
+\`\`\`bash
+ls ${cloneDir}
+cat ${cloneDir}/README.md 2>/dev/null || cat ${cloneDir}/readme.md 2>/dev/null || echo "No README found"
+\`\`\`
+
+Then read 3–5 key source files to understand architecture and implementation patterns.
+
+### Step 3 — Study this project
+\`\`\`bash
+ls ${cwd}
+cat ${cwd}/README.md 2>/dev/null | head -100
+\`\`\`
+
+### Step 4 — Write the proposal
+
+Write a proposal document that:
+1. Summarizes the external project's architecture and key ideas (cite specific files/patterns you read)
+2. Identifies the strongest design decisions worth adapting
+3. Proposes how to reimagine each through ${projectName}'s unique strengths
 4. Creates something neither project could achieve alone
 
-Make the proposal genuinely novel, not a shallow port.
+Make the proposal genuinely novel, not a shallow port. Start with a one-line summary of what the external project does, so the reader knows it was actually studied.
 
 cd ${cwd}`;
 }
