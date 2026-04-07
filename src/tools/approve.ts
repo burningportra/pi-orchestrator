@@ -1,12 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { readFileSync } from "fs";
-import type { OrchestratorContext, Bead, CoordinationMode } from "../types.js";
+import type { OrchestratorContext, Bead } from "../types.js";
 import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS, beadCreationPrompt, planRefinementPrompt, freshPlanRefinementPrompt, planToBeadsPrompt, formatPlanToBeadAuditWarnings, pickRefinementModel } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 import { planQualityScoringPrompt, parsePlanQualityScore, formatPlanQualityScore, type PlanQualityScore } from "../plan-quality.js";
 import { sessionArtifactPath } from "../session-artifacts.js";
+import { getParallelModelAssignments, resolveExecutionMode } from "./shared.js";
 
 // ─── Module-level bead snapshots for change detection ────────
 // These live at module scope so they persist across multiple calls to
@@ -175,59 +175,6 @@ function formatPlanSummary(plan: string): string {
   return summary.join("\n");
 }
 
-function formatModelRef(model: { provider?: string; id: string }): string {
-  return model.provider ? `${model.provider}/${model.id}` : model.id;
-}
-
-async function getParallelModelAssignments(ctx: ExtensionContext, agentCount: number): Promise<(string | undefined)[]> {
-  if (agentCount < 2) {
-    return Array(agentCount).fill(undefined);
-  }
-
-  const availableModels = ctx.modelRegistry.getAvailable();
-  const orderedModels = availableModels.filter((model, index, models) =>
-    models.findIndex((candidate) => formatModelRef(candidate) === formatModelRef(model)) === index
-  );
-
-  if (orderedModels.length < 2) {
-    return Array(agentCount).fill(undefined);
-  }
-
-  const currentModelRef = ctx.model ? formatModelRef(ctx.model) : undefined;
-  if (currentModelRef) {
-    const currentIndex = orderedModels.findIndex((model) => formatModelRef(model) === currentModelRef);
-    if (currentIndex > 0) {
-      const [currentModel] = orderedModels.splice(currentIndex, 1);
-      orderedModels.unshift(currentModel);
-    }
-  }
-
-  const primaryModel = orderedModels[0];
-  const rotation = [
-    primaryModel,
-    ...orderedModels.slice(1).filter((model) => model.provider !== primaryModel.provider),
-  ];
-
-  if (rotation.length < 2) {
-    const fallbackAlt = orderedModels.slice(1).find((model) => formatModelRef(model) !== formatModelRef(primaryModel));
-    if (!fallbackAlt) {
-      return Array(agentCount).fill(undefined);
-    }
-    rotation.push(fallbackAlt);
-  }
-
-  return Array.from({ length: agentCount }, (_, index) => formatModelRef(rotation[index % rotation.length]));
-}
-
-function resolveExecutionMode(
-  coordinationMode: CoordinationMode | undefined,
-  hasAgentMail: boolean
-): "worktree" | "single-branch" {
-  if (coordinationMode === "single-branch") return "single-branch";
-  if (coordinationMode === "worktree") return "worktree";
-  return hasAgentMail ? "single-branch" : "worktree";
-}
-
 export function registerApproveTool(oc: OrchestratorContext) {
   oc.pi.registerTool({
     name: "orch_approve_beads",
@@ -292,12 +239,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
           ? `\n🔄 Plan refinement round ${planRound}${changesInfo}${convergenceInfo}${oc.state.polishConverged ? "\n✅ Steady-state reached (0 changes for 2 consecutive rounds)" : ""}`
           : "";
 
-        // ── Plan Quality Oracle ──────────────────────────────────
-        // Run quality scoring on first view and after each refinement round.
-        // The score is computed by asking the LLM to evaluate the plan and
-        // return structured JSON, which we parse and cache in state.
-        // Flywheel Section 2: "Planning is the cheapest place to buy
-        // correctness, coherence, and ambition."
+        // Score plan quality on first view and after each refinement round.
         let qualityInfo = "";
         const shouldScore = !oc.state.planReadinessScore || returningFromRefinement;
         if (shouldScore) {
@@ -363,9 +305,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
           oc.setPhase("planning", ctx);
           oc.persistState();
 
-          // Flywheel Section 3: "Fresh conversations prevent the model from
-          // anchoring on its own prior output." Plan refinement MUST use a
-          // sub-agent (truly fresh context) with a different model each round.
+          // Fresh sub-agent + model rotation prevents anchoring on prior output.
           const refinementModel = pickRefinementModel(planRound);
           const freshPrompt = freshPlanRefinementPrompt(
             plan,
@@ -418,6 +358,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
 
       const { readBeads, readyBeads, extractArtifacts, validateBeads, syncBeads, updateBeadStatus, bvInsights, auditPlanToBeads } = await import("../beads.js");
       const { beadRefinementPrompt } = await import("../prompts.js");
+      const { simulateExecutionPaths, formatSimulationReport, beadsToSimulated } = await import("../plan-simulation.js");
 
       // Read all beads from br CLI
       let beads = await readBeads(oc.pi, ctx.cwd);
@@ -546,6 +487,43 @@ export function registerApproveTool(oc: OrchestratorContext) {
         ? `\n\n⚠️ **Bottleneck beads:** ${insights.Bottlenecks.map((b) => b.ID).join(", ")} — high betweenness centrality means these block many downstream beads. Consider splitting them (Advanced → Fix graph issues) before implementing.`
         : "";
 
+      // ── Plan simulation ──
+      let simulationWarning = "";
+      try {
+        // Build dep map from br dep list
+        const depMap = new Map<string, string[]>();
+        for (const b of beads) {
+          try {
+            const depResult = await oc.pi.exec("br", ["dep", "list", b.id, "--json"], { cwd: ctx.cwd });
+            const deps = JSON.parse(depResult.stdout);
+            const blockedBy = (deps.dependencies ?? []).filter((d: any) => d.type === "blocks").map((d: any) => d.depends_on_id);
+            if (blockedBy.length > 0) depMap.set(b.id, blockedBy);
+          } catch { /* skip beads with no deps */ }
+        }
+
+        // Get repo file list
+        const repoFiles = new Set<string>();
+        try {
+          const findResult = await oc.pi.exec("find", ["src", "-type", "f"], { cwd: ctx.cwd });
+          for (const line of findResult.stdout.split("\n")) {
+            const trimmed = line.trim();
+            if (trimmed) repoFiles.add(trimmed);
+          }
+        } catch { /* fallback: empty set, missing files will be flagged */ }
+
+        const simulated = beadsToSimulated(beads, depMap);
+        const simResult = simulateExecutionPaths(simulated, repoFiles);
+        const simReport = formatSimulationReport(simResult);
+
+        if (simResult.valid) {
+          simulationWarning = `\n\n✅ Simulation passed — ${simResult.parallelGroups.length} execution level(s), no structural issues.`;
+        } else {
+          simulationWarning = `\n\n${simReport}`;
+        }
+      } catch {
+        // Non-fatal — simulation is advisory
+      }
+
       let planAuditWarning = "";
       if (oc.state.planDocument) {
         try {
@@ -595,10 +573,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
         ? `\n🔄 Polish round ${round}${changesInfo}${convergenceInfo}${converged ? "\n✅ Steady-state reached (0 changes for 2 consecutive rounds)" : ""}`
         : "";
 
-      // ── Foregone Conclusion Detector ─────────────────
-      // Composite readiness score from all available signals.
-      // Flywheel: "Once beads are good enough, implementation is
-      // a foregone conclusion."
+      // Composite readiness score from all signals.
       let foregoneInfo = "";
       if (round >= 2) {
         try {
@@ -714,7 +689,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
 
       if (choice === undefined) {
         choice = await ctx.ui.select(
-          `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}${bottleneckWarning}${planAuditWarning}${foregoneInfo}\n\n${beadListText}${validationWarning}${convergenceTip}`,
+          `${beads.length} beads ready for: ${oc.state.selectedGoal}${roundHeader}${qualitySummary}${simulationWarning}${bottleneckWarning}${planAuditWarning}${foregoneInfo}\n\n${beadListText}${validationWarning}${convergenceTip}`,
           options
         );
       }
@@ -794,8 +769,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
       }
 
       if (choice?.startsWith("🧠 Fresh-agent")) {
-        // Fresh-context refinement: spawn a sub-agent with NO prior context
-        // Flywheel Section 5: "Fresh conversations prevent the model from anchoring on its own prior output."
+        // Fresh-context refinement: sub-agent with zero prior context prevents anchoring.
         oc.setPhase("refining_beads", ctx);
         oc.persistState();
         await syncBeads(oc.pi, ctx.cwd);
@@ -821,7 +795,6 @@ export function registerApproveTool(oc: OrchestratorContext) {
 
       if (choice?.startsWith("🔨")) {
         // Blunder hunt: 5x overshoot mismatch technique
-        // Flywheel Section 5: "Lie to them and give them a huge number"
         oc.setPhase("refining_beads", ctx);
         oc.persistState();
         await syncBeads(oc.pi, ctx.cwd);
@@ -848,7 +821,6 @@ export function registerApproveTool(oc: OrchestratorContext) {
 
       if (choice?.startsWith("🔗")) {
         // Bead deduplication check
-        // Flywheel Section 5: "Check over ALL open beads. Make sure none are duplicative."
         oc.setPhase("refining_beads", ctx);
         oc.persistState();
         await syncBeads(oc.pi, ctx.cwd);

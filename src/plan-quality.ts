@@ -1,16 +1,8 @@
 /**
  * Plan Quality Oracle
  *
- * A quantitative "plan readiness score" that answers: "Is this plan good
- * enough that implementation is a foregone conclusion?"
- *
- * The Flywheel guide says the plan IS the product — 85% of effort should
- * go into planning. This module enforces that philosophy mechanically by
- * scoring plans on 5 dimensions and gating the plan→bead transition.
- *
- * Derived from Agent Flywheel Section 2: "Planning tokens are far fewer
- * and cheaper than implementation tokens... Planning is the cheapest
- * place to buy correctness, coherence, and ambition."
+ * Scores plans on 5 dimensions and gates the plan→bead transition.
+ * If the score is too low, the plan gets sent back for refinement.
  */
 
 // ─── Types ──────────────────────────────────────────────────

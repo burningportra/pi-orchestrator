@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { dirname, join, resolve } from "path";
+import { dirname, join } from "path";
 
 type ArtifactContext = Pick<ExtensionContext, "cwd" | "sessionManager">;
 
@@ -20,5 +20,5 @@ export function sessionArtifactRoot(ctx: ArtifactContext): string {
 }
 
 export function sessionArtifactPath(ctx: ArtifactContext, name: string): string {
-  return resolve(sessionArtifactRoot(ctx), name);
+  return join(sessionArtifactRoot(ctx), name);
 }

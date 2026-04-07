@@ -124,7 +124,7 @@ export function computeForegoneScore(inputs: ForegoneInputs): ForegoneScore {
     planCoverage * 0.20
   );
 
-  const isForegonable = blockers.length === 0 && overall >= 70;
+  const isForegonable = blockers.length === 0 && overall >= 80;
 
   const recommendation: ForegoneScore["recommendation"] =
     overall >= 80 && blockers.length === 0 ? "foregone"
@@ -191,7 +191,7 @@ export function formatForegoneScore(score: ForegoneScore): string {
   const lines = [
     header,
     `  Plan Quality:    ${bar(score.planReady)} ${score.planReady}%`,
-    `  Bead Convergence:${bar(score.beadConvergence)} ${score.beadConvergence}%`,
+    `  Bead Convergence: ${bar(score.beadConvergence)} ${score.beadConvergence}%`,
     `  Bead Quality:    ${bar(score.beadQuality)} ${score.beadQuality}%`,
     `  Graph Health:    ${bar(score.graphHealth)} ${score.graphHealth}%`,
     `  Plan Coverage:   ${bar(score.planCoverage)} ${score.planCoverage}%`,

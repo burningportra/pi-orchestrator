@@ -219,7 +219,7 @@ describe("researchInvestigatePrompt", () => {
 
 describe("researchDeepenPrompt", () => {
   it("pushes for deeper analysis", () => {
-    expect(researchDeepenPrompt()).toContain("barely scratched the surface");
+    expect(researchDeepenPrompt()).toContain("surface-level");
   });
 });
 

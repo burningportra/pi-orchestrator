@@ -1,12 +1,8 @@
 /**
  * Research-Reimagine Pipeline
  *
- * A formalized 7-phase pipeline for studying an external project and
- * reimagining its strongest ideas through the lens of your own project.
- *
- * Derived from Agent Flywheel Section 5b: "Major Features: Research
- * and Reimagine" — study external project, deepen, invert, 5x blunder
- * hunt, multi-model feedback, synthesize.
+ * 7-phase pipeline: study an external project, reimagine its ideas
+ * through this project's lens, stress-test, and synthesize.
  *
  * Phases:
  * 1. Investigate — study external project, propose reimagined ideas

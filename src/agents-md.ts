@@ -2,9 +2,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync } from "fs";
 import { join } from "path";
 
 // ─── Core Rules ─────────────────────────────────────────────
-// Derived from Agent Flywheel Section 6: "Every AGENTS.md should include
-// these core rules." These are the 8 mandatory behavioral constraints
-// that prevent destructive actions and enable multi-agent coordination.
+// Mandatory behavioral constraints for multi-agent coordination.
 
 const CORE_RULES_SECTION = `
 ## Core Rules

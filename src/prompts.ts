@@ -158,11 +158,11 @@ Each bead goes through multiple review passes:
 2. **Adversarial review**: A second pass with fresh eyes checks for bugs, oversights, ergonomics issues
 3. **Cross-agent review**: After ALL beads complete, an independent reviewer sub-agent audits the full diff
 
-This mirrors the "check over everything again with fresh eyes" pattern - don't skip it.
+Each pass uses a different perspective to catch what the previous one missed.
 
 ## Post-Completion
 After all beads and reviews pass, the orchestrator offers:
-- **Polish pass**: De-slopify - improve clarity, remove generic AI patterns, maximize ergonomics
+- **Polish pass**: Improve clarity, remove generic AI patterns, tighten ergonomics
 - **Commit strategy**: Group changes into logical commits with detailed messages
 - **Skill extraction**: Check if the work product should become a reusable skill
 
@@ -269,7 +269,7 @@ br dep add <subtask-id> <parent-id> --type parent-child
 
 Each subtask should be a single coherent unit of work that one agent can complete independently.
 
-**\`br create\` flag reference**: \`-d\` = description (long: \`--description\`), \`-t\` = type, \`-p\` = priority. Do NOT abbreviate to \`--desc\` — it does not exist and will error.
+**\`br create\` flag reference**: \`-d\` = description (long: \`--description\`), \`-t\` = type, \`-p\` = priority. Do NOT abbreviate to \`--desc\` - it does not exist and will error.
 
 ### Requirements
 - Make beads self-documenting - include background, reasoning, and anything a future agent needs
@@ -285,7 +285,7 @@ ${formatTemplatesForPrompt()}
 
 Templates are optional shortcuts for common bead shapes, not requirements. If a template fits, use its ID as a drafting aid, substitute concrete placeholder values, and expand it into a fully self-contained bead description before running \`br create\`.
 
-Example — starting from template \`add-api-endpoint\` with all placeholders substituted (\`{{endpointPath}} → /api/users\`, \`{{moduleName}} → user-management\`, \`{{endpointPurpose}} → return a filtered user list\`, \`{{httpMethod}} → GET\`, \`{{implementationFile}} → src/api/users.ts\`, \`{{testFile}} → src/api/users.test.ts\`):
+Example - starting from template \`add-api-endpoint\` with all placeholders substituted (\`{{endpointPath}} → /api/users\`, \`{{moduleName}} → user-management\`, \`{{endpointPurpose}} → return a filtered user list\`, \`{{httpMethod}} → GET\`, \`{{implementationFile}} → src/api/users.ts\`, \`{{testFile}} → src/api/users.test.ts\`):
 
 > Implement a new API endpoint for /api/users in the user-management area.
 > Add request validation, success/error responses, and any supporting wiring
@@ -304,7 +304,7 @@ Example — starting from template \`add-api-endpoint\` with all placeholders su
 > - src/api/users.ts
 > - src/api/users.test.ts
 
-Notice: every placeholder is resolved and the final text is fully expanded — no template IDs, no placeholders.
+Notice: every placeholder is resolved and the final text is fully expanded - no template IDs, no placeholders.
 
 If no template fits, write a custom bead normally. Final beads must not say \`[Use template: ...]\`, \`see template\`, or leave unresolved \`{{placeholderName}}\` markers behind.
 
@@ -406,7 +406,7 @@ The plan is your primary source. Use templates only to accelerate structure, not
 Templates are optional: if one fits, expand it with plan-specific details; if none fit, write a custom bead normally.
 Do not emit final beads that say \`[Use template: ...]\`, raw template IDs, \`see template\`, or unresolved \`{{placeholderName}}\` markers.
 
-Example — plan says "add a users endpoint with validation and tests", template \`add-api-endpoint\` fits. Substitute all placeholders (\`{{endpointPath}} → /api/users\`, \`{{moduleName}} → user-management\`, \`{{endpointPurpose}} → return a filtered user list\`, \`{{httpMethod}} → GET\`, \`{{implementationFile}} → src/api/users.ts\`, \`{{testFile}} → src/api/users.test.ts\`):
+Example - plan says "add a users endpoint with validation and tests", template \`add-api-endpoint\` fits. Substitute all placeholders (\`{{endpointPath}} → /api/users\`, \`{{moduleName}} → user-management\`, \`{{endpointPurpose}} → return a filtered user list\`, \`{{httpMethod}} → GET\`, \`{{implementationFile}} → src/api/users.ts\`, \`{{testFile}} → src/api/users.test.ts\`):
 
 > Implement a new API endpoint for /api/users in the user-management area.
 > Add request validation, success/error responses, and any supporting wiring
@@ -425,7 +425,7 @@ Example — plan says "add a users endpoint with validation and tests", template
 > - src/api/users.ts
 > - src/api/users.test.ts
 
-Notice: every placeholder is resolved and the final text is fully expanded with plan context — no template IDs, no placeholders, no "see template" references.
+Notice: every placeholder is resolved and the final text is fully expanded with plan context - no template IDs, no placeholders, no "see template" references.
 
 Verify with \`br list\` and \`br dep cycles\` (must show no cycles).
 
@@ -442,17 +442,17 @@ export function beadRefinementPrompt(roundNumber?: number, priorChanges?: number
 
   return `## Bead Refinement Pass
 
-${roundInfo}${changesInfo}Check over each bead super carefully via \`br list\` and \`br show <id>\`.
+${roundInfo}${changesInfo}Review each bead via \`br list\` and \`br show <id>\`.
 
-### Questions to ask for each bead:
-1. Are you sure this makes sense? Is it the best approach?
-2. Could we change anything to make it clearer or more actionable?
-3. Does the description contain enough context for a fresh agent to execute without guessing?
-4. Are the acceptance criteria specific and testable?
+### For each bead, check:
+1. Does this make sense? Is there a better approach?
+2. Could the description be clearer or more actionable?
+3. Does a fresh agent have enough context to execute without guessing?
+4. Are acceptance criteria specific and testable?
 5. Is the \`### Files:\` section accurate and complete?
 6. Are dependencies correct? Would \`br ready\` return the right parallel groups?
-7. Are any beads too large? Could they be split into 2-3 subtasks for better parallelism and clearer scope?
-8. Could a fresh agent implement this bead without ANY external context? If not, what background/reasoning is missing?
+7. Are any beads too large? Could they split into 2-3 subtasks for better parallelism?
+8. Could a fresh agent implement this without ANY external context? What background is missing?
 
 ### Actions
 - Revise with \`br update <id> -d "..."\` for any improvements
@@ -469,12 +469,16 @@ Use ultrathink.`;
 }
 
 /** Fresh-context refinement prompt for sub-agent bead review. */
-export function freshContextRefinementPrompt(cwd: string, goal: string, roundNumber: number): string {
+export function freshContextRefinementPrompt(cwd: string, goal: string, roundNumber: number, simulationReport?: string): string {
+  const simSection = simulationReport
+    ? `\n\n### Simulation Issues\nThe plan simulation found structural problems that must be fixed:\n\n${simulationReport}\n`
+    : "";
+
   return `## Fresh-Context Bead Refinement (Round ${roundNumber + 1})
 
 You are reviewing beads for a project with NO prior context. This is deliberate - fresh eyes catch what anchored reviewers miss.
 
-**Goal:** ${goal}
+**Goal:** ${goal}${simSection}
 
 ### Instructions
 1. Run \`br list --json\` to read all open beads
@@ -496,6 +500,31 @@ You are reviewing beads for a project with NO prior context. This is deliberate 
 Use ultrathink.
 
 cd ${cwd}`;
+}
+
+/**
+ * Generate a refinement prompt that includes specific simulation failures.
+ * Used when simulateExecutionPaths finds structural problems in the bead graph.
+ */
+export function simulationRefinementPrompt(report: string, beadIds: string[]): string {
+  return `## Simulation-Driven Bead Refinement
+
+The plan simulation found structural issues that must be fixed before beads can be approved.
+
+### Simulation Report
+${report}
+
+### Beads to review
+${beadIds.map((id) => `- ${id}`).join("\n")}
+
+### Fix guidance by issue type
+- **File conflicts between parallel beads**: Add a dependency edge (\`br dep add\`) between conflicting beads so they execute sequentially, or split beads so their file sets don't overlap.
+- **Missing file references**: Update file paths in bead descriptions to match actual repo paths, or mark new files explicitly (files that the bead will create are expected to be missing).
+- **Execution order issues**: Adjust dependencies so the topological sort produces a valid execution sequence.
+- **Cycle detected**: Break the cycle by removing or reversing one dependency edge.
+
+Make fixes directly via \`br update <id> --description "..."\` and \`br dep add/remove\`.
+Verify with \`br dep cycles\` (must show no cycles).`;
 }
 
 /**
@@ -572,13 +601,13 @@ ${beads.map((b) => {
   return `- Bead ${b.id}: ${r?.status ?? "not started"} - ${b.title}: ${b.description}${r?.summary ? `\n  Summary: ${r.summary}` : ""}`;
 }).join("\n")}
 
-### Questions to answer honestly
-1. If we intelligently implement all remaining open beads, would we close the gap completely? Why or why not?
-2. What is actually blocking us right now?
-3. Are there missing beads or dependencies that we didn't account for?
-4. Is any completed work actually broken or incomplete despite being marked done?
+### Answer honestly
+1. If all remaining open beads are implemented correctly, does that close the gap? If not, what is missing?
+2. What is blocking progress right now?
+3. Are there missing beads or untracked dependencies?
+4. Is any completed work broken or incomplete despite being marked done?
 
-Be brutally honest. If the answer is "no, we wouldn't close the gap," the fix is usually to revise the beads or add missing work, not to push harder on implementation.`;
+If remaining beads don't close the gap, the fix is to revise beads or add missing work, not to push harder on implementation.`;
 }
 
 // ─── Implementer Instructions ────────────────────────────────
@@ -624,10 +653,9 @@ ${prevContext}
 First read the relevant files to fully understand the code and technical architecture.
 Use \`orch_memory\` to search for relevant learnings from prior orchestrations if applicable.
 Then implement this bead using the standard code tools (read, write, edit, bash).
-Work systematically and meticulously. Don't get stuck in analysis - be proactive.
-Make focused, targeted changes. Stay within scope.
+Work systematically. Make focused, targeted changes. Stay within scope.
 
-**After implementing, do a fresh-eyes review:** carefully read over ALL the new code you just wrote and any existing code you modified, looking super carefully for any obvious bugs, errors, problems, issues, or confusion. Fix anything you uncover.
+**After implementing, do a fresh-eyes review:** reread all new and modified code. Look for bugs, logic errors, missing edge cases, and unclear naming. Fix what you find.
 
 When you finish this bead and need the next one, prefer \`bv --robot-next\` over \`br ready\` if bv is available. bv uses PageRank and betweenness centrality to pick the bead that unlocks the most downstream work.
 
@@ -690,14 +718,14 @@ ${implementationSummary}
 ${criteriaLines.length > 0 ? criteriaLines.map((c) => `- ${c}`).join("\n") : "See bead description."}
 
 ### Check specifically for:
-1. **Blunders & bugs** - off-by-one errors, null derefs, race conditions, missing error handling
-2. **Ergonomics** - is this maximally intuitive for coding agents to use? Would YOU want to use this if you came in fresh?
-3. **Oversights** - edge cases not covered, missing validation, assumptions that don't hold
-4. **Security** - injection, path traversal, secrets in output, unsafe defaults
-5. **Style** — generic AI slop, unnecessary verbosity, unclear naming${domainExtras ?? ""}
+1. **Blunders & bugs** — off-by-one errors, null derefs, race conditions, missing error handling
+2. **Ergonomics** — would a fresh agent find this intuitive? Would you want to read this code cold?
+3. **Oversights** — edge cases not covered, missing validation, assumptions that don't hold
+4. **Security** — injection, path traversal, secrets in output, unsafe defaults
+5. **Style** — generic AI patterns, unnecessary verbosity, unclear naming${domainExtras ?? ""}
 
-Be harsh. If you find issues, provide specific file:line references and fixes.
-If everything is genuinely clean, say so briefly — don’t invent problems.`;
+Provide specific file:line references and fixes for every issue.
+If everything is clean, say so briefly — don't invent problems.`;
 }
 
 // ─── Cross-Agent Review Instructions ─────────────────────────
@@ -750,11 +778,11 @@ ${goal}
 ${artifacts.map((a) => `- ${a}`).join("\n")}
 
 ### What to fix:
-1. **Remove AI slop** - generic filler ("leverage", "utilize", "comprehensive"), unnecessary caveats, hollow qualifiers
-2. **Improve clarity** - rename vague variables, simplify convoluted logic, add comments only where non-obvious
-3. **Maximize ergonomics** - make this the code YOU would want to read if coming in fresh
-4. **Consistent style** - match the project's existing conventions
-5. **Trim fat** - remove dead code, unused imports, unnecessary abstractions
+1. **Remove AI slop** — generic filler ("leverage", "utilize", "comprehensive"), unnecessary caveats, hollow qualifiers
+2. **Improve clarity** — rename vague variables, simplify convoluted logic, add comments only where non-obvious
+3. **Tighten ergonomics** — would you want to read this code cold with no context?
+4. **Consistent style** — match the project's existing conventions
+5. **Trim fat** — remove dead code, unused imports, unnecessary abstractions
 
 Make targeted edits. Don't rewrite things that are already good.`;
 }
@@ -861,9 +889,9 @@ ${beads.map((b) => {
  * past the ~20-25 issue plateau.
  */
 export function blunderHuntInstructions(cwd: string, passNumber: number, domainExtras?: string): string {
-  return `## Blunder Hunt — Pass ${passNumber}/5
+  return `## Blunder Hunt - Pass ${passNumber}/5
 
-Reread the beads carefully. I am POSITIVE that you missed or screwed up at least 80 elements in the bead definitions. Check for:
+Reread the beads. Assume you missed at least 80 issues. Check for:
 
 1. **Logical flaws** in bead descriptions or acceptance criteria
 2. **Missing dependencies** between beads
@@ -881,7 +909,7 @@ For each issue found:
 - Fix it directly via \`br update <id> -d "..."\`
 - Or create missing beads via \`br create\`
 
-Do NOT be satisfied with finding only a few issues. Keep looking. Use ultrathink.
+Do not stop at a few issues. Keep looking.
 
 cd ${cwd}`;
 }
@@ -899,7 +927,7 @@ export function randomExplorationInstructions(
 
   return `## Random Code Exploration Review
 
-Randomly explore code files in this project, choosing files to deeply investigate and understand. Trace their functionality and execution flows through related imports and dependents.${excludeList}
+Randomly explore code files in this project. Trace execution flows through imports and dependents.${excludeList}
 
 ### Goal Context
 ${goal}
@@ -907,16 +935,14 @@ ${goal}
 ### Instructions
 1. Pick 3-5 files at random (NOT from the changed files list above)
 2. For each file, trace execution flows through imports and callers
-3. Once you understand the purpose in the larger workflow context, do a super careful check with "fresh eyes" for:
-   - Obvious bugs, problems, errors, silly mistakes
-   - Logic errors in execution flows
+3. Once you understand the purpose in the larger workflow context, check for:
+   - Bugs, logic errors, off-by-one mistakes
+   - Broken execution flows across module boundaries
    - Missing error handling
    - Assumptions that don't hold
 4. Fix any issues you find directly using the edit tool
 
-Be thorough. The bugs that survive to this phase live in utility modules, error handling paths, and edge-case branches - the places nobody looks.
-
-Use ultrathink.
+Focus on utility modules, error handling paths, and edge-case branches — the places that get the least attention.
 
 cd ${cwd}`;
 }
@@ -924,7 +950,7 @@ cd ${cwd}`;
 // ─── De-Slopification ───────────────────────────────────────
 /** Extensible catalogue of AI slop patterns to detect and fix. */
 export const AI_SLOP_PATTERNS = [
-  { pattern: "emdash overuse (-)", fix: "Replace with semicolons, commas, or sentence splits" },
+  { pattern: "emdash overuse (—)", fix: "Replace with semicolons, commas, or sentence splits" },
   { pattern: '"It\'s not X, it\'s Y"', fix: "Recast the contrast without the formulaic structure" },
   { pattern: '"Here\'s why" / "Here\'s why it matters:"', fix: "Remove the clickbait lead-in" },
   { pattern: '"Let\'s dive in" / "Let us dive in"', fix: "Remove forced enthusiasm" },
@@ -943,7 +969,7 @@ export function deSlopifyInstructions(files: string[]): string {
 
   return `## De-Slopification Pass
 
-Read through the following files carefully and remove telltale AI writing patterns. You MUST manually read each line and revise - NO regex or script-based replacement.
+Read through the following files and remove telltale AI writing patterns. Revise each line manually — no regex or script-based replacement.
 
 ### Files to review
 ${files.map(f => `- ${f}`).join("\n")}
@@ -984,13 +1010,13 @@ cd ${cwd}`;
 export function swarmMarchingOrders(cwd: string, beadId?: string): string {
   return `## Swarm Marching Orders
 
-First read ALL of the AGENTS.md file and README.md file super carefully and understand ALL of both. Then use your code investigation capabilities to fully understand the code, technical architecture and purpose of the project.${beadId ? `\n\nYour assigned bead: ${beadId}` : ""}
+Read AGENTS.md and README.md thoroughly. Then investigate the codebase to understand the technical architecture and project purpose.${beadId ? `\n\nYour assigned bead: ${beadId}` : ""}
 
 Be sure to check your agent mail and promptly respond to any messages. Then proceed meticulously with your assigned bead, working systematically and tracking progress via beads and agent mail messages.
 
-Don't get stuck in "communication purgatory" where nothing gets done. Be proactive about starting work, but inform fellow agents via messages and mark beads appropriately.
+Don't stall on coordination. Start work promptly, but inform fellow agents via messages and mark beads appropriately.
 
-When you're not sure what to do next, use \`bv --robot-triage\` to find the highest-impact bead, claim it, and start coding immediately. Acknowledge all communication from other agents. Use ultrathink.
+When idle, use \`bv --robot-triage\` to find the highest-impact bead, claim it, and start coding. Acknowledge all communication from other agents. Use ultrathink.
 
 cd ${cwd}`;
 }
@@ -1098,7 +1124,7 @@ ${description}
 export function researchInvestigatePrompt(externalUrl: string, projectName: string, cwd: string): string {
   return `## Research & Reimagine - Step 1: Investigate
 
-Clone or scrape ${externalUrl} and investigate it thoroughly. Look for useful ideas that we can take and reimagine in highly accretive ways on top of ${projectName}'s existing capabilities.
+Clone or scrape ${externalUrl} and investigate it. Find ideas worth reimagining on top of ${projectName}'s existing capabilities.
 
 Write up a proposal document that:
 1. Summarizes the external project's architecture and key ideas
@@ -1106,7 +1132,7 @@ Write up a proposal document that:
 3. Proposes how to reimagine each through the lens of ${projectName}'s unique strengths
 4. Creates something neither project could achieve alone
 
-Make the proposal genuinely novel, not a shallow port. Use ultrathink.
+Make the proposal genuinely novel, not a shallow port.
 
 cd ${cwd}`;
 }
@@ -1115,18 +1141,18 @@ cd ${cwd}`;
 export function researchDeepenPrompt(): string {
   return `## Research & Reimagine - Step 2: Deepen
 
-That's a decent start, but you barely scratched the surface. Go way deeper - more ambition, more boldness. Come up with ideas that are genuinely surprising and high-impact.
+Decent start, but surface-level. Push further: more ambition, bolder ideas. Find genuinely surprising, high-impact possibilities.
 
-Go deeper. Use ultrathink.`;
+Go deeper.`;
 }
 
-/** Step 3: Inversion analysis — what can WE do that THEY cannot? */
+/** Step 3: Inversion analysis - what can WE do that THEY cannot? */
 export function researchInversionPrompt(projectName: string, externalName: string): string {
   return `## Research & Reimagine - Step 3: Inversion Analysis
 
 Now "invert" the analysis: what are things that ${projectName} can do because of its unique primitives/capabilities that ${externalName} simply could never do even if they wanted to, because they are working from less rich primitives?
 
-This surfaces the highest-value integration points: capabilities that are genuinely novel rather than reimplementations. Use ultrathink.`;
+This surfaces the highest-value integration points: capabilities that are genuinely novel rather than reimplementations.`;
 }
 
 // ─── Goal Refinement Prompt ──────────────────────────────────

@@ -1,15 +1,9 @@
 /**
  * Domain-Specific Prompt Enhancement
  *
- * When the profiler detects a project's tech stack, we can sharpen all review
- * prompts with domain-specific checklist items. A React project's blunder hunt
- * should check for stale closures; a Rust project's should check for unwrap()
- * in non-test code. The profiler already knows the stack — we just need to use
- * it to unlock the model's deeper knowledge.
- *
- * Derived from Agent Flywheel Section 10: "Skills are the mechanism for asking
- * the right questions. The skill acts as a key that unlocks specific rooms in
- * the model's knowledge base."
+ * Sharpens review prompts with stack-specific checklist items based on the
+ * profiler's detected tech stack (e.g., stale closures for React, unwrap()
+ * in non-test Rust code).
  */
 
 import type { RepoProfile } from "./types.js";

@@ -1,14 +1,9 @@
 /**
  * Automatic Bead Splitting for Parallelism
  *
- * When bv reports high-betweenness beads (dependency bottlenecks), this
- * module proposes concrete splits — analyzing the bead description for
- * independently implementable sub-tasks and suggesting child beads with
- * disjoint file ownership.
- *
- * Derived from Agent Flywheel Section 6: "bv precomputes dependency
- * metrics (PageRank, betweenness, HITS, eigenvector, critical path)
- * so agents get deterministic, dependency-aware output."
+ * When bv reports high-betweenness beads (bottlenecks), proposes splits
+ * by analyzing descriptions for independently implementable sub-tasks
+ * with disjoint file ownership.
  */
 
 import type { Bead, BvInsights } from "./types.js";

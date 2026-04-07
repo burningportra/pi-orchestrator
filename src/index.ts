@@ -30,22 +30,8 @@ import { registerPlanTool } from "./tools/plan.js";
 import { registerApproveTool } from "./tools/approve.js";
 import { registerReviewTool } from "./tools/review.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
-
-const PHASE_EMOJI: Record<OrchestratorPhase, string> = {
-  idle: "⏸",
-  profiling: "📊",
-  discovering: "💡",
-  awaiting_selection: "🎯",
-  planning: "📝",
-  awaiting_plan_approval: "📋",
-  creating_beads: "🔨",
-  refining_beads: "🔍",
-  awaiting_bead_approval: "📋",
-  implementing: "🔨",
-  reviewing: "🔍",
-  iterating: "🔄",
-  complete: "✅",
-};
+import { DashboardController, renderDashboardLines, PHASE_EMOJI } from "./dashboard/index.js";
+import { readBeads } from "./beads.js";
 
 export default function (pi: ExtensionAPI) {
   // Log version at startup so stale code is immediately obvious
@@ -134,25 +120,10 @@ export default function (pi: ExtensionAPI) {
   let sophiaCRResult: PlanToCRResult | undefined;
   let worktreePool: WorktreePool | undefined;
   let swarmTender: import("./tender.js").SwarmTender | undefined;
+  let dashboardController: DashboardController | undefined;
 
-  function setPhase(phase: OrchestratorPhase, ctx: ExtensionContext) {
-    state.phase = phase;
-    if (phase === "idle") {
-      ctx.ui.setStatus("orchestrator", undefined);
-      ctx.ui.setWidget("orchestrator", undefined);
-    } else if (phase === "complete") {
-      ctx.ui.setStatus("orchestrator", "✅ Orchestrator: done");
-      ctx.ui.setWidget("orchestrator", undefined);
-    } else {
-      ctx.ui.setStatus(
-        "orchestrator",
-        `${PHASE_EMOJI[phase]} Orchestrator: ${phase}`
-      );
-      updateWidget(ctx);
-    }
-  }
-
-  function updateWidget(ctx: ExtensionContext) {
+  // ─── Fallback widget (preserves original 4-line output) ──────
+  function renderFallbackWidget(): string[] {
     const lines: string[] = [
       `${PHASE_EMOJI[state.phase]} Phase: ${state.phase}`,
     ];
@@ -172,7 +143,86 @@ export default function (pi: ExtensionAPI) {
     if (swarmTender) {
       lines.push(`🐝 Tender: ${swarmTender.getSummary()}`);
     }
-    ctx.ui.setWidget("orchestrator", lines);
+    return lines;
+  }
+
+  // ─── Dashboard controller setup ──────────────────────────────
+  function ensureDashboardController(ctx: ExtensionContext): DashboardController {
+    if (dashboardController) return dashboardController;
+
+    dashboardController = new DashboardController({
+      readBeadsFn: () => readBeads(pi, ctx.cwd),
+      getUnblockedBeadsFn: async () => {
+        try {
+          const result = await pi.exec("br", ["ready", "--json"], { cwd: ctx.cwd });
+          const parsed = JSON.parse(result.stdout);
+          return (parsed.issues ?? []).map((b: { id: string }) => b.id);
+        } catch {
+          return [];
+        }
+      },
+      getState: () => state,
+      getTenderSummary: () => swarmTender?.getSummary(),
+      onUpdate: (snapshot) => {
+        try {
+          ctx.ui.setWidget("orchestrator", (tui: any, theme: any) => {
+            let cachedLines: string[] | null = null;
+            let cachedWidth: number | null = null;
+            return {
+              render(width: number): string[] {
+                if (cachedWidth === width && cachedLines) return cachedLines;
+                cachedLines = renderDashboardLines(snapshot, theme, width);
+                cachedWidth = width;
+                return cachedLines;
+              },
+              invalidate() {
+                cachedLines = null;
+                cachedWidth = null;
+              },
+            };
+          });
+        } catch {
+          // Fallback to simple string array
+          ctx.ui.setWidget("orchestrator", renderFallbackWidget());
+        }
+      },
+    });
+
+    return dashboardController;
+  }
+
+  function setPhase(phase: OrchestratorPhase, ctx: ExtensionContext) {
+    state.phase = phase;
+    if (phase === "idle") {
+      ctx.ui.setStatus("orchestrator", undefined);
+      ctx.ui.setWidget("orchestrator", undefined);
+      dashboardController?.stop();
+    } else if (phase === "complete") {
+      ctx.ui.setStatus("orchestrator", "✅ Orchestrator: done");
+      ctx.ui.setWidget("orchestrator", undefined);
+      dashboardController?.stop();
+    } else {
+      ctx.ui.setStatus(
+        "orchestrator",
+        `${PHASE_EMOJI[phase]} Orchestrator: ${phase}`
+      );
+      updateWidget(ctx);
+    }
+  }
+
+  function updateWidget(ctx: ExtensionContext) {
+    try {
+      const controller = ensureDashboardController(ctx);
+      controller.start();
+      // Fire-and-forget immediate refresh
+      controller.refreshNow().catch(() => {
+        // On refresh failure, show fallback
+        ctx.ui.setWidget("orchestrator", renderFallbackWidget());
+      });
+    } catch {
+      // If dashboard controller fails entirely, use fallback
+      ctx.ui.setWidget("orchestrator", renderFallbackWidget());
+    }
   }
 
   // ─── Inject orchestrator system prompt when active ───────────
@@ -277,6 +327,17 @@ export default function (pi: ExtensionAPI) {
             "info"
           );
         }
+
+        // Start dashboard controller for restored active sessions
+        if (state.phase !== "idle" && state.phase !== "complete") {
+          try {
+            const controller = ensureDashboardController(ctx);
+            controller.start();
+            controller.refreshNow().catch(() => {});
+          } catch {
+            // Non-fatal — dashboard is advisory
+          }
+        }
     }
 
     // Detect stale/orphaned worktrees from previous crashed sessions
@@ -308,6 +369,7 @@ export default function (pi: ExtensionAPI) {
     } finally {
       worktreePool = undefined;
       if (swarmTender) { swarmTender.stop(); swarmTender = undefined; }
+      if (dashboardController) { dashboardController.dispose(); dashboardController = undefined; }
       orchestratorActive = false;
     }
   });

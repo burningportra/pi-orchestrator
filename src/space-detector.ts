@@ -1,18 +1,11 @@
 /**
  * Wrong-Space Detector
  *
- * Monitors implementation for signals that the agent is doing plan-space
- * or bead-space work in code-space. When detected, the system can offer
- * to regress to the appropriate phase.
- *
- * Derived from Agent Flywheel Section 10: "If you find yourself doing
- * heavy cognitive work during implementation, that is a signal that
- * planning or bead polishing was insufficient."
- *
- * Three detection heuristics (all fast, no LLM needed):
- * 1. Architecture invention — files created/modified not in bead's ### Files
- * 2. Scope creep — total files changed >> bead's file list
- * 3. Uncertainty language — hedging in the implementation summary
+ * Detects when an agent is doing plan-space work in code-space.
+ * Three heuristics (all fast, no LLM):
+ * 1. Architecture invention — files modified outside bead's ### Files
+ * 2. Scope creep — files changed >> bead's file list
+ * 3. Uncertainty language — hedging in implementation summary
  */
 
 import type { Bead } from "./types.js";
