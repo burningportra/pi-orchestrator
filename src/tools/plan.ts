@@ -1,9 +1,9 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
-import { mkdirSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
-import { runDeepPlanAgents, type DeepPlanAgent } from "../deep-plan.js";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { dirname } from "path";
+import { runDeepPlanAgents, type DeepPlanAgent, type DeepPlanResult } from "../deep-plan.js";
 import type { OrchestratorContext } from "../types.js";
 import {
   competingPlanAgentPrompt,
@@ -11,6 +11,7 @@ import {
   planDocumentPrompt,
   DEEP_PLAN_MODELS,
 } from "../prompts.js";
+import { sessionArtifactPath } from "../session-artifacts.js";
 
 function slugifyGoal(goal: string): string {
   return goal
@@ -20,18 +21,78 @@ function slugifyGoal(goal: string): string {
     .slice(0, 60) || "plan";
 }
 
-function sessionArtifactPath(ctx: ExtensionContext, name: string): string {
-  const sessionFile = ctx.sessionManager.getSessionFile();
-  const sessionId = ctx.sessionManager.getSessionId();
+export function multiModelPlanArtifactNames(goal: string) {
+  const slug = slugifyGoal(goal);
+  const baseDir = `plans/${slug}-multi-model`;
+  return {
+    final: `plans/${slug}-multi-model.md`,
+    planners: {
+      correctness: `${baseDir}/correctness.md`,
+      robustness: `${baseDir}/robustness.md`,
+      ergonomics: `${baseDir}/ergonomics.md`,
+    },
+  };
+}
 
-  if (sessionFile && sessionId) {
-    const artifactRoot = sessionFile.includes("/sessions/")
-      ? sessionFile.replace(/\/sessions\/[^/]+$/, `/artifacts/${sessionId}`)
-      : join(dirname(sessionFile), "..", "artifacts", sessionId);
-    return join(artifactRoot, name);
-  }
+export function buildMultiModelPlanSubagentConfigs(
+  cwd: string,
+  goal: string,
+  profile: OrchestratorContext["state"]["repoProfile"],
+  scanResult: OrchestratorContext["state"]["scanResult"],
+) {
+  const artifactNames = multiModelPlanArtifactNames(goal);
+  const planners = [
+    {
+      name: "correctness",
+      model: DEEP_PLAN_MODELS.correctness,
+      task: competingPlanAgentPrompt("correctness", goal, profile!, scanResult),
+      artifactName: artifactNames.planners.correctness,
+    },
+    {
+      name: "robustness",
+      model: DEEP_PLAN_MODELS.robustness,
+      task: competingPlanAgentPrompt("robustness", goal, profile!, scanResult),
+      artifactName: artifactNames.planners.robustness,
+    },
+    {
+      name: "ergonomics",
+      model: DEEP_PLAN_MODELS.ergonomics,
+      task: competingPlanAgentPrompt("ergonomics", goal, profile!, scanResult),
+      artifactName: artifactNames.planners.ergonomics,
+    },
+  ] as const;
 
-  return join(ctx.cwd, ".pi-orchestrator-artifacts", name);
+  return planners.map((planner) => ({
+    name: `plan-${planner.name}`,
+    agent: "planner",
+    cwd,
+    model: planner.model,
+    task:
+      `${planner.task}\n\n` +
+      `After you finish the plan, save it with write_artifact using exactly this name: \`${planner.artifactName}\`.\n` +
+      `Do not create beads. In your final response, mention that you wrote \`${planner.artifactName}\`.`,
+  }));
+}
+
+function loadPlannerArtifacts(ctx: ExtensionContext, goal: string): DeepPlanResult[] {
+  const artifactNames = multiModelPlanArtifactNames(goal);
+  const plannerEntries = [
+    ["correctness", artifactNames.planners.correctness, DEEP_PLAN_MODELS.correctness],
+    ["robustness", artifactNames.planners.robustness, DEEP_PLAN_MODELS.robustness],
+    ["ergonomics", artifactNames.planners.ergonomics, DEEP_PLAN_MODELS.ergonomics],
+  ] as const;
+
+  return plannerEntries.flatMap(([name, artifactName, model]) => {
+    const filePath = sessionArtifactPath(ctx, artifactName);
+    if (!existsSync(filePath)) {
+      return [];
+    }
+    const plan = readFileSync(filePath, "utf8").trim();
+    if (!plan) {
+      return [];
+    }
+    return [{ name, model, plan, exitCode: 0, elapsed: 0 } satisfies DeepPlanResult];
+  });
 }
 
 export function registerPlanTool(oc: OrchestratorContext) {
@@ -70,6 +131,42 @@ export function registerPlanTool(oc: OrchestratorContext) {
         };
       }
 
+      const artifactNames = multiModelPlanArtifactNames(goal);
+      const interactivePlannerConfigs = buildMultiModelPlanSubagentConfigs(ctx.cwd, goal, profile, scanResult);
+      const savedPlannerResults = loadPlannerArtifacts(ctx, goal);
+
+      if (ctx.hasUI && savedPlannerResults.length < interactivePlannerConfigs.length) {
+        oc.state.planDocument = undefined;
+        oc.setPhase("planning", ctx);
+        oc.persistState();
+
+        const completed = new Set(savedPlannerResults.map((result) => result.name));
+        const pendingConfigs = interactivePlannerConfigs.filter((config) => !completed.has(config.name.replace(/^plan-/, "")));
+        const statusLine = completed.size > 0
+          ? `Completed planners: ${[...completed].join(", ")}\nPending planners: ${pendingConfigs.map((config) => config.name.replace(/^plan-/, "")).join(", ")}`
+          : "No planner artifacts found yet.";
+
+        return {
+          content: [{
+            type: "text",
+            text:
+              `**NEXT: Spawn interactive planning sub-agents using \`subagent\` NOW.**\n\n` +
+              `${statusLine}\n\n` +
+              `Launch one \`subagent\` call for each pending planner config below. ` +
+              `Each planner writes its draft to a session artifact. After all planners complete, call \`orch_plan\` with mode \`multi_model\` again to synthesize the final plan.\n\n` +
+              `\`\`\`json\n${JSON.stringify(pendingConfigs, null, 2)}\n\`\`\``,
+          }],
+          details: {
+            mode,
+            goal,
+            interactive: true,
+            awaitingPlannerArtifacts: true,
+            plannerArtifacts: artifactNames.planners,
+            pendingPlannerCount: pendingConfigs.length,
+          },
+        };
+      }
+
       const planners: DeepPlanAgent[] = [
         {
           name: "correctness",
@@ -88,7 +185,9 @@ export function registerPlanTool(oc: OrchestratorContext) {
         },
       ];
 
-      const planResults = await runDeepPlanAgents(oc.pi, ctx.cwd, planners, signal);
+      const planResults = savedPlannerResults.length === planners.length
+        ? savedPlannerResults
+        : await runDeepPlanAgents(oc.pi, ctx.cwd, planners, signal);
       const successfulPlans = planResults.filter((result) => result.exitCode === 0 && result.plan.trim().length > 0);
       if (successfulPlans.length === 0) {
         const failures = planResults
@@ -112,7 +211,7 @@ export function registerPlanTool(oc: OrchestratorContext) {
         throw new Error("Plan synthesis failed.");
       }
 
-      const artifactName = `plans/${slugifyGoal(goal)}-multi-model.md`;
+      const artifactName = artifactNames.final;
       const artifactPath = sessionArtifactPath(ctx, artifactName);
       mkdirSync(dirname(artifactPath), { recursive: true });
       writeFileSync(artifactPath, synthesizedPlan, "utf8");
@@ -123,7 +222,7 @@ export function registerPlanTool(oc: OrchestratorContext) {
       oc.persistState();
 
       const plannerSummary = successfulPlans
-        .map((result) => `- ${result.name} (${result.model}) — ${result.elapsed}s`)
+        .map((result) => `- ${result.name} (${result.model})${result.elapsed > 0 ? ` — ${result.elapsed}s` : " — artifact"}`)
         .join("\n");
 
       return {
@@ -150,7 +249,19 @@ export function registerPlanTool(oc: OrchestratorContext) {
     },
 
     renderResult(result, _options, theme) {
-      const details = result.details as { artifactName?: string; mode?: string } | undefined;
+      const details = result.details as {
+        artifactName?: string;
+        mode?: string;
+        awaitingPlannerArtifacts?: boolean;
+        pendingPlannerCount?: number;
+      } | undefined;
+      if (details?.awaitingPlannerArtifacts) {
+        return new Text(
+          theme.fg("accent", "🧠 Planner swarm") +
+            theme.fg("dim", ` → waiting on ${details.pendingPlannerCount ?? 0} planner artifact(s)`),
+          0, 0
+        );
+      }
       return new Text(
         theme.fg("success", "📋 Plan ready") +
           theme.fg("dim", details?.artifactName ? ` → ${details.artifactName}` : ""),
