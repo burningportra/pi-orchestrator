@@ -198,6 +198,83 @@ export function markRule(bulletId: string, helpful: boolean, reason?: string, cw
 }
 
 /**
+ * Run `cm onboard` to bootstrap memory for a new project.
+ * Should be called once when starting orchestration on a project that has no
+ * existing CASS memory. Best-effort — returns true if successful.
+ */
+export function onboardMemory(cwd?: string): boolean {
+  if (!detectCass()) return false;
+  // cm onboard is interactive; run with status first to check if already onboarded.
+  // parseCmJson requires a {success, data} wrapper — fall back to raw parse since
+  // `cm onboard status` may return a flat JSON object directly.
+  const status = runCm(["onboard", "status", "--json"], cwd);
+  let data: { needsOnboarding?: boolean } | null = null;
+  if (status) {
+    try {
+      const raw = JSON.parse(status);
+      // Handle both wrapped ({success, data}) and flat ({needsOnboarding}) responses
+      data = raw?.success ? (raw.data ?? null) : raw;
+    } catch { /* fall through */ }
+  }
+  if (data?.needsOnboarding === false) return true; // already onboarded
+  // Run non-interactive onboard
+  const result = runCm(["onboard", "--auto"], cwd);
+  return result !== null;
+}
+
+/**
+ * Run `cm reflect` to mine raw session logs for procedural patterns.
+ * This is the between-session distillation step: it extracts rules from
+ * what actually happened (guide §10: "cm reflect between sessions").
+ * Best-effort — returns true if cm ran successfully, false otherwise.
+ */
+export function reflectMemory(cwd?: string): boolean {
+  if (!detectCass()) return false;
+  const result = runCm(["reflect"], cwd);
+  return result !== null;
+}
+
+/**
+ * Mine CASS session history for planning-related patterns and return a
+ * structured skill-refinement report. Uses `cm search` to find sessions
+ * that involved planning activity, then extracts recurring patterns.
+ * Returns null if cm unavailable or no relevant sessions found.
+ */
+export function mineSkillGaps(
+  cwd: string,
+  topic: string = "planning beads orchestration"
+): string | null {
+  if (!detectCass()) return null;
+  const output = runCm(["search", topic, "--json", "--limit", "20"], cwd);
+  if (!output) return null;
+  try {
+    const data = JSON.parse(output);
+    const sessions = (data?.results ?? data?.sessions ?? []) as Array<{ text?: string; content?: string; score?: number }>;
+    if (sessions.length === 0) return null;
+    const snippets = sessions
+      .slice(0, 10)
+      .map((s, i) => `Session ${i + 1}:\n${(s.text ?? s.content ?? "").slice(0, 500)}`)
+      .join("\n\n---\n\n");
+    return snippets;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run the skill-refiner meta-pattern: given a skill file path and optional
+ * CASS session data, return a prompt for rewriting the skill.
+ * This is the recursive self-improvement pattern from the guide §10.
+ */
+export function skillRefinerPrompt(
+  skillContent: string,
+  skillName: string,
+  sessionSnippets?: string
+): string {
+  return `## Skill Refiner — ${skillName}\n\nYou are improving a skill file based on real usage data from past sessions.\n\n### Current Skill\n\`\`\`\n${skillContent}\n\`\`\`\n\n${sessionSnippets ? `### Session Evidence (what actually happened when agents used this skill)\n\n${sessionSnippets}\n\n` : ""}### Instructions\n1. Identify places where the skill's instructions were ambiguous, incomplete, or wrong based on the evidence\n2. Find patterns agents invented as workarounds (these reveal gaps in the skill)\n3. Add missing anti-patterns, gotchas, or tool-specific quirks\n4. Sharpen vague instructions to be concrete and actionable\n5. Output the FULL improved skill text — not just diffs\n\nBe aggressive about incorporating evidence. A skill that reflects real failure modes is worth 10x a theoretically correct one.\n\nUse ultrathink.`;
+}
+
+/**
  * Get memory system stats.
  */
 export function getMemoryStats(cwd?: string): MemoryStats {

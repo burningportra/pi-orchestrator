@@ -153,16 +153,15 @@ export function registerCommands(oc: OrchestratorContext) {
           ctx.ui.notify(`📦 Archived ${openCount} open bead(s) as deferred.`, "info");
           // Fall through to fresh start
         } else if (choice?.startsWith("🗑️")) {
-          // Clear: delete all beads, then start fresh
+          // Clear: delete all beads in one shot, then start fresh
           const allCount = existingBeads.length;
-          let deleted = 0;
-          for (const bead of existingBeads) {
-            try {
-              await pi.exec("br", ["delete", bead.id, "--yes"], { cwd: ctx.cwd, timeout: 5000 });
-              deleted++;
-            } catch { /* best effort */ }
+          try {
+            const ids = existingBeads.map((b) => b.id);
+            await pi.exec("br", ["delete", ...ids, "--force"], { cwd: ctx.cwd, timeout: 10000 });
+            ctx.ui.notify(`🗑️ Deleted ${allCount} bead(s).`, "info");
+          } catch {
+            ctx.ui.notify("⚠️ Failed to delete beads.", "warning");
           }
-          ctx.ui.notify(`🗑️ Deleted ${deleted}/${allCount} bead(s).`, "info");
           // Fall through to fresh start
         } else {
           ctx.ui.notify("Orchestration cancelled.", "info");
@@ -690,16 +689,63 @@ export function registerCommands(oc: OrchestratorContext) {
         { phase: "deepen", label: "Deepening analysis", emoji: "🔍" },
         { phase: "inversion", label: "Inversion analysis", emoji: "🔄" },
         { phase: "blunder_hunt", label: "5x blunder hunt", emoji: "🔨" },
+        { phase: "user_review", label: "User review", emoji: "📝" },
         { phase: "multi_model", label: "Multi-model feedback", emoji: "🧠" },
         { phase: "synthesis", label: "Synthesizing feedback", emoji: "🔗" },
       ];
+
+      // user_review callback: shown between blunder_hunt and multi_model.
+      // Presents the proposal with accept / edit / pause options.
+      const userReviewCallback = async (proposal: string): Promise<{ accepted: boolean; editedProposal?: string }> => {
+        const PREVIEW_CHARS = 2000;
+        const preview = proposal.length > PREVIEW_CHARS
+          ? proposal.slice(0, PREVIEW_CHARS) + `\n...\n*(${proposal.length - PREVIEW_CHARS} more chars — full proposal at ${artifactName})*`
+          : proposal;
+
+        const choice = await ctx.ui.select(
+          `📝 **User Review — proposal after 5x blunder hunt**\n\n` +
+          `Saved to: \`${artifactName}\`\n\n` +
+          `**Preview:**\n${preview}\n\n` +
+          `Tip: Open the artifact file to read or edit the full proposal before continuing.`,
+          [
+            "✅ Accept and continue to multi-model feedback",
+            "✏️  Pause — I will edit the file manually, then rerun",
+            "⏸️  Pause pipeline (resume manually)",
+          ]
+        );
+
+        if (choice?.startsWith("✏️")) {
+          ctx.ui.notify(
+            `Pipeline paused for manual editing.\n` +
+            `Edit the proposal at:\n  ${artifactPath}\n\n` +
+            `When done, rerun \`/orchestrate-research ${url}\` — or call \`orch_approve_beads\` ` +
+            `if you want to skip straight to bead creation with the edited proposal.`,
+            "info"
+          );
+          return { accepted: false };
+        }
+
+        if (!choice || choice.startsWith("⏸️")) {
+          ctx.ui.notify(
+            `Research pipeline paused after blunder hunt.\nProposal saved to: ${artifactName}\n\n` +
+            `To resume, you can manually feed this proposal into the planning pipeline.`,
+            "info"
+          );
+          return { accepted: false };
+        }
+
+        return { accepted: true };
+      };
 
       for (const { phase, label, emoji } of phases) {
         ctx.ui.notify(`${emoji} Phase: ${label}...`, "info");
         (state as any).currentPhase = phase;
 
+        // Determine whether to pass the review callback (only for user_review phase)
+        const reviewCb = phase === "user_review" ? userReviewCallback : undefined;
+
         try {
-          const result = await runResearchPhase(pi, ctx.cwd, phase as any, state as any);
+          const result = await runResearchPhase(pi, ctx.cwd, phase as any, state as any, undefined, reviewCb);
           if (result.proposal) {
             state.proposal = result.proposal;
             writeFileSync(artifactPath, state.proposal, "utf8");
@@ -707,30 +753,12 @@ export function registerCommands(oc: OrchestratorContext) {
           (state as any).phasesCompleted.push(phase);
 
           if (!result.success) {
+            // user_review returning success=false means user chose to pause
+            if (phase === "user_review") return;
             ctx.ui.notify(`⚠️ ${label} had issues: ${result.error ?? "partial output"}. Continuing with current proposal.`, "warning");
           }
         } catch (err: any) {
           ctx.ui.notify(`❌ ${label} failed: ${err.message ?? err}. Continuing with current proposal.`, "error");
-        }
-
-        // After blunder hunt, offer user review
-        if (phase === "blunder_hunt") {
-          ctx.ui.notify(
-            `✅ Proposal refined through 5x blunder hunt.\nSaved to: ${artifactName}\n\nReview the proposal before multi-model feedback.`,
-            "info"
-          );
-          const proceed = await ctx.ui.confirm(
-            "Continue to multi-model feedback?",
-            "The proposal will be sent to 3 competing models for critique."
-          );
-          if (!proceed) {
-            ctx.ui.notify(
-              `Research pipeline paused after blunder hunt.\nProposal saved to: ${artifactName}\n\n` +
-              `To resume, you can manually feed this proposal into the planning pipeline.`,
-              "info"
-            );
-            return;
-          }
         }
       }
 

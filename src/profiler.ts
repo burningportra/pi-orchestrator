@@ -17,6 +17,8 @@ export async function profileRepo(
     collectKeyFiles(pi, cwd, signal),
   ]);
 
+  const bestPracticesGuides = await collectBestPracticesGuides(pi, cwd, fileTree, signal);
+
   // Detect languages from extensions
   const extCounts = new Map<string, number>();
   for (const line of fileTree.split("\n")) {
@@ -45,6 +47,7 @@ export async function profileRepo(
     keyFiles,
     readme: keyFiles["README.md"] ?? keyFiles["README"] ?? undefined,
     packageManager: detectPackageManager(keyFiles, fileTree),
+    bestPracticesGuides,
   };
 }
 
@@ -178,6 +181,65 @@ async function collectKeyFiles(
   });
   await Promise.all(reads);
   return files;
+}
+
+async function collectBestPracticesGuides(
+  pi: ExtensionAPI,
+  cwd: string,
+  fileTree: string,
+  signal?: AbortSignal
+): Promise<Array<{ name: string; content: string }>> {
+  const candidatePaths = [
+    "BEST_PRACTICES.md",
+    "docs/best-practices.md",
+    "docs/BEST_PRACTICES.md",
+    "best_practices.md",
+    "CONTRIBUTING.md",
+    "ARCHITECTURE.md",
+    "docs/architecture.md",
+  ];
+
+  // Also scan directories for markdown files
+  const dirCandidates: string[] = [];
+  for (const line of fileTree.split("\n")) {
+    const trimmed = line.trim();
+    if (
+      (trimmed.startsWith("./best_practices/") || trimmed.startsWith("./docs/guides/") || trimmed.startsWith("./.claude/")) &&
+      trimmed.endsWith(".md")
+    ) {
+      dirCandidates.push(trimmed.replace(/^\.\//,""));
+    }
+  }
+
+  const allPaths = [...candidatePaths, ...dirCandidates];
+  const guides: Array<{ name: string; content: string }> = [];
+
+  await Promise.all(
+    allPaths.map(async (p) => {
+      try {
+        const r = await pi.exec("head", ["-c", "3000", p], { signal, timeout: 2000, cwd });
+        if (r.code === 0 && r.stdout.trim()) {
+          guides.push({ name: p, content: r.stdout.trim() });
+        }
+      } catch {
+        // skip
+      }
+    })
+  );
+
+  return guides;
+}
+
+/**
+ * Format best-practices guides for injection into planning prompts.
+ * Truncates to avoid overwhelming context windows.
+ */
+export function formatBestPracticesGuides(
+  guides: Array<{ name: string; content: string }>
+): string {
+  if (guides.length === 0) return "";
+  const parts = guides.map(g => `### ${g.name}\n${g.content.slice(0, 2000)}`);
+  return `## Best Practices & Architecture Guides\n\n${parts.join("\n\n---\n\n")}`;
 }
 
 // ─── Detectors ─────────────────────────────────────────────────

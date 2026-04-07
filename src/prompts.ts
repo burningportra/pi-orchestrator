@@ -529,12 +529,16 @@ Verify with \`br dep cycles\` (must show no cycles).`;
 
 /**
  * Convergence score (0-1) from polish round history.
- * Weights: change velocity (40%), output size delta (30%), consecutive zero-change rounds (30%).
+ * Weights: velocity 35%, size 25%, similarity 25%, zero-streak 15%.
  * ≥ 0.75 = ready to implement, ≥ 0.90 = diminishing returns.
+ *
+ * @param descriptionSnapshots - Optional per-round arrays of bead description strings.
+ *   When provided, Jaccard similarity between the last two snapshots is used as signal 3.
  */
 export function computeConvergenceScore(
   changes: number[],
-  outputSizes?: number[]
+  outputSizes?: number[],
+  descriptionSnapshots?: string[][]
 ): number {
   if (changes.length < 3) return 0;
 
@@ -552,6 +556,27 @@ export function computeConvergenceScore(
     sizeScore = 1 - Math.min(delta / maxSize, 1);
   }
 
+  // Jaccard similarity between the last two description snapshots
+  let similarityScore = 0.5; // neutral if no data
+  if (descriptionSnapshots && descriptionSnapshots.length >= 2) {
+    const prev = descriptionSnapshots[descriptionSnapshots.length - 2];
+    const curr = descriptionSnapshots[descriptionSnapshots.length - 1];
+    const wordsOf = (strs: string[]): Set<string> => {
+      const words = new Set<string>();
+      for (const s of strs) {
+        for (const w of s.toLowerCase().split(/\W+/)) {
+          if (w.length > 0) words.add(w);
+        }
+      }
+      return words;
+    };
+    const setA = wordsOf(prev);
+    const setB = wordsOf(curr);
+    const intersection = new Set([...setA].filter((w) => setB.has(w)));
+    const union = new Set([...setA, ...setB]);
+    similarityScore = union.size === 0 ? 1 : intersection.size / union.size;
+  }
+
   // Consecutive zero-change rounds
   let zeroStreak = 0;
   for (let i = changes.length - 1; i >= 0; i--) {
@@ -560,7 +585,12 @@ export function computeConvergenceScore(
   }
   const zeroScore = Math.min(zeroStreak / 2, 1); // 2 consecutive zeros = 1.0
 
-  return velocityScore * 0.4 + sizeScore * 0.3 + zeroScore * 0.3;
+  // If descriptionSnapshots not provided, fall back to original weights for backward compatibility
+  if (!descriptionSnapshots || descriptionSnapshots.length < 2) {
+    return velocityScore * 0.4 + sizeScore * 0.3 + zeroScore * 0.3;
+  }
+
+  return velocityScore * 0.35 + sizeScore * 0.25 + similarityScore * 0.25 + zeroScore * 0.15;
 }
 
 // ─── Deep Planning Synthesis Prompt ──────────────────────────
@@ -614,7 +644,8 @@ If remaining beads don't close the gap, the fix is to revise beads or add missin
 export function implementerInstructions(
   bead: Bead,
   profile: RepoProfile,
-  previousResults: BeadResult[]
+  previousResults: BeadResult[],
+  cassMemory?: string
 ): string {
   const prevContext =
     previousResults.length > 0
@@ -633,7 +664,12 @@ export function implementerInstructions(
   const filesMatch = bead.description.match(/### Files:\s*(.+?)(?:\n###|\n\n|$)/s);
   const files = filesMatch ? filesMatch[1].trim() : "See bead description";
 
-  return `## Implement Bead ${bead.id}: ${bead.title}
+  const memorySection =
+    cassMemory && cassMemory.trim().length > 0
+      ? `\n## Memory from Prior Orchestrations\n${cassMemory.trim()}\n`
+      : "";
+
+  return `## Implement Bead ${bead.id}: ${bead.title}${memorySection}
 
 ### Description
 ${bead.description}
@@ -657,7 +693,12 @@ Work systematically. Make focused, targeted changes. Stay within scope.
 
 **After implementing, do a fresh-eyes review:** reread all new and modified code. Look for bugs, logic errors, missing edge cases, and unclear naming. Fix what you find.
 
-When you finish this bead and need the next one, prefer \`bv --robot-next\` over \`br ready\` if bv is available. bv uses PageRank and betweenness centrality to pick the bead that unlocks the most downstream work.
+**Picking your next bead:**
+- **Solo agent:** \`bv --robot-next\` — picks the single highest-priority bead by PageRank + betweenness centrality.
+- **Swarm (multiple agents active):** \`bv --robot-triage\` — routes to a parallel-safe bead that avoids bottleneck contention with other agents. Use this when you know others are working.
+- Fallback: \`br ready --json\` if bv is unavailable.
+
+**Graph health (if stuck):** \`bv --robot-insights\` reports PageRank, betweenness, critical path, and cycle detection for the full dependency graph.
 
 After the fresh-eyes review, call \`orch_review\` with a summary of what you did and what the review found.`;
 }
@@ -1253,9 +1294,14 @@ export function competingPlanAgentPrompt(
   focus: "correctness" | "robustness" | "ergonomics",
   goal: string,
   profile: RepoProfile,
-  scanResult?: ScanResult
+  scanResult?: ScanResult,
+  cassContext?: string
 ): string {
   const repoContext = formatRepoProfile(profile, scanResult);
+  const memorySection =
+    cassContext && cassContext.trim().length > 0
+      ? `\n## Memory from Prior Orchestrations\n${cassContext.trim()}\n`
+      : "";
   const lensInstructions = {
     correctness: [
       "Prioritize architectural correctness and internal consistency.",
@@ -1280,7 +1326,7 @@ export function competingPlanAgentPrompt(
 ${goal}
 
 ## Focus Lens: ${focus}
-${lensInstructions[focus].map((line) => `- ${line}`).join("\n")}
+${lensInstructions[focus].map((line) => `- ${line}`).join("\n")}${memorySection}
 
 ## Repository Context
 ${repoContext}
@@ -1304,12 +1350,36 @@ Produce a concrete markdown plan with these sections:
 - Make the plan detailed enough that a fresh agent could implement it without guessing.`;
 }
 
-export function planSynthesisPrompt(plans: { name: string; model: string; plan: string }[]): string {
+export function planSynthesisPrompt(
+  plans: { name: string; model: string; plan: string }[],
+  format: "markdown" | "git-diff" = "markdown"
+): string {
+  const plansText = plans
+    .map((plan, index) => `### Plan ${index + 1}: ${plan.name} (${plan.model})\n\n${plan.plan}`)
+    .join("\n\n");
+
+  if (format === "git-diff") {
+    return `## Plan Synthesis Instructions (git-diff format)
+
+${plans.length} independent plan documents were generated for the same goal. Plan 1 (${plans[0]?.name ?? "correctness"}) is the baseline.
+
+${plansText}
+
+## What to do
+Output your improvements as a unified diff against Plan 1, suitable for application via \`patch -p0\` or \`git apply\`.
+1. Use standard unified diff format (--- a/plan.md / +++ b/plan.md headers, @@ hunks)
+2. Incorporate the strongest ideas from Plans 2 and 3 as additions/replacements
+3. Resolve contradictions in favour of the approach with the best justification
+4. Preserve correctness, robustness, and ergonomics insights
+
+Return ONLY the unified diff — no prose before or after.`;
+  }
+
   return `## Plan Synthesis Instructions
 
 ${plans.length} independent plan documents were generated for the same goal. Synthesize them into a single best-of-all-worlds implementation plan.
 
-${plans.map((plan, index) => `### Plan ${index + 1}: ${plan.name} (${plan.model})\n\n${plan.plan}`).join("\n\n")}
+${plansText}
 
 ## What to do
 1. Identify the strongest ideas from each plan
@@ -1412,9 +1482,14 @@ export function freshPlanRefinementPrompt(
   planText: string,
   planArtifactPath: string,
   roundNumber: number,
-  cwd: string
+  cwd: string,
+  cassContext?: string
 ): string {
-  return `You are a fresh reviewer with ZERO prior context. You have never seen this plan before. Use ultrathink.
+  const memorySection =
+    cassContext && cassContext.trim().length > 0
+      ? `\n## Memory from Prior Orchestrations\n${cassContext.trim()}\n`
+      : "";
+  return `You are a fresh reviewer with ZERO prior context. You have never seen this plan before. Use ultrathink.${memorySection}
 
 ## Round ${roundNumber} Refinement
 
@@ -1477,4 +1552,279 @@ cm add '<learning>' --category orchestration --json
 Use appropriate categories: \`orchestration\`, \`architecture\`, \`gotcha\`, \`pattern\`, \`tooling\`
 
 Add 3-7 rules. Each should be specific, actionable, and traceable to beads: ${beadIds.join(", ")}`;
+}
+
+// ─── Bead Quality Score Parser ───────────────────────────────
+
+export interface BeadQualityScore {
+  what: number;       // 1-5: implementation detail clarity
+  why: number;        // 1-5: rationale and context
+  how: number;        // 1-5: verification / acceptance criteria
+  weaknesses: string[];
+  suggestions: string[];
+}
+
+export interface BeadQualityAuditResult {
+  beadId: string;
+  title: string;
+  score: BeadQualityScore | null;
+  /** Average of what/why/how, or null if parse failed */
+  avgScore: number | null;
+  weakAxis: "what" | "why" | "how" | null;
+}
+
+/**
+ * Parse the JSON block produced by beadQualityScoringPrompt().
+ */
+export function parseBeadQualityScore(output: string): BeadQualityScore | null {
+  const jsonMatch = output.match(/```json\s*([\s\S]*?)```/);
+  const raw = jsonMatch ? jsonMatch[1] : output;
+  try {
+    const parsed = JSON.parse(raw.trim());
+    if (
+      typeof parsed.what === "number" &&
+      typeof parsed.why === "number" &&
+      typeof parsed.how === "number"
+    ) {
+      return {
+        what: Math.min(5, Math.max(1, Math.round(parsed.what))),
+        why: Math.min(5, Math.max(1, Math.round(parsed.why))),
+        how: Math.min(5, Math.max(1, Math.round(parsed.how))),
+        weaknesses: Array.isArray(parsed.weaknesses) ? parsed.weaknesses : [],
+        suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : [],
+      };
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+/** Score bar for display: e.g. "▓▓▓░░ 3/5" */
+function scoreBar(n: number): string {
+  const filled = Math.round(n);
+  return "▓".repeat(filled) + "░".repeat(5 - filled) + ` ${n}/5`;
+}
+
+/**
+ * Format a WHAT/WHY/HOW audit result for display in the approval UI.
+ */
+export function formatBeadQualityAudit(results: BeadQualityAuditResult[]): string {
+  if (results.length === 0) return "No beads scored.";
+
+  const scored = results.filter((r) => r.score !== null);
+  if (scored.length === 0) return "⚠️ WHAT/WHY/HOW scoring failed for all beads.";
+
+  // Axis summary across all beads
+  const avgWhat = scored.reduce((s, r) => s + r.score!.what, 0) / scored.length;
+  const avgWhy = scored.reduce((s, r) => s + r.score!.why, 0) / scored.length;
+  const avgHow = scored.reduce((s, r) => s + r.score!.how, 0) / scored.length;
+
+  const weakestAxis = (() => {
+    const min = Math.min(avgWhat, avgWhy, avgHow);
+    if (min === avgWhat) return "WHAT (implementation detail)";
+    if (min === avgWhy) return "WHY (rationale/context)";
+    return "HOW (verification criteria)";
+  })();
+
+  const lines: string[] = [
+    `## 📊 WHAT/WHY/HOW Quality Audit (${scored.length}/${results.length} beads scored)`,
+    ``,
+    `**Overall averages:**`,
+    `  WHAT ${scoreBar(avgWhat)}`,
+    `  WHY  ${scoreBar(avgWhy)}`,
+    `  HOW  ${scoreBar(avgHow)}`,
+    ``,
+    avgWhat < 3 || avgWhy < 3 || avgHow < 3
+      ? `⚠️ **Weakest axis: ${weakestAxis}** — focus next refinement round here.`
+      : `✅ All axes above threshold.`,
+    ``,
+  ];
+
+  // List weak beads (any axis < 3)
+  const weak = scored.filter(
+    (r) => r.score!.what < 3 || r.score!.why < 3 || r.score!.how < 3
+  );
+  if (weak.length > 0) {
+    lines.push(`**Beads needing improvement (${weak.length}):**`);
+    for (const r of weak) {
+      const axes = [
+        r.score!.what < 3 ? `WHAT(${r.score!.what})` : "",
+        r.score!.why < 3 ? `WHY(${r.score!.why})` : "",
+        r.score!.how < 3 ? `HOW(${r.score!.how})` : "",
+      ].filter(Boolean).join(", ");
+      lines.push(`  • **${r.beadId}** (${r.title}): weak on ${axes}`);
+      if (r.score!.suggestions.length > 0) {
+        lines.push(`    → ${r.score!.suggestions[0]}`);
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
+
+// ─── Existing-Codebase Maintenance Prompts ────────────────────────────────
+
+/**
+ * Full codebase audit prompt — used by /orchestrate-audit.
+ * Spawned as parallel agents: bugs, security, tests, dead-code.
+ */
+export function auditAgentPrompt(
+  focus: "bugs" | "security" | "tests" | "dead-code",
+  profile: RepoProfile,
+  files: string[],
+  cwd: string,
+  domainExtras?: string
+): string {
+  const fileList = files.length > 0
+    ? `### Files in scope\n${files.map(f => `- ${f}`).join("\n")}`
+    : `### Scope\nEntire codebase (all source files)`;
+
+  const focusInstructions: Record<string, string> = {
+    bugs: `You are a **bug hunter**. Find runtime bugs, logic errors, off-by-one errors, null dereferences, unhandled promise rejections, race conditions, and incorrect error handling.
+
+For every issue:
+- State the file and line range
+- Explain the bug precisely
+- Provide the minimal fix
+
+Be exhaustive. If you find one bug, look for the same pattern in other files.`,
+
+    security: `You are a **security auditor**. Find:
+- Injection vulnerabilities (SQL, shell, path traversal)
+- Missing input validation / sanitisation
+- Hardcoded secrets or credentials
+- Insecure defaults or missing auth checks
+- Supply chain risks (unpinned deps, suspicious packages)
+- Data exposure (logging PII, overly broad CORS, etc.)
+
+For every finding: severity (critical/high/medium/low), file/line, description, fix.`,
+
+    tests: `You are a **test coverage auditor**. Find:
+- Public functions / exported symbols with no test
+- Unhappy paths and edge cases missing from existing tests
+- Integration points tested only via mocks (fragile)
+- E2E workflows with no end-to-end test
+
+For every gap: file, what's untested, suggested test description.`,
+
+    "dead-code": `You are a **dead code detector**. Find:
+- Exported symbols never imported anywhere
+- Functions defined but never called
+- Variables assigned but never read
+- Commented-out code blocks left in place
+- Feature flags / config options that can never be true
+- TODO/FIXME comments that have been there a long time
+
+For every item: file/line, what it is, safe-to-delete verdict.`,
+  };
+
+  return `${focusInstructions[focus]}
+
+## Repository Context
+Languages: ${profile.languages.join(", ") || "unknown"}
+Frameworks: ${profile.frameworks.join(", ") || "none detected"}
+${domainExtras ? `\n## Domain-Specific Checklist\n${domainExtras}` : ""}
+
+${fileList}
+
+## Output format
+Return a JSON array of findings, then a markdown summary.
+
+\`\`\`json
+[
+  {
+    "severity": "critical|high|medium|low|info",
+    "file": "src/foo.ts",
+    "line": "42-55",
+    "title": "Short title",
+    "description": "What is wrong and why",
+    "fix": "Minimal fix or suggestion"
+  }
+]
+\`\`\`
+
+After the JSON, write a brief prose summary (3-5 sentences) of the most important findings.
+
+Use ultrathink. Be specific and exhaustive — vague findings are useless.
+
+cd ${cwd}`;
+}
+
+/**
+ * Targeted scan prompt — used by /orchestrate-scan.
+ * Scoped to specific files/paths and one focus area.
+ */
+export function scanAgentPrompt(
+  focus: string,
+  files: string[],
+  cwd: string,
+  domainExtras?: string
+): string {
+  const fileList = files.map(f => `- ${f}`).join("\n");
+  return `You are performing a **targeted code scan** focused on: **${focus}**
+
+## Files to scan
+${fileList}
+
+${domainExtras ? `## Domain-specific checks\n${domainExtras}\n` : ""}
+## Instructions
+1. Read every file in the list above carefully
+2. Find all issues related to your focus area: ${focus}
+3. For each issue: severity, file:line, title, description, suggested fix
+4. After reviewing, search for the same patterns in neighbouring files not in the list
+5. Be exhaustive — if you miss something, you break the safety net
+
+## Output format
+\`\`\`json
+[
+  {
+    "severity": "critical|high|medium|low|info",
+    "file": "src/foo.ts",
+    "line": "42-55",
+    "title": "Short title",
+    "description": "What is wrong and why",
+    "fix": "Minimal fix"
+  }
+]
+\`\`\`
+
+Follow the JSON with a 2-3 sentence summary of the most critical finding.
+
+Use ultrathink.
+
+cd ${cwd}`;
+}
+
+/**
+ * Convert audit/scan findings into bead creation instructions.
+ */
+export function findingsToBeadsPrompt(
+  findings: Array<{ severity: string; file: string; line: string; title: string; description: string; fix: string }>,
+  cwd: string
+): string {
+  const priority = (sev: string) =>
+    sev === "critical" ? "P0" : sev === "high" ? "P1" : sev === "medium" ? "P2" : "P3";
+
+  const cmds = findings.map(f => {
+    const safeTitle = f.title.replace(/"/g, "'").slice(0, 80);
+    const safeDesc = `**File:** ${f.file}:${f.line}\n\n**Problem:** ${f.description}\n\n**Fix:** ${f.fix}\n\n### Files:\n${f.file}`;
+    const escapedDesc = safeDesc.replace(/"/g, "'").replace(/\n/g, "\\n");
+    return `br create --title "Fix: ${safeTitle}" --description "${escapedDesc}" --priority ${priority(f.severity)}`;
+  }).join("\n\n");
+
+  return `## Create Fix Beads
+
+Run these commands to track each finding as a bead:
+
+\`\`\`bash
+cd ${cwd}
+
+${cmds}
+
+br sync --flush-only
+git add .beads/ && git commit -m "chore: add fix beads from audit"
+\`\`\`
+
+After creating beads, call \`orch_approve_beads\` to review before implementing.`;
 }

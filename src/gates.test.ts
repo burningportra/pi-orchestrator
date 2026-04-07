@@ -12,22 +12,23 @@ import { join } from "path";
 const gatesSource = readFileSync(join(__dirname, "gates.ts"), "utf8");
 
 describe("gates.ts — gate definitions", () => {
-  it("has exactly 7 gates", () => {
+  it("has exactly 8 gates", () => {
     // Count gate objects in the array
     const gateMatches = gatesSource.match(/\{ emoji: "[^"]+", label: "[^"]+", desc: "[^"]+", auto: (true|false) \}/g);
     expect(gateMatches).not.toBeNull();
-    expect(gateMatches!.length).toBe(7);
+    expect(gateMatches!.length).toBe(8);
   });
 
   it("gate order is correct", () => {
     const labels = [...gatesSource.matchAll(/label: "([^"]+)"/g)].map(m => m[1]);
-    // Filter to only the gate definition labels (first 7 occurrences)
-    const gateLabels = labels.slice(0, 7);
+    // Filter to only the gate definition labels (first 8 occurrences)
+    const gateLabels = labels.slice(0, 8);
     expect(gateLabels).toEqual([
       "Fresh self-review",
       "Peer review",
       "Test coverage",
       "De-slopify",
+      "UBS scan",
       "Commit",
       "Ship it",
       "Landing checklist",
@@ -41,6 +42,7 @@ describe("gates.ts — gate definitions", () => {
     expect(autoMap["Fresh self-review"]).toBe(true);
     expect(autoMap["Test coverage"]).toBe(true);
     expect(autoMap["De-slopify"]).toBe(true);
+    expect(autoMap["UBS scan"]).toBe(true);
     // User-prompted gates (expensive or destructive):
     expect(autoMap["Peer review"]).toBe(false);
     expect(autoMap["Commit"]).toBe(false);
@@ -130,10 +132,11 @@ describe("gates.ts — phase regression support", () => {
     expect(peerSection).toContain("regressionHint");
   });
 
-  it("attaches regressionHint to hit-me gate", () => {
-    const hitMeSection = gatesSource.slice(
-      gatesSource.indexOf('Hit me')
-    );
-    expect(hitMeSection).toContain("regressionHint");
+  it("unreachable-gate fallback does not reference regressionHint (hit-me gate was removed)", () => {
+    // The 🔥 Hit me gate was removed from the gates array (it was dead code).
+    // The fallback branch now returns a safe error message with no regressionHint.
+    const fallbackSection = gatesSource.slice(gatesSource.indexOf('Unknown gate choice'));
+    expect(fallbackSection).toBeTruthy();
+    expect(fallbackSection).toContain("Unknown gate choice");
   });
 });

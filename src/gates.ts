@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { OrchestratorContext, OrchestratorState } from "./types.js";
 import { polishInstructions, summaryInstructions, realityCheckInstructions, deSlopifyInstructions, landingChecklistInstructions, learningsExtractionPrompt } from "./prompts.js";
+import { reflectMemory } from "./memory.js";
 import { readBeads, extractArtifacts as extractBeadArtifacts } from "./beads.js";
 import { agentMailTaskPreamble } from "./agent-mail.js";
 import { detectUbs } from "./coordination.js";
@@ -38,6 +39,7 @@ export async function runGuidedGates(
     { emoji: "👥", label: "Peer review", desc: "parallel agents review each other's work", auto: false },
     { emoji: "🧪", label: "Test coverage", desc: "check unit tests + e2e, create tasks for gaps", auto: true },
     { emoji: "✏️", label: "De-slopify", desc: "remove AI writing patterns from docs", auto: true },
+    { emoji: "🔒", label: "UBS scan", desc: "run ubs on changed files, fix all issues", auto: true },
     { emoji: "📦", label: "Commit", desc: "logical groupings with detailed messages", auto: false },
     { emoji: "🚀", label: "Ship it", desc: "commit, tag, release, deploy, monitor CI", auto: false },
     { emoji: "🛬", label: "Landing checklist", desc: "verify session is resumable", auto: false },
@@ -100,6 +102,10 @@ export async function runGuidedGates(
     st.currentGateIndex = 0;
     oc.setPhase("complete", ctx);
     oc.persistState();
+
+    // guide §10: run `cm reflect` between sessions to mine patterns from logs
+    try { reflectMemory(ctx.cwd); } catch { /* best-effort */ }
+
     const learningsText = learningsExtractionPrompt(goal, activeBeads.map((b) => b.id));
 
     // Self-improvement loop: save structured feedback for future orchestrations
@@ -133,7 +139,7 @@ export async function runGuidedGates(
       content: [
         {
           type: "text",
-          text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully read over ALL the new code you just wrote and any existing code you modified with "fresh eyes" looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Carefully fix anything you uncover.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}${callbackHint}${regressionHint}`,
+          text: `## 🔍 Fresh Self-Review — Round ${round}\n\nCarefully re-read ALL new and modified code with fresh eyes. For each file changed, work through these 4 questions:\n\n1. **Is it correct?** Does the implementation actually do what the bead description says it should?\n2. **Are edge cases handled?** Empty inputs, concurrent access, error paths, boundary conditions — what breaks under stress?\n3. **Are there similar issues elsewhere?** If you found a bug, search for the same pattern in other files. Bugs travel in packs.\n4. **Was the approach right?** Sometimes the implementation is correct but there's a simpler or more robust alternative. Consider it now, not after review.\n\nFix everything you find. If you find a bug, do the pattern search (#3) before moving on.\n\nFiles changed:\n${allArtifacts.map((a) => `- ${a}`).join("\n")}${callbackHint}${regressionHint}`,
         },
       ],
       details: { iterating: true, round, selfReview: true },
@@ -179,17 +185,34 @@ export async function runGuidedGates(
 
   if (chosen.startsWith("🧪")) {
     const ubsAvailable = await detectUbs(oc.pi, ctx.cwd);
-    const ubsHint = ubsAvailable
-      ? `\n\nAlso run \`ubs <changed-files>\` to scan for bugs beyond what linters catch.`
+    const ubsRequired = ubsAvailable
+      ? `\n\n**Required:** Run \`ubs <changed-files>\` and fix ALL issues before calling orch_review.`
       : "";
     return {
       content: [
         {
           type: "text",
-          text: `## 🧪 Test Coverage Check — Round ${round}\n\nDo we have full unit test coverage without using mocks or fake stuff? What about complete e2e integration test scripts with great, detailed logging?\n\nReview the current state:\n- Goal: ${goal}\n- Files: ${allArtifacts.join(", ")}\n\nIf test coverage is incomplete, create specific tasks for each missing test, with subtasks and dependency structure. Each task should be self-contained — a fresh agent can execute it without extra context.\n\nFor unit tests: test real behavior, not mocked interfaces. For e2e: full integration scripts with detailed logging at each stage.${ubsHint}${callbackHint}${regressionHint}`,
+          text: `## 🧪 Test Coverage Check — Round ${round}\n\nDo we have full unit test coverage without using mocks or fake stuff? What about complete e2e integration test scripts with great, detailed logging?\n\nReview the current state:\n- Goal: ${goal}\n- Files: ${allArtifacts.join(", ")}\n\nIf test coverage is incomplete, create specific tasks for each missing test, with subtasks and dependency structure. Each task should be self-contained — a fresh agent can execute it without extra context.\n\nFor unit tests: test real behavior, not mocked interfaces. For e2e: full integration scripts with detailed logging at each stage.${ubsRequired}${callbackHint}${regressionHint}`,
         },
       ],
       details: { iterating: true, round, testCoverage: true },
+    };
+  }
+
+  if (chosen.startsWith("🔒")) {
+    const ubsAvailable = await detectUbs(oc.pi, ctx.cwd);
+    if (!ubsAvailable) {
+      return {
+        content: [{ type: "text", text: `## 🔒 UBS Scan — Round ${round}\n\nUBS not installed — skipping. Install with: \`cargo install ubs\` for future sessions.\n\nProceeding to commit gate.${callbackHint}` }],
+        details: { iterating: true, round, ubsScan: true, skipped: true },
+      };
+    }
+    return {
+      content: [{
+        type: "text",
+        text: `## 🔒 UBS Scan — Round ${round}\n\nRun UBS on ALL changed files before committing.\n\n\`\`\`bash\nubs ${allArtifacts.join(" ")}\n\`\`\`\n\nFix **every issue** UBS reports — security holes, supply chain vulnerabilities, runtime stability issues, and anti-patterns that linters miss.\n\nDo not proceed to commit until UBS reports clean.${callbackHint}${regressionHint}`,
+      }],
+      details: { iterating: true, round, ubsScan: true },
     };
   }
 
@@ -256,40 +279,10 @@ export async function runGuidedGates(
     };
   }
 
-  // "🔥 Hit me" — spawn 4 parallel review agents
-  const hitMeThreadId = `hit-me-r${round}`;
-  const hitMeArtifacts = allArtifacts;
-  const hitMePreamble = (name: string) =>
-    st.coordinationBackend?.agentMail
-      ? agentMailTaskPreamble(ctx.cwd, name, `Hit me review round ${round}`, hitMeArtifacts, hitMeThreadId)
-      : "";
-  const agentConfigs = [
-    {
-      name: `fresh-eyes-r${round}`,
-      task: `${hitMePreamble(`fresh-eyes-r${round}`)}Fresh-eyes reviewer round ${round}. NEVER seen this code.\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}${domainReviewExtras}\n\nFind blunders, bugs, errors, oversights. Be harsh. Fix issues directly using the edit tool. Your changes persist to disk and will be shown as a diff for confirmation.\n\ncd ${ctx.cwd}`,
-    },
-    {
-      name: `polish-r${round}`,
-      task: `${hitMePreamble(`polish-r${round}`)}Polish/de-slopify reviewer round ${round}.\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}\n\n${polish}\n\nMake targeted edits directly — don't just report.\n\ncd ${ctx.cwd}`,
-    },
-    {
-      name: `ergonomics-r${round}`,
-      task: `${hitMePreamble(`ergonomics-r${round}`)}Agent-ergonomics reviewer round ${round}. Make this maximally intuitive for coding agents.\n\nGoal: ${goal}\nFiles: ${allArtifacts.join(", ")}\n\nIf you came in fresh with zero context, would you understand this? Fix anything that fails that test.\n\ncd ${ctx.cwd}`,
-    },
-    {
-      name: `reality-check-r${round}`,
-      task: `${hitMePreamble(`reality-check-r${round}`)}Reality checker round ${round}.\n\n${realityCheckInstructions(goal, activeBeads, beadResults)}\n\nDo NOT edit code. Just report your findings as text.\n\ncd ${ctx.cwd}`,
-    },
-  ];
-
-  const gateJson = JSON.stringify({ agents: agentConfigs }, null, 2);
+  // Unreachable: all gate choices are handled above.
+  // If we get here something is wrong — return a safe fallback.
   return {
-    content: [
-      {
-        type: "text",
-        text: `**NEXT: Call \`parallel_subagents\` NOW with the config below.**\n\n## 🔥 Hit me — Round ${round}\n\n\`\`\`json\n${gateJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` again.${callbackHint}${regressionHint}`,
-      },
-    ],
-    details: { iterating: true, round, agents: agentConfigs.map((a) => a.name) },
+    content: [{ type: "text", text: `Unknown gate choice: "${chosen}". Call \`orch_review\` with beadId "__gates__" to continue.` }],
+    details: { iterating: true, round, unknownGate: chosen },
   };
 }

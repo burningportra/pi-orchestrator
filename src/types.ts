@@ -15,6 +15,8 @@ export interface RepoProfile {
   keyFiles: Record<string, string>;
   readme?: string;
   packageManager?: string;
+  /** Content snippets from best-practices guides found in the project. */
+  bestPracticesGuides?: Array<{ name: string; content: string }>;
 }
 
 // ─── Repository Scan Contract ───────────────────────────────
@@ -357,6 +359,17 @@ export interface OrchestratorState {
   funnelWinnowedIds?: string[];
   /** Foregone conclusion score — composite readiness assessment. */
   foregoneScore?: import("./foregone.js").ForegoneScore;
+
+  /** Timestamp (ms) when the current phase started — used for phase duration display. */
+  phaseStartedAt?: number;
+
+  // ─── Review clean-round tracking ──────────────────────────
+  /**
+   * Number of consecutive review rounds where orch_review was called
+   * with verdict=“pass” and no revision instructions (guide §08 stop condition).
+   * Reset to 0 on any fail or revision-instructions round.
+   */
+  consecutiveCleanRounds?: number;
 }
 
 export function createInitialState(): OrchestratorState {

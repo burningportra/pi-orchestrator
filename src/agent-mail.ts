@@ -177,6 +177,60 @@ export async function checkFileReservations(
 }
 
 /**
+ * Call macro_prepare_thread — join an existing thread with context summary.
+ * Use when spawning review agents that need to participate in an existing bead thread.
+ */
+export async function prepareThread(
+  exec: ExecFn,
+  cwd: string,
+  agentName: string,
+  threadId: string
+): Promise<any> {
+  return agentMailRPC(exec, "macro_prepare_thread", {
+    human_key: cwd,
+    agent_name: agentName,
+    thread_id: threadId,
+  });
+}
+
+/**
+ * Call macro_file_reservation_cycle — reserve files, do work, auto-release.
+ * Returns a reservation ID that can be used to track the reservation.
+ */
+export async function fileReservationCycle(
+  exec: ExecFn,
+  cwd: string,
+  agentName: string,
+  files: string[],
+  reason?: string
+): Promise<any> {
+  return agentMailRPC(exec, "macro_file_reservation_cycle", {
+    human_key: cwd,
+    agent_name: agentName,
+    paths: files,
+    ttl_seconds: 3600,
+    exclusive: true,
+    ...(reason ? { reason } : {}),
+  });
+}
+
+/**
+ * Call macro_contact_handshake — set up cross-agent contact for DM communication.
+ */
+export async function contactHandshake(
+  exec: ExecFn,
+  cwd: string,
+  fromAgent: string,
+  toAgent: string
+): Promise<any> {
+  return agentMailRPC(exec, "macro_contact_handshake", {
+    human_key: cwd,
+    from_agent: fromAgent,
+    to_agent: toAgent,
+  });
+}
+
+/**
  * Build a JSON-RPC curl command string for agent-mail.
  */
 export function amRpcCmd(tool: string, args: Record<string, unknown>): string {
@@ -194,11 +248,14 @@ export function amRpcCmd(tool: string, args: Record<string, unknown>): string {
  * with their agent name and project key baked in — no manual substitution needed.
  */
 function amHelperScript(cwd: string, threadId: string): string {
+  // Escape double-quotes to prevent shell injection (e.g. paths with spaces/quotes)
+  const safeCwd = cwd.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const safeThread = threadId.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   return `
 # ── Agent Mail helper functions (source these) ──────────────
 AM_URL="${AGENT_MAIL_URL}"
-AM_PROJECT="${cwd}"
-AM_THREAD="${threadId}"
+AM_PROJECT="${safeCwd}"
+AM_THREAD="${safeThread}"
 
 am_rpc() {
   local tool="$1" args="$2"
@@ -209,7 +266,14 @@ am_rpc() {
 
 am_send() {
   local subject="$1" body="$2"
-  am_rpc "send_message" "{\\"human_key\\":\\"$AM_PROJECT\\",\\"sender_name\\":\\"$AM_AGENT_NAME\\",\\"to\\":[],\\"broadcast\\":true,\\"subject\\":\\"$subject\\",\\"body_md\\":\\"$body\\",\\"thread_id\\":\\"$AM_THREAD\\"}"
+  # Thread-scoped only — no broadcast (guide §06: "no broadcast-to-all default")
+  am_rpc "send_message" "{\\"human_key\\":\\"$AM_PROJECT\\",\\"sender_name\\":\\"$AM_AGENT_NAME\\",\\"to\\":[],\\"subject\\":\\"$subject\\",\\"body_md\\":\\"$body\\",\\"thread_id\\":\\"$AM_THREAD\\"}"
+}
+
+am_dm() {
+  local to_agent="$1" subject="$2" body="$3"
+  # Direct message to a specific agent — use for targeted cross-agent communication
+  am_rpc "send_message" "{\\"human_key\\":\\"$AM_PROJECT\\",\\"sender_name\\":\\"$AM_AGENT_NAME\\",\\"to\\":[\\"$to_agent\\"],\\"subject\\":\\"$subject\\",\\"body_md\\":\\"$body\\",\\"thread_id\\":\\"$AM_THREAD\\"}"
 }
 
 am_inbox() {
@@ -218,6 +282,14 @@ am_inbox() {
 
 am_release() {
   am_rpc "release_file_reservations" "{\\"human_key\\":\\"$AM_PROJECT\\",\\"agent_name\\":\\"$AM_AGENT_NAME\\"}"
+}
+
+# am_join_thread: call macro_prepare_thread to join a review thread.
+# Recommended when joining an existing bead thread as a new participant (e.g. review agents).
+# Example: am_join_thread "bead-abc"
+am_join_thread() {
+  local thread_id="$1"
+  am_rpc "macro_prepare_thread" "{\\"human_key\\":\\"$AM_PROJECT\\",\\"agent_name\\":\\"$AM_AGENT_NAME\\",\\"thread_id\\":\\"$thread_id\\"}"
 }
 `.trim();
 }

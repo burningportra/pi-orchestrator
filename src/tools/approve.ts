@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import { readFileSync } from "fs";
 import type { OrchestratorContext, Bead } from "../types.js";
-import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS, beadCreationPrompt, planRefinementPrompt, freshPlanRefinementPrompt, planToBeadsPrompt, formatPlanToBeadAuditWarnings, pickRefinementModel } from "../prompts.js";
+import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS, beadCreationPrompt, freshPlanRefinementPrompt, planToBeadsPrompt, formatPlanToBeadAuditWarnings, pickRefinementModel, beadQualityScoringPrompt, parseBeadQualityScore, formatBeadQualityAudit, type BeadQualityAuditResult } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 import { planQualityScoringPrompt, parsePlanQualityScore, formatPlanQualityScore, type PlanQualityScore } from "../plan-quality.js";
 import { sessionArtifactPath } from "../session-artifacts.js";
@@ -239,6 +239,17 @@ export function registerApproveTool(oc: OrchestratorContext) {
           ? `\n🔄 Plan refinement round ${planRound}${changesInfo}${convergenceInfo}${oc.state.polishConverged ? "\n✅ Steady-state reached (0 changes for 2 consecutive rounds)" : ""}`
           : "";
 
+        // ── Plan size gate (guide §03: mature plans are 3,000–6,000+ lines) ──
+        const planLineCount = plan.split("\n").length;
+        const planSizeInfo =
+          planLineCount < 100
+            ? `\n\n⛔ **Plan too short (${planLineCount} lines)** — this is a sketch, not a plan. Needs substantial expansion before creating beads.`
+            : planLineCount < 500
+            ? `\n\n⚠️ **Plan is short (${planLineCount} lines)** — guide recommends 3,000–6,000+ lines for mature plans. Consider more refinement rounds.`
+            : planLineCount < 1500
+            ? `\n\n📊 **Plan length: ${planLineCount} lines** — decent start, but likely missing detail. Guide target: 3,000–6,000+ lines.`
+            : `\n\n✅ **Plan length: ${planLineCount} lines**`;
+
         // Score plan quality on first view and after each refinement round.
         let qualityInfo = "";
         const shouldScore = !oc.state.planReadinessScore || returningFromRefinement;
@@ -266,20 +277,28 @@ export function registerApproveTool(oc: OrchestratorContext) {
           qualityInfo = `\n\n${formatPlanQualityScore(qualityScore)}`;
         }
 
-        // Build options — gate "Accept" if quality score says "block"
+        // Build options — gate "Accept" if quality score says "block" OR plan is too short
+        const planTooShort = planLineCount < 100;
         const planOptions: string[] = [];
-        if (qualityScore?.recommendation === "block") {
-          // Don't offer Accept when score is too low
-          planOptions.push(`🔍 Refine plan (round ${planRound + 1}) — score too low to accept`);
+        if (planTooShort || qualityScore?.recommendation === "block") {
+          planOptions.push(`🔍 Refine plan (round ${planRound + 1}) — ${planTooShort ? "plan too short" : "score too low to accept"}`);
           planOptions.push("✅ Accept anyway (override quality gate)");
         } else {
           planOptions.push("✅ Accept plan and create beads");
           planOptions.push(`🔍 Refine plan (round ${planRound + 1})`);
         }
+        // Guide §03: offer auto-drive 4-5 refinement rounds on first view when quality is low
+        if (planRound === 0 && (planTooShort || qualityScore?.recommendation === "block" || qualityScore?.recommendation === "warn")) {
+          planOptions.push("🚀 Auto-refine (4 rounds, rotate models)");
+        }
+        // Round-2 nudge: guide recommends 4-5 rounds
+        if (planRound === 2 && (qualityScore?.recommendation === "warn")) {
+          planOptions.push("💡 Tip: guide recommends 4-5 rounds — continue refining");
+        }
         planOptions.push("❌ Reject plan");
 
         const choice = await ctx.ui.select(
-          `Review plan for: ${oc.state.selectedGoal}${roundHeader}${qualityInfo}\n\n${formatPlanSummary(plan)}`,
+          `Review plan for: ${oc.state.selectedGoal}${roundHeader}${planSizeInfo}${qualityInfo}\n\n${formatPlanSummary(plan)}`,
           planOptions
         );
 
@@ -298,6 +317,43 @@ export function registerApproveTool(oc: OrchestratorContext) {
           return {
             content: [{ type: "text", text: "Plan rejected. Orchestration stopped." }],
             details: { approved: false, plan: true },
+          };
+        }
+
+        if (choice.startsWith("🚀 Auto-refine")) {
+          oc.setPhase("planning", ctx);
+          oc.persistState();
+
+          // Build instructions for 4 sequential auto-refinement rounds
+          const roundInstructions = [1, 2, 3, 4].map((r) => {
+            const m = pickRefinementModel(planRound + r - 1);
+            const fp = freshPlanRefinementPrompt(plan, oc.state.planDocument!, planRound + r, ctx.cwd);
+            return `**Round ${r}** — model: \`${m}\`\n\`\`\`json\n${JSON.stringify({ name: `plan-refine-r${planRound + r}`, task: `${fp}\n\nAfter refining, write the updated plan to the artifact: \`${oc.state.planDocument}\`\nUse write_artifact with name "${oc.state.planDocument}".`, model: m, cwd: ctx.cwd }, null, 2)}\n\`\`\``;
+          }).join("\n\n");
+
+          return {
+            content: [{
+              type: "text",
+              text: `**NEXT: Run 4 sequential plan refinement rounds, then call \`orch_approve_beads\` to review the final result.**\n\nFor each round (1-4):\n1. Spawn a fresh sub-agent using the \`subagent\` tool (fork: false)\n2. Wait for it to complete before starting the next round\n3. After all 4 rounds, call \`orch_approve_beads\` to review the improved plan\n\n${roundInstructions}`,
+            }],
+            details: { approved: false, plan: true, refining: true, autoRefine: true, rounds: 4, planDocument: oc.state.planDocument, planRound },
+          };
+        }
+
+        if (choice.startsWith("💡")) {
+          // Round-2 nudge: treat as a single refinement round
+          oc.setPhase("planning", ctx);
+          oc.persistState();
+
+          const refinementModel = pickRefinementModel(planRound);
+          const freshPrompt = freshPlanRefinementPrompt(plan, oc.state.planDocument!, planRound + 1, ctx.cwd);
+
+          return {
+            content: [{
+              type: "text",
+              text: `💡 You're at round ${planRound}. Guide recommends 4-5 rounds total — ${4 - planRound} more to go.\n\n**NEXT: Spawn a fresh sub-agent for plan refinement, then call \`orch_approve_beads\` again.**\n\nUse \`subagent\` with these parameters:\n\`\`\`json\n${JSON.stringify({ name: `plan-refine-r${planRound + 1}`, task: `${freshPrompt}\n\nAfter refining, write the updated plan to the artifact: \`${oc.state.planDocument}\`\nUse write_artifact with name "${oc.state.planDocument}".`, model: refinementModel, cwd: ctx.cwd }, null, 2)}\n\`\`\`\n\nThis uses **${refinementModel}** (model rotation prevents taste convergence).\nAfter the sub-agent completes, call \`orch_approve_beads\` to review changes.`,
+            }],
+            details: { approved: false, plan: true, refining: true, freshAgent: true, model: refinementModel, planDocument: oc.state.planDocument, planRound },
           };
         }
 
@@ -701,6 +757,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
           `🔍 Same-agent polish (round ${round + 1})`,
           `🔨 Blunder hunt (5x overshoot)`,
           `🔗 Dedup check`,
+          `📊 WHAT/WHY/HOW quality audit`,
         ];
         if (round >= 1) {
           advancedOptions.push("🔀 Cross-model review");
@@ -847,6 +904,97 @@ cd ${ctx.cwd}`;
             },
           ],
           details: { approved: false, refining: true, dedup: true, beadCount: beads.length, polishRound: round },
+        };
+      }
+
+      if (choice?.startsWith("📊")) {
+        // WHAT/WHY/HOW quality audit — run scorer on all beads in parallel, surface weak axes
+        const { runDeepPlanAgents } = await import("../deep-plan.js");
+
+        ctx.ui.notify(`📊 Running WHAT/WHY/HOW quality audit on ${beads.length} bead${beads.length !== 1 ? "s" : ""}...`, "info");
+
+        const auditAgents = beads.map((b, i) => ({
+          name: `wwh-${b.id}`,
+          task: beadQualityScoringPrompt(b.id, b.title, b.description),
+          model: pickRefinementModel(i),
+        }));
+
+        let auditResults: BeadQualityAuditResult[];
+        try {
+          const rawResults = await runDeepPlanAgents(oc.pi, ctx.cwd, auditAgents);
+          auditResults = rawResults.map((r, i) => {
+            const b = beads[i];
+            const score = parseBeadQualityScore(r.plan ?? "");
+            const axes = score ? [score.what, score.why, score.how] : [];
+            const avgScore = axes.length ? axes.reduce((s, n) => s + n, 0) / axes.length : null;
+            const weakAxis = score
+              ? (score.what <= Math.min(score.what, score.why, score.how) && score.what < 3 ? "what"
+                : score.why <= Math.min(score.what, score.why, score.how) && score.why < 3 ? "why"
+                : score.how < 3 ? "how" : null)
+              : null;
+            return { beadId: b.id, title: b.title, score, avgScore, weakAxis } satisfies BeadQualityAuditResult;
+          });
+        } catch (err: any) {
+          return {
+            content: [{ type: "text", text: `❌ WHAT/WHY/HOW audit failed: ${err.message ?? err}\n\nCall \`orch_approve_beads\` again to continue.` }],
+            details: { approved: false, auditError: String(err) },
+          };
+        }
+
+        const auditDisplay = formatBeadQualityAudit(auditResults);
+
+        // Offer to feed weak-bead suggestions into the next refinement round
+        const weakBeads = auditResults.filter(
+          (r) => r.score && (r.score.what < 3 || r.score.why < 3 || r.score.how < 3)
+        );
+        const auditChoice = await ctx.ui.select(
+          `${auditDisplay}`,
+          weakBeads.length > 0
+            ? [
+                `🔍 Refine ${weakBeads.length} weak bead${weakBeads.length !== 1 ? "s" : ""} (send suggestions to polish round)`,
+                `⏭️  Continue without refining`,
+              ]
+            : [`✅ All beads above threshold — continue`]
+        );
+
+        if (auditChoice?.startsWith("🔍")) {
+          oc.setPhase("refining_beads", ctx);
+          oc.persistState();
+          await syncBeads(oc.pi, ctx.cwd);
+
+          const refinementModel = pickRefinementModel(round);
+          const weakSuggestions = weakBeads
+            .map((r) => {
+              const weakAxes = [
+                r.score!.what < 3 ? `WHAT(${r.score!.what}/5)` : "",
+                r.score!.why < 3 ? `WHY(${r.score!.why}/5)` : "",
+                r.score!.how < 3 ? `HOW(${r.score!.how}/5)` : "",
+              ].filter(Boolean).join(", ");
+              const suggestions = r.score!.suggestions.map((s) => `  - ${s}`).join("\n");
+              return `### ${r.beadId}: ${r.title}\nWeak axes: ${weakAxes}\n${suggestions}`;
+            })
+            .join("\n\n");
+
+          return {
+            content: [{
+              type: "text",
+              text: `**NEXT: Improve these ${weakBeads.length} weak beads, then call \`orch_approve_beads\` again.**\n\n` +
+                `Use \`br update <id> --description '...'\` to improve the weak axes.\n\n` +
+                `## Beads Needing Improvement\n\n${weakSuggestions}\n\n` +
+                `cd ${ctx.cwd}`,
+            }],
+            details: {
+              approved: false, refining: true, whatWhyHowAudit: true,
+              weakBeadCount: weakBeads.length, polishRound: round,
+              model: refinementModel,
+            },
+          };
+        }
+
+        // Continue without refining
+        return {
+          content: [{ type: "text", text: `${auditDisplay}\n\nCall \`orch_approve_beads\` again to continue.` }],
+          details: { approved: false, whatWhyHowAudit: true, weakBeadCount: weakBeads.length },
         };
       }
 

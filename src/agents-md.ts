@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from "fs";
 import { join } from "path";
+import { onboardMemory } from "./memory.js";
 
 // ─── Core Rules ─────────────────────────────────────────────
 // Mandatory behavioral constraints for multi-agent coordination.
@@ -130,6 +131,50 @@ cm onboard mark-done /path/to/session.jsonl
 \`\`\`
 `;
 
+const BR_SECTION = `
+## Beads CLI (br) — task tracking
+
+br is the local task tracker. Tasks are stored in .beads/ JSONL files.
+
+### Key commands
+- \`br list --json\` — all beads
+- \`br ready --json\` — unblocked beads (your work queue)
+- \`br show <id>\` — full bead details
+- \`br update <id> --status in_progress\` — claim a bead
+- \`br update <id> --status closed\` — complete a bead
+- \`br create --title "..." --description "..."\` — create a bead
+- \`br dep add <id> <depends-on-id>\` — add dependency
+- \`br sync --flush-only\` — export to JSONL before committing
+- \`br dep cycles\` — verify no dependency cycles
+
+### Conventions
+- Always mark beads in_progress before starting work
+- Always close beads before committing
+- Use bead ID in commit messages: "bead br-123: summary"
+- Run \`br sync --flush-only && git add .beads/\` before committing
+`;
+
+const BV_SECTION = `
+## Beads Viewer (bv) — graph-theory task compass
+
+bv analyzes the bead dependency graph using PageRank, betweenness centrality, and critical-path analysis to tell you which bead to work on next.
+
+### Key commands
+- \`bv --robot-next\` — best single bead for one agent (PageRank + betweenness)
+- \`bv --robot-triage\` — best beads for a swarm (routes agents to parallel-safe, non-contending beads)
+- \`bv --robot-insights\` — full graph health report (bottlenecks, critical path, cycle detection)
+
+### When to use which
+- Solo agent: use \`bv --robot-next\`
+- Multiple agents running in parallel: use \`bv --robot-triage\` to avoid all agents piling on the same bottleneck
+- Stuck or unsure why progress is slow: run \`bv --robot-insights\` for graph diagnostics
+
+Always prefer bv over \`br ready\` when bv is available — bv's graph-theoretic routing unlocks more downstream work.
+`;
+
+const BR_SECTION_MARKER = "## Beads CLI (br)";
+const BV_SECTION_MARKER = "## Beads Viewer (bv)";
+
 const SECTION_MARKER = "## MCP Agent Mail";
 const CASS_SECTION_MARKER = "## Memory System: cass-memory";
 
@@ -152,6 +197,10 @@ export interface AgentsMdHealth {
   hasCoordination: boolean;
   /** Whether CASS memory section is present. */
   hasMemory: boolean;
+  /** Whether Beads CLI (br) docs are present. */
+  hasBr: boolean;
+  /** Whether Beads Viewer (bv) docs are present. */
+  hasBv: boolean;
   /** Missing sections that should be added. */
   missing: string[];
 }
@@ -170,7 +219,9 @@ export function scoreAgentsMd(cwd: string): AgentsMdHealth {
       coreRuleCount: 0,
       hasCoordination: false,
       hasMemory: false,
-      missing: ["AGENTS.md file", "Core Rules", "Agent Mail coordination", "CASS Memory"],
+      hasBr: false,
+      hasBv: false,
+      missing: ["AGENTS.md file", "Core Rules", "Agent Mail coordination", "CASS Memory", "Beads CLI (br) docs", "Beads Viewer (bv) docs"],
     };
   }
 
@@ -185,21 +236,31 @@ export function scoreAgentsMd(cwd: string): AgentsMdHealth {
   const hasCoreRules = coreRuleCount >= 6; // 6 of 8 is "has core rules"
   if (!hasCoreRules) missing.push(`Core Rules (${coreRuleCount}/8 detected)`);
 
-  // Check coordination docs (30% of score)
+  // Check coordination docs (25% of score)
   const hasCoordination = content.includes("agent mail") || content.includes("coordination");
   if (!hasCoordination) missing.push("Agent Mail coordination");
 
-  // Check memory (20% of score)
+  // Check memory (15% of score)
   const hasMemory = content.includes("cass") || content.includes("memory system");
   if (!hasMemory) missing.push("CASS Memory");
 
+  // Check Beads CLI br docs (10% of score)
+  const hasBr = content.includes("br list") || content.includes("br ready") || content.includes("beads cli");
+  if (!hasBr) missing.push("Beads CLI (br) docs");
+
+  // Check Beads Viewer bv docs (10% of score)
+  const hasBv = content.includes("bv --robot") || content.includes("beads viewer");
+  if (!hasBv) missing.push("Beads Viewer (bv) docs");
+
   const score = Math.round(
-    (coreRuleCount / 8) * 50 +
-    (hasCoordination ? 30 : 0) +
-    (hasMemory ? 20 : 0)
+    (coreRuleCount / 8) * 40 +
+    (hasCoordination ? 25 : 0) +
+    (hasMemory ? 15 : 0) +
+    (hasBr ? 10 : 0) +
+    (hasBv ? 10 : 0)
   );
 
-  return { score, hasCoreRules, coreRuleCount, hasCoordination, hasMemory, missing };
+  return { score, hasCoreRules, coreRuleCount, hasCoordination, hasMemory, hasBr, hasBv, missing };
 }
 
 /**
@@ -229,9 +290,16 @@ export async function ensureAgentMailSection(cwd: string): Promise<void> {
   if (!existsSync(agentsMdPath)) {
     writeFileSync(
       agentsMdPath,
-      DEFAULT_HEADER + CORE_RULES_SECTION.trimStart() + "\n" + AGENT_MAIL_SECTION.trimStart() + "\n" + CASS_MEMORY_SECTION.trimStart(),
+      DEFAULT_HEADER +
+        CORE_RULES_SECTION.trimStart() + "\n" +
+        AGENT_MAIL_SECTION.trimStart() + "\n" +
+        CASS_MEMORY_SECTION.trimStart() + "\n" +
+        BR_SECTION.trimStart() + "\n" +
+        BV_SECTION.trimStart(),
       "utf-8"
     );
+    // Best-effort: bootstrap CASS memory for a new project
+    onboardMemory(cwd);
     return;
   }
 
@@ -250,5 +318,15 @@ export async function ensureAgentMailSection(cwd: string): Promise<void> {
 
   if (!content.includes(CASS_SECTION_MARKER)) {
     appendFileSync(agentsMdPath, "\n" + CASS_MEMORY_SECTION.trimStart(), "utf-8");
+    content += "\n" + CASS_MEMORY_SECTION.trimStart();
+  }
+
+  if (!content.includes(BR_SECTION_MARKER)) {
+    appendFileSync(agentsMdPath, "\n" + BR_SECTION.trimStart(), "utf-8");
+    content += "\n" + BR_SECTION.trimStart();
+  }
+
+  if (!content.includes(BV_SECTION_MARKER)) {
+    appendFileSync(agentsMdPath, "\n" + BV_SECTION.trimStart(), "utf-8");
   }
 }

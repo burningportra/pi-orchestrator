@@ -19,6 +19,8 @@ export interface TenderConfig {
   stuckThreshold: number;
   /** Agent is "idle" after this many ms without changes (default 120_000 = 2 min) */
   idleThreshold: number;
+  /** Cadence check interval in ms (default 20 * 60 * 1000 = 20 min) */
+  cadenceIntervalMs: number;
 }
 
 export interface ConflictAlert {
@@ -31,9 +33,28 @@ const DEFAULT_CONFIG: TenderConfig = {
   pollInterval: 60_000,
   stuckThreshold: 300_000,
   idleThreshold: 120_000,
+  cadenceIntervalMs: 20 * 60 * 1000,
 };
 
+const CADENCE_CHECKLIST = `## 👷 Operator Cadence Check (every ~20 min (configurable via cadenceIntervalMs))
+
+1. 📊 **Check bead progress** — run \`br list --status in_progress --json\` or \`bv --robot-triage\`. Are agents making steady progress? Any beads stuck >15 min?
+2. 🔄 **Handle compactions** — if any agent looks confused or is repeating itself, send: "Reread AGENTS.md so it's still fresh in your mind."
+3. 🔍 **Run a review round** — pick one agent and send the fresh-eyes review prompt. Catches bugs before they compound.
+4. ⚡ **Manage rate limits** — if an agent hit rate limits, switch account with CAAM or start a fresh agent.
+5. 📦 **Periodic commit** — designate one agent to do an organized commit every 1–2 hours.
+6. 🆕 **Handle surprises** — create new beads for unanticipated issues discovered during implementation.`;
+
 // ─── SwarmTender ───────────────────────────────────────────────
+
+export interface SwarmTenderOptions {
+  config?: Partial<TenderConfig>;
+  onStuck?: (agent: AgentStatus) => void;
+  onConflict?: (conflict: ConflictAlert) => void;
+  onTick?: (statuses: AgentStatus[]) => void;
+  /** Called every cadenceIntervalMs with the operator cadence checklist. */
+  onCadenceCheck?: (checklist: string) => void;
+}
 
 export class SwarmTender {
   private pi: ExtensionAPI;
@@ -44,17 +65,14 @@ export class SwarmTender {
   private onStuck?: (agent: AgentStatus) => void;
   private onConflict?: (conflict: ConflictAlert) => void;
   private onTick?: (statuses: AgentStatus[]) => void;
+  private onCadenceCheck?: (checklist: string) => void;
+  private lastCadencePromptAt: number = Date.now();
 
   constructor(
     pi: ExtensionAPI,
     cwd: string,
     worktrees: { path: string; stepIndex: number }[],
-    options?: {
-      config?: Partial<TenderConfig>;
-      onStuck?: (agent: AgentStatus) => void;
-      onConflict?: (conflict: ConflictAlert) => void;
-      onTick?: (statuses: AgentStatus[]) => void;
-    }
+    options?: SwarmTenderOptions
   ) {
     this.pi = pi;
     this.cwd = cwd;
@@ -62,6 +80,7 @@ export class SwarmTender {
     this.onStuck = options?.onStuck;
     this.onConflict = options?.onConflict;
     this.onTick = options?.onTick;
+    this.onCadenceCheck = options?.onCadenceCheck;
 
     this.agents = new Map();
     for (const wt of worktrees) {
@@ -176,6 +195,12 @@ export class SwarmTender {
     }
 
     this.onTick?.(this.getStatus());
+
+    // Cadence check: fire if the interval has elapsed
+    if (now - this.lastCadencePromptAt >= this.config.cadenceIntervalMs) {
+      this.lastCadencePromptAt = now;
+      this.onCadenceCheck?.(CADENCE_CHECKLIST);
+    }
   }
 
   /** Remove an agent from monitoring (e.g., step completed). */

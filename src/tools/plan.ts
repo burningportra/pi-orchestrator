@@ -13,6 +13,7 @@ import {
 } from "../prompts.js";
 import { sessionArtifactPath } from "../session-artifacts.js";
 import { getDeepPlanModels, detectAvailableModels, formatDetectedModels } from "../model-detection.js";
+import { readMemory } from "../memory.js";
 
 function slugifyGoal(goal: string): string {
   return goal
@@ -46,24 +47,27 @@ export function buildMultiModelPlanSubagentConfigs(
   
   // Use detected models if context is available, otherwise fall back to defaults
   const models = ctx ? getDeepPlanModels(ctx) : DEEP_PLAN_MODELS;
+
+  // Fetch CASS context for planning (GAP 24)
+  const cassContext = readMemory(cwd, goal) || undefined;
   
   const planners = [
     {
       name: "correctness",
       model: models.correctness,
-      task: competingPlanAgentPrompt("correctness", goal, profile!, scanResult),
+      task: competingPlanAgentPrompt("correctness", goal, profile!, scanResult, cassContext),
       artifactName: artifactNames.planners.correctness,
     },
     {
       name: "robustness",
       model: models.robustness,
-      task: competingPlanAgentPrompt("robustness", goal, profile!, scanResult),
+      task: competingPlanAgentPrompt("robustness", goal, profile!, scanResult, cassContext),
       artifactName: artifactNames.planners.robustness,
     },
     {
       name: "ergonomics",
       model: models.ergonomics,
-      task: competingPlanAgentPrompt("ergonomics", goal, profile!, scanResult),
+      task: competingPlanAgentPrompt("ergonomics", goal, profile!, scanResult, cassContext),
       artifactName: artifactNames.planners.ergonomics,
     },
   ] as const;
@@ -176,28 +180,61 @@ export function registerPlanTool(oc: OrchestratorContext) {
 
       // Use detected models for non-interactive path
       const detectedModels = getDeepPlanModels(ctx);
-      
+
+      // GAP 24: fetch CASS context to inject into planning prompts
+      const cassContext = readMemory(ctx.cwd, goal) || undefined;
+
+      // GAP 23: seed plan step — generate (or reuse) an initial plan before competing agents
+      let seedPlanText: string | undefined;
+      const seedArtifactName = `plans/${slugifyGoal(goal)}-seed.md`;
+      const seedArtifactPath = sessionArtifactPath(ctx, seedArtifactName);
+      if (existsSync(seedArtifactPath)) {
+        seedPlanText = readFileSync(seedArtifactPath, "utf8").trim() || undefined;
+      }
+      if (!seedPlanText && savedPlannerResults.length === 0) {
+        // Spawn one seed agent using the synthesis model (strongest available)
+        const seedResults = await runDeepPlanAgents(
+          oc.pi,
+          ctx.cwd,
+          [{ name: "seed", model: detectedModels.synthesis, task: planDocumentPrompt(goal, profile, scanResult) }],
+          signal
+        );
+        seedPlanText = seedResults[0]?.exitCode === 0 ? seedResults[0].plan.trim() : undefined;
+        if (seedPlanText) {
+          mkdirSync(dirname(seedArtifactPath), { recursive: true });
+          writeFileSync(seedArtifactPath, seedPlanText, "utf8");
+        }
+      }
+      const seedAppendix = seedPlanText
+        ? `\n\nHere is an initial plan draft — use it as a starting point, critique it, and improve it from your focus lens perspective:\n\n${seedPlanText}`
+        : "";
+
       const planners: DeepPlanAgent[] = [
         {
           name: "correctness",
           model: detectedModels.correctness,
-          task: competingPlanAgentPrompt("correctness", goal, profile, scanResult),
+          task: competingPlanAgentPrompt("correctness", goal, profile, scanResult, cassContext) + seedAppendix,
         },
         {
           name: "robustness",
           model: detectedModels.robustness,
-          task: competingPlanAgentPrompt("robustness", goal, profile, scanResult),
+          task: competingPlanAgentPrompt("robustness", goal, profile, scanResult, cassContext) + seedAppendix,
         },
         {
           name: "ergonomics",
           model: detectedModels.ergonomics,
-          task: competingPlanAgentPrompt("ergonomics", goal, profile, scanResult),
+          task: competingPlanAgentPrompt("ergonomics", goal, profile, scanResult, cassContext) + seedAppendix,
         },
       ];
 
-      const planResults = savedPlannerResults.length === planners.length
-        ? savedPlannerResults
-        : await runDeepPlanAgents(oc.pi, ctx.cwd, planners, signal);
+      // Only re-run planners that aren't already cached — preserve partial progress
+      // on retry so we don't waste API calls re-running completed planners.
+      const completedNames = new Set(savedPlannerResults.map((r) => r.name));
+      const pendingPlanners = planners.filter((p) => !completedNames.has(p.name));
+      const newPlanResults = pendingPlanners.length > 0
+        ? await runDeepPlanAgents(oc.pi, ctx.cwd, pendingPlanners, signal)
+        : [];
+      const planResults = [...savedPlannerResults, ...newPlanResults];
       const successfulPlans = planResults.filter((result) => result.exitCode === 0 && result.plan.trim().length > 0);
       if (successfulPlans.length === 0) {
         const failures = planResults

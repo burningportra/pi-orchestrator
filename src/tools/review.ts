@@ -3,6 +3,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import type { OrchestratorContext } from "../types.js";
 import { implementerInstructions, realityCheckInstructions, randomExplorationInstructions, SWARM_STAGGER_DELAY_MS } from "../prompts.js";
+import { readMemory } from "../memory.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 import { runGuidedGates } from "../gates.js";
 import { getParallelModelAssignments, resolveExecutionMode } from "./shared.js";
@@ -35,6 +36,49 @@ export function registerReviewTool(oc: OrchestratorContext) {
 
       // Sentinel: beadId === "__gates__" while iterating = show next gate
       if (oc.state.phase === "iterating" && params.beadId === "__gates__") {
+        // guide §08: track consecutive clean rounds
+        // A "clean" round = verdict pass with no revision instructions.
+        // Two consecutive clean rounds means the codebase is in good shape.
+        const isClean = params.verdict === "pass" && !params.revisionInstructions;
+        if (isClean) {
+          oc.state.consecutiveCleanRounds = (oc.state.consecutiveCleanRounds ?? 0) + 1;
+        } else {
+          oc.state.consecutiveCleanRounds = 0;
+        }
+        oc.persistState();
+
+        if (oc.state.consecutiveCleanRounds >= 2) {
+          // Surface the two-clean-rounds completion signal before running gates
+          const stopChoice = await ctx.ui.select(
+            `✅ **Two consecutive clean review rounds** — the codebase is in good shape.\n\n` +
+            `Round ${oc.state.iterationRound}: passed clean.\nRound ${oc.state.iterationRound - 1}: passed clean.\n\n` +
+            `You can continue reviewing or finish the orchestration.`,
+            [
+              "✅ Finish — two clean rounds is enough",
+              "🔄 Continue reviewing (another round)",
+            ]
+          );
+          if (stopChoice?.startsWith("✅")) {
+            // Mark complete: two clean rounds is the guide's stop condition
+            oc.state.consecutiveCleanRounds = 0;
+            oc.orchestratorActive = false;
+            oc.state.currentGateIndex = 0;
+            oc.setPhase("complete", ctx);
+            oc.persistState();
+            try { const { reflectMemory } = await import("../memory.js"); reflectMemory(ctx.cwd); } catch { /* best-effort */ }
+            return {
+              content: [{ type: "text", text:
+                `✅ **Orchestration complete** — two consecutive clean review rounds.\n\n` +
+                `The codebase is in good shape. Run \`orch_review\` with beadId \"__gates__\" if you want to do a final landing checklist.`
+              }],
+              details: { complete: true, twoCleanRounds: true },
+            };
+          }
+          // Reset counter if they choose to continue
+          oc.state.consecutiveCleanRounds = 0;
+          oc.persistState();
+        }
+
         return await runGuidedGates(oc, oc.state, ctx, "");
       }
 
@@ -127,7 +171,9 @@ export function registerReviewTool(oc: OrchestratorContext) {
 
       // Guard: reject re-review of already-completed beads
       const alreadyCompleted = oc.state.beadResults?.[params.beadId];
-      if (alreadyCompleted?.status === "success" && params.verdict === "pass") {
+      // Guard covers both pass and fail re-reviews: a completed bead must not be
+      // downgraded to "partial" by a subsequent fail verdict (fresh-eyes bug fix).
+      if (alreadyCompleted?.status === "success") {
         return {
           content: [
             { type: "text", text: `Bead ${params.beadId} already completed. Move to the next bead or call \`orch_review\` with beadId "__gates__" for guided gates.` },
@@ -451,7 +497,10 @@ export function registerReviewTool(oc: OrchestratorContext) {
           oc.persistState();
 
           const prevResults = Object.values(oc.state.beadResults ?? {});
-          const implInstr = implementerInstructions(nextBead, oc.state.repoProfile!, prevResults);
+          const cassMemory = readMemory(ctx.cwd, nextBead.title);
+          // Safe fallback: repoProfile may be undefined after session resume without orch_profile
+          const safeProfile = oc.state.repoProfile ?? { name: "", languages: [], frameworks: [], keyFiles: {} as Record<string, string>, testFramework: undefined, ciSystem: undefined, packageManager: undefined, hasGit: true, todos: [], recentCommits: [], entrypoints: [], structure: "", hasTests: false, hasDocs: false, hasCI: false };
+          const implInstr = implementerInstructions(nextBead, safeProfile, prevResults, cassMemory || undefined);
 
           ctx.ui.notify(`✅ Bead ${params.beadId} passed! Moving to bead ${nextBead.id} (${nextBead.title}).`, "info");
 
@@ -496,7 +545,9 @@ export function registerReviewTool(oc: OrchestratorContext) {
                 )
               : "";
             const prevResults = Object.values(oc.state.beadResults ?? {});
-            const implInstr = implementerInstructions(b, oc.state.repoProfile!, prevResults);
+            const cassMemory = readMemory(ctx.cwd, b.title);
+            const swarmProfile = oc.state.repoProfile ?? { name: "", languages: [], frameworks: [], keyFiles: {} as Record<string, string>, testFramework: undefined, ciSystem: undefined, packageManager: undefined, hasGit: true, todos: [], recentCommits: [], entrypoints: [], structure: "", hasTests: false, hasDocs: false, hasCI: false };
+            const implInstr = implementerInstructions(b, swarmProfile, prevResults, cassMemory || undefined);
             const branchModeInstructions = singleBranchMode
               ? "\n\n🤝 Single-branch mode: work in the shared checkout at this cwd. Do not assume an isolated worktree."
               : "\n\n🌿 Worktree mode: if the orchestrator provides an isolated checkout, do your work there.";
@@ -564,7 +615,8 @@ export function registerReviewTool(oc: OrchestratorContext) {
               oc.persistState();
 
               const prevResults = Object.values(oc.state.beadResults ?? {});
-              const implInstr = implementerInstructions(nextBead, oc.state.repoProfile!, prevResults);
+              const resumeProfile = oc.state.repoProfile ?? { name: "", languages: [], frameworks: [], keyFiles: {} as Record<string, string>, testFramework: undefined, ciSystem: undefined, packageManager: undefined, hasGit: true, todos: [], recentCommits: [], entrypoints: [], structure: "", hasTests: false, hasDocs: false, hasCI: false };
+              const implInstr = implementerInstructions(nextBead, resumeProfile, prevResults);
 
               return {
                 content: [

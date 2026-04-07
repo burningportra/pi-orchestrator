@@ -53,6 +53,15 @@ export interface ResearchPhaseResult {
   error?: string;
 }
 
+/**
+ * Callback invoked during the `user_review` phase.
+ * The caller (commands.ts) provides UI access; the pipeline runner does not.
+ * Returns the (possibly edited) proposal and whether the user accepted it.
+ */
+export type UserReviewCallback = (
+  proposal: string
+) => Promise<{ accepted: boolean; editedProposal?: string }>;
+
 // ─── Additional Prompts ─────────────────────────────────────
 
 /**
@@ -158,7 +167,8 @@ export async function runResearchPhase(
   cwd: string,
   phase: ResearchPhase,
   state: ResearchPipelineState,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onUserReview?: UserReviewCallback
 ): Promise<ResearchPhaseResult> {
   const { runDeepPlanAgents } = await import("./deep-plan.js");
 
@@ -221,7 +231,10 @@ export async function runResearchPhase(
           task: prompt,
         }], signal);
         const output = results[0]?.plan?.trim() ?? "";
-        if (output.length > 100 && !output.includes("NO_CHANGES")) {
+        // Match NO_CHANGES only at the start of a line to avoid false positives
+        // (e.g. "there should be NO_CHANGES to auth" would wrongly skip a valid proposal)
+        const isNoChanges = /^NO_CHANGES\b/m.test(output.trim());
+        if (output.length > 100 && !isNoChanges) {
           proposal = output;
         }
       }
@@ -229,6 +242,14 @@ export async function runResearchPhase(
     }
 
     case "multi_model": {
+      // multi_model is now a preview-only phase — the actual agent runs happen
+      // in synthesis to avoid running 3 feedback agents twice (bug fix).
+      // This phase just signals readiness so the progress display shows the step.
+      return { phase, success: true, proposal: state.proposal };
+    }
+
+    case "synthesis": {
+      // Run 3 competing feedback agents then synthesise — done once, not twice.
       const feedbackPrompt = researchFeedbackPrompt(state.proposal);
       const feedbackAgents = [
         { name: "research-feedback-1", model: pickRefinementModel(0), task: feedbackPrompt },
@@ -236,29 +257,9 @@ export async function runResearchPhase(
         { name: "research-feedback-3", model: pickRefinementModel(2), task: feedbackPrompt },
       ];
       const feedbackResults = await runDeepPlanAgents(pi, cwd, feedbackAgents, signal);
-      const successful = feedbackResults.filter((r) => r.exitCode === 0);
-      if (successful.length === 0) {
+      if (feedbackResults.filter((r) => r.exitCode === 0).length === 0) {
         return { phase, success: false, proposal: state.proposal, error: "All feedback agents failed" };
       }
-      // Store feedback but don't change proposal yet — synthesis does that
-      return {
-        phase,
-        success: true,
-        proposal: state.proposal,
-        // Stash feedback in proposal field as a marker — synthesis will use it
-        model: successful.map((r) => r.model).join(", "),
-      };
-    }
-
-    case "synthesis": {
-      // Re-run feedback to get the actual results (since we can't pass complex state)
-      const feedbackPrompt = researchFeedbackPrompt(state.proposal);
-      const feedbackAgents = [
-        { name: "research-synth-fb-1", model: pickRefinementModel(0), task: feedbackPrompt },
-        { name: "research-synth-fb-2", model: pickRefinementModel(1), task: feedbackPrompt },
-        { name: "research-synth-fb-3", model: pickRefinementModel(2), task: feedbackPrompt },
-      ];
-      const feedbackResults = await runDeepPlanAgents(pi, cwd, feedbackAgents, signal);
 
       const synthPrompt = researchSynthesisPrompt(state.proposal, feedbackResults);
       const synthResults = await runDeepPlanAgents(pi, cwd, [{
@@ -273,6 +274,21 @@ export async function runResearchPhase(
         proposal: proposal || state.proposal,
         model: synthResults[0]?.model,
       };
+    }
+
+    case "user_review": {
+      if (onUserReview) {
+        const result = await onUserReview(state.proposal);
+        return {
+          phase,
+          success: result.accepted,
+          proposal: result.editedProposal ?? state.proposal,
+        };
+      }
+      // No callback provided — caller is responsible for handling user review
+      // externally (e.g. via ctx.ui.confirm / ctx.ui.select in commands.ts).
+      // Return success with the unmodified proposal so the pipeline can continue.
+      return { phase, success: true, proposal: state.proposal };
     }
 
     default:

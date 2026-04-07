@@ -48,6 +48,11 @@ export default function (pi: ExtensionAPI) {
   let currentDashboardSnapshot: import("./dashboard/types.js").DashboardSnapshot | null = null;
   let lastRenderLines: string[] | null = null;
   let lastRenderWidth: number | null = null;
+  let lastSnapshotKey: string | null = null;
+
+  function snapshotKey(s: import("./dashboard/types.js").DashboardSnapshot): string {
+    return `${s.phase}|${s.completedCount}|${s.totalCount}|${s.tenderSummary ?? ""}|${s.beads.map(b => `${b.id}:${b.status}:${b.reviewPasses}`).join(",")}`;
+  }
 
   // Helper: spawn hit-me review agents inline via pi.exec (like deep-plan.ts)
   interface HitMeResult {
@@ -171,9 +176,12 @@ export default function (pi: ExtensionAPI) {
       getTenderSummary: () => swarmTender?.getSummary(),
       onUpdate: (snapshot) => {
         try {
-          // Update the global snapshot for the widget to render
+          // Only invalidate the render cache when content actually changed
+          const key = snapshotKey(snapshot);
+          const changed = key !== lastSnapshotKey;
           currentDashboardSnapshot = snapshot;
-          lastRenderLines = null; // Invalidate cache
+          lastSnapshotKey = key;
+          if (changed) lastRenderLines = null;
           
           // Only call setWidget ONCE when first registering the widget
           if (!dashboardWidgetRegistered) {
@@ -213,6 +221,7 @@ export default function (pi: ExtensionAPI) {
       currentDashboardSnapshot = null;
       lastRenderLines = null;
       lastRenderWidth = null;
+      lastSnapshotKey = null;
     } else if (phase === "complete") {
       ctx.ui.setStatus("orchestrator", "✅ Orchestrator: done");
       ctx.ui.setWidget("orchestrator", undefined);
@@ -222,6 +231,7 @@ export default function (pi: ExtensionAPI) {
       currentDashboardSnapshot = null;
       lastRenderLines = null;
       lastRenderWidth = null;
+      lastSnapshotKey = null;
     } else {
       ctx.ui.setStatus(
         "orchestrator",

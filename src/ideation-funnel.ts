@@ -18,14 +18,37 @@
 import type { RepoProfile, CandidateIdea, ScanResult } from "./types.js";
 import { formatRepoProfile } from "./prompts.js";
 
+// ─── Phase 2: Winnowing model note ──────────────────────────
+
+/**
+ * Prepended to winnowingPrompt() to enforce model divergence.
+ * Using the same model for ideation and winnowing defeats the purpose:
+ * winnowing becomes performative self-evaluation instead of real critique.
+ */
+export const WINNOWING_MODEL_NOTE =
+  "IMPORTANT: This winnowing step MUST run on a different model than the ideation step. " +
+  "Using the same model defeats the purpose — winnowing becomes performative self-evaluation.";
+
 // ─── Phase 1: Broad Ideation ────────────────────────────────
 
 /**
  * Prompt for generating 30 raw ideas. The model is told NOT to winnow —
  * output everything. Quantity enables quality in the next phase.
+ *
+ * @param existingBeadTitles - titles of existing beads to avoid duplicating.
+ *   When provided and non-empty, a dedup section is injected before Instructions.
  */
-export function broadIdeationPrompt(profile: RepoProfile, scanResult?: ScanResult): string {
+export function broadIdeationPrompt(
+  profile: RepoProfile,
+  scanResult?: ScanResult,
+  existingBeadTitles?: string[]
+): string {
   const repoContext = formatRepoProfile(profile, scanResult);
+
+  const beadDedupeSection =
+    existingBeadTitles && existingBeadTitles.length > 0
+      ? `### Existing Beads (do NOT duplicate these)\nThe following work items already exist. Do NOT propose duplicates:\n${existingBeadTitles.map((t) => `- ${t}`).join("\n")}\n\n`
+      : "";
 
   return `## Broad Ideation — Generate 30 Ideas
 
@@ -33,7 +56,7 @@ You are brainstorming improvement ideas for this project. Your job is to generat
 
 ${repoContext}
 
-### Instructions
+${beadDedupeSection}### Instructions
 1. Study the repo profile, scan findings, TODOs, commits, and README carefully
 2. Generate exactly 30 improvement ideas across diverse categories
 3. For each idea, provide a brief 1-2 sentence description
@@ -70,13 +93,17 @@ Output ONLY the JSON array. No markdown fences, no surrounding text. All 30 idea
  * The winnowing must be externalized — each idea gets explicit keep/cut.
  */
 export function winnowingPrompt(ideas: CandidateIdea[], profile: RepoProfile): string {
+  // WINNOWING_MODEL_NOTE is prepended to remind the caller (and any reviewing agent)
+  // that this step must run on a different model than the ideation step.
   const ideaList = ideas
     .map((idea, i) =>
       `${i + 1}. **${idea.title}** [${idea.category}] (effort: ${idea.effort}, impact: ${idea.impact})\n   ${idea.description}${idea.scores ? `\n   Scores: useful=${idea.scores.useful} pragmatic=${idea.scores.pragmatic} accretive=${idea.scores.accretive} robust=${idea.scores.robust} ergonomic=${idea.scores.ergonomic}` : ""}`
     )
     .join("\n\n");
 
-  return `## Critical Winnowing — Cut 30 Ideas to 5
+  return `${WINNOWING_MODEL_NOTE}
+
+## Critical Winnowing — Cut 30 Ideas to 5
 
 You are reviewing ${ideas.length} improvement ideas for **${profile.name}**. Your job is to be RUTHLESSLY critical and select only the 5 most impactful.
 

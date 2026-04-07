@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { existsSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, chmodSync } from "fs";
 import { join } from "path";
 import type { CoordinationMode } from "./types.js";
+import type { ExecFn } from "./agent-mail.js";
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -12,6 +13,8 @@ export interface CoordinationBackend {
   agentMail: boolean;
   /** Sophia CLI installed AND SOPHIA.yaml present */
   sophia: boolean;
+  /** Whether .git/hooks/pre-commit contains the agent-mail guard */
+  preCommitGuardInstalled?: boolean;
 }
 
 /**
@@ -61,7 +64,18 @@ export async function detectCoordinationBackend(
     detectSophia(pi, cwd),
   ]);
 
-  _cached = { beads, agentMail, sophia };
+  const preCommitGuardInstalled = agentMail
+    ? await checkPreCommitGuard(pi.exec as unknown as ExecFn, cwd)
+    : false;
+
+  if (agentMail && !preCommitGuardInstalled) {
+    console.warn(
+      "[pi-orchestrator] Agent Mail is available but the pre-commit guard is not installed. " +
+      "Run scaffoldPreCommitGuard() or set AGENT_NAME and install .git/hooks/pre-commit."
+    );
+  }
+
+  _cached = { beads, agentMail, sophia, preCommitGuardInstalled };
   return _cached;
 }
 
@@ -133,6 +147,60 @@ async function detectAgentMail(pi: ExtensionAPI): Promise<boolean> {
   }
 
   return false;
+}
+
+// ─── Pre-Commit Guard ──────────────────────────────────────────
+
+/**
+ * Check if the Agent Mail pre-commit guard is installed.
+ * Returns true if .git/hooks/pre-commit exists and contains "AGENT_NAME" or "agent-mail".
+ */
+export async function checkPreCommitGuard(
+  _exec: ExecFn,
+  cwd: string
+): Promise<boolean> {
+  try {
+    const hookPath = join(cwd, ".git/hooks/pre-commit");
+    if (!existsSync(hookPath)) return false;
+    const content = readFileSync(hookPath, "utf-8");
+    return content.includes("AGENT_NAME") || content.includes("agent-mail");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Write the Agent Mail pre-commit guard hook to .git/hooks/pre-commit.
+ * The hook blocks commits when another agent has an exclusive file reservation.
+ * Makes the hook executable.
+ */
+export async function scaffoldPreCommitGuard(
+  _exec: ExecFn,
+  cwd: string
+): Promise<void> {
+  const hookPath = join(cwd, ".git/hooks/pre-commit");
+  const script = `#!/bin/sh
+# Agent Mail pre-commit guard
+# Blocks commits to files exclusively reserved by another agent.
+if [ -n "$AGENT_NAME" ]; then
+  curl -s -X POST http://127.0.0.1:8765/api \\
+    -H 'Content-Type: application/json' \\
+    -d "{\\"jsonrpc\\":\\"2.0\\",\\"id\\":1,\\"method\\":\\"tools/call\\",\\"params\\":{\\"name\\":\\"check_commit_conflicts\\",\\"arguments\\":{\\"human_key\\":\\"$(pwd)\\",\\"agent_name\\":\\"$AGENT_NAME\\"}}}" \\
+    | python3 -c "
+import json,sys
+try:
+  d=json.load(sys.stdin)
+  conflicts=d.get('result',{}).get('structuredContent',{}).get('conflicts',[])
+  if conflicts:
+    [print(f'COMMIT BLOCKED — reservation conflict: {c}') for c in conflicts]
+    sys.exit(1)
+except Exception:
+  pass  # agent-mail unavailable — allow commit
+" 2>/dev/null
+fi
+`;
+  writeFileSync(hookPath, script, "utf-8");
+  chmodSync(hookPath, 0o755);
 }
 
 // ─── UBS Detection ─────────────────────────────────────────────

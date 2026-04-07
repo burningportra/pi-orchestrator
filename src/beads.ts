@@ -1,6 +1,24 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { Bead, BvInsights, BvNextPick } from "./types.js";
 
+/**
+ * Check if a bead ID matches the expected br-NNN pattern.
+ * The br CLI generates IDs like "br-1", "br-42", "br-123".
+ * Non-conforming IDs may break Agent Mail thread_id conventions.
+ */
+export function isValidBeadId(id: string): boolean {
+  return /^[a-z][a-z0-9]*-\d+$/.test(id);
+}
+
+/**
+ * Find beads with non-standard IDs in a list.
+ */
+export function findNonStandardIds(beads: Bead[]): string[] {
+  return beads
+    .map(b => b.id)
+    .filter(id => !isValidBeadId(id));
+}
+
 export interface TemplateHygieneIssue {
   beadId: string;
   issueType: "raw-template-marker" | "template-shorthand" | "unresolved-placeholder" | "template-missing-structure";
@@ -131,6 +149,33 @@ export async function bvInsights(
   try {
     const result = await pi.exec("bv", ["--robot-insights"], { timeout: 15000, cwd });
     return JSON.parse(result.stdout) as BvInsights;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Runs `bv --robot-triage` and returns a prioritised list of beads for
+ * multiple parallel agents, each routed to a graph-safe non-contending bead.
+ * Distinct from --robot-next (which picks one bead for one agent):
+ * --robot-triage accounts for which beads can be worked on in parallel
+ * without contending on the same bottleneck node.
+ * Returns null if bv is unavailable or output can't be parsed.
+ */
+export async function bvTriage(
+  pi: ExtensionAPI,
+  cwd: string
+): Promise<BvNextPick[] | null> {
+  if (!(await detectBv(pi))) return null;
+  try {
+    const result = await pi.exec("bv", ["--robot-triage", "--json"], { timeout: 15000, cwd });
+    const stdout = result.stdout.trim();
+    if (!stdout) return null;
+    const data = JSON.parse(stdout);
+    // --robot-triage may return an array or a single object
+    if (Array.isArray(data)) return data as BvNextPick[];
+    if (data && data.id) return [data as BvNextPick];
+    return null;
   } catch {
     return null;
   }
@@ -356,11 +401,11 @@ export async function validateBeads(
   const shallowBeads: { id: string; reason: string }[] = [];
   const templateIssues: TemplateHygieneIssue[] = [];
 
+  // Read all beads once — reuse for every check below to avoid 3× shell execs
+  const allBeadsForFilter = await readBeads(pi, cwd);
+
   // Try bv insights first for richer analysis
   const insights = await bvInsights(pi, cwd);
-
-  // Build set of open bead IDs to filter bv results (bv analyzes all beads including closed)
-  const allBeadsForFilter = await readBeads(pi, cwd);
   const openBeadIds = new Set(allBeadsForFilter.filter((b) => b.status === "open" || b.status === "in_progress").map((b) => b.id));
 
   if (insights) {
@@ -422,10 +467,15 @@ export async function validateBeads(
     }
   }
 
+  // Warn about non-standard bead IDs (may break Agent Mail thread_id conventions)
+  const nonStandardIds = findNonStandardIds(allBeadsForFilter); // reuse already-loaded beads
+  if (nonStandardIds.length > 0) {
+    warnings.push(`Non-standard bead IDs (may break Agent Mail thread conventions): ${nonStandardIds.join(", ")}`);
+  }
+
   // Detect shallow beads and template hygiene problems
   try {
-    const beadsToCheck = await readBeads(pi, cwd);
-    for (const bead of beadsToCheck) {
+    for (const bead of allBeadsForFilter) {
       const desc = bead.description ?? "";
       if (bead.status === "open" || bead.status === "in_progress") {
         if (desc.length === 0) {

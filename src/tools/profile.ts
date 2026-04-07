@@ -242,15 +242,38 @@ export function registerProfileTool(oc: OrchestratorContext) {
         oc.persistState();
 
         const { broadIdeationPrompt, winnowingPrompt, expandIdeasPrompt, parseIdeasJSON, parseWinnowingResult } = await import("../ideation-funnel.js");
+        // GAP 15 & 17: import WINNOWING_MODEL_NOTE for annotation (enforces model divergence)
+        const { WINNOWING_MODEL_NOTE: _winnowingNote } = await import("../ideation-funnel.js");
+        void _winnowingNote; // already prepended inside winnowingPrompt() itself
         const { runDeepPlanAgents } = await import("../deep-plan.js");
         const { pickRefinementModel } = await import("../prompts.js");
 
         // Phase 1: Generate 30 ideas (sub-agent)
+        // GAP 15: fetch existing bead titles to prevent duplicate proposals
         ctx.ui.notify("💡 Phase 1/3: Generating 30 raw ideas...", "info");
-        const phase1Prompt = broadIdeationPrompt(profile, scanResult);
+        let phase1BeadTitles: string[] = [];
+        try {
+          // Try br list --json first (as specified), fall back to readBeads
+          const brOutput = await oc.pi.exec("br", ["list", "--json"], { cwd: ctx.cwd, timeout: 8000 });
+          const parsed = JSON.parse(brOutput.stdout);
+          if (Array.isArray(parsed)) {
+            phase1BeadTitles = parsed
+              .map((b: unknown) => (b as Record<string, unknown>)?.title)
+              .filter((t): t is string => typeof t === "string");
+          }
+        } catch {
+          // br unavailable or failed — try readBeads fallback, then continue with empty array
+          try {
+            const { readBeads } = await import("../beads.js");
+            const beads = await readBeads(oc.pi, ctx.cwd);
+            phase1BeadTitles = beads.map((b) => b.title);
+          } catch { /* no beads yet, pass empty array */ }
+        }
+        const phase1Prompt = broadIdeationPrompt(profile, scanResult, phase1BeadTitles);
+        // GAP 17: model(0) for ideation — winnowing MUST use a different model (model(1))
         const phase1Results = await runDeepPlanAgents(oc.pi, ctx.cwd, [{
           name: "ideation-broad",
-          model: pickRefinementModel(0),
+          model: pickRefinementModel(0), // ideation model — different from winnowing (model 1)
           task: phase1Prompt,
         }]);
         const rawIdeas = parseIdeasJSON(phase1Results[0]?.plan ?? "");
@@ -272,12 +295,17 @@ export function registerProfileTool(oc: OrchestratorContext) {
         oc.persistState();
         ctx.ui.notify(`✅ Phase 1 complete: ${rawIdeas.length} raw ideas generated.`, "info");
 
-        // Phase 2: Winnow to 5 (different model)
+        // Phase 2: Winnow to 5 (DIFFERENT model — GAP 17)
+        // pickRefinementModel(1) is structurally different from pickRefinementModel(0).
+        // This ensures winnowing uses a different provider/checkpoint than ideation,
+        // so the critique comes from genuinely different blind spots.
         ctx.ui.notify("🔬 Phase 2/3: Competitive winnowing (30→5)...", "info");
         const phase2Prompt = winnowingPrompt(rawIdeas, profile);
         const phase2Results = await runDeepPlanAgents(oc.pi, ctx.cwd, [{
           name: "ideation-winnow",
-          model: pickRefinementModel(1), // different model for diverse evaluation
+          // GAP 17: MUST use a different model index than ideation (index 0).
+          // Different models = different blind spots = real critical evaluation.
+          model: pickRefinementModel(1), // winnowing model — structurally different from ideation (model 0)
           task: phase2Prompt,
         }]);
         const winnowResult = parseWinnowingResult(phase2Results[0]?.plan ?? "");
@@ -327,18 +355,83 @@ export function registerProfileTool(oc: OrchestratorContext) {
 
         // Combine: top 5 + expanded
         const allIdeas = [...top5, ...expandedIdeas];
-        oc.state.candidateIdeas = allIdeas;
+        ctx.ui.notify(`✅ Deep discovery complete: ${top5.length} top + ${expandedIdeas.length} honorable = ${allIdeas.length} total ideas.`, "info");
+
+        // ── GAP 16: Human review between Phase 3 and bead creation ──────────────
+        // The guide requires a human review step: users must confirm which ideas
+        // to pursue before beads are created.
+        const ideasSummary = [
+          `### Top ${top5.length} Ideas (winnowed from ${rawIdeas.length} raw)`,
+          ...top5.map((i, n) => `${n + 1}. **${i.title}** [${i.category}] — ${i.description}`),
+          `\n### Complementary Ideas (${expandedIdeas.length})`,
+          ...expandedIdeas.map((i, n) => `${n + 1}. **${i.title}** [${i.category}] — ${i.description}`),
+        ].join("\n");
+
+        const reviewChoice = await ctx.ui.select(
+          `🔬 Phase 3 complete — ${allIdeas.length} ideas ready.\n\n${ideasSummary}\n\nHow do you want to proceed?`,
+          [
+            `✅ Accept all ${allIdeas.length} — create beads for all`,
+            "🔍 Select subset — choose which to pursue",
+            "🔄 Refine further — run discovery again",
+            "❌ Discard — start over",
+          ]
+        );
+
+        let finalIdeas = allIdeas;
+
+        if (reviewChoice?.startsWith("❌")) {
+          // User wants to start over — reset funnel state and restart
+          oc.state.funnelRawIdeas = undefined;
+          oc.state.funnelWinnowedIds = undefined;
+          oc.state.candidateIdeas = undefined;
+          oc.setPhase("profiling", ctx);
+          oc.persistState();
+          return {
+            content: [{ type: "text", text: "Discarded. Call `orch_profile` to start the discovery funnel again." }],
+            details: { profile, scanResult, funnel: true, discarded: true },
+          };
+        } else if (reviewChoice?.startsWith("🔄")) {
+          // User wants to refine further — re-run orch_profile with deep discovery
+          oc.state.funnelRawIdeas = undefined;
+          oc.state.funnelWinnowedIds = undefined;
+          oc.state.candidateIdeas = undefined;
+          oc.setPhase("profiling", ctx);
+          oc.persistState();
+          return {
+            content: [{ type: "text", text: "Resetting for another round. Call `orch_profile` and choose deep discovery again to refine further." }],
+            details: { profile, scanResult, funnel: true, refined: true },
+          };
+        } else if (reviewChoice?.startsWith("🔍")) {
+          // User wants to select a subset — show each idea with confirm
+          ctx.ui.notify("Select which ideas to pursue (confirm each one):", "info");
+          const selectedIdeas: typeof allIdeas = [];
+          for (const idea of allIdeas) {
+            const keep = await ctx.ui.confirm(
+              `Keep "${idea.title}"?`,
+              `[${idea.category}] ${idea.description}`
+            );
+            if (keep) selectedIdeas.push(idea);
+          }
+          if (selectedIdeas.length === 0) {
+            ctx.ui.notify("No ideas selected. Using all ideas instead.", "warning");
+          } else {
+            finalIdeas = selectedIdeas;
+            ctx.ui.notify(`Selected ${finalIdeas.length} idea(s) to pursue.`, "info");
+          }
+        }
+        // else "✅ Accept all" — use allIdeas as-is
+
+        oc.state.candidateIdeas = finalIdeas;
+        oc.state.funnelWinnowedIds = finalIdeas.filter((i) => i.tier === "top").map((i) => i.id);
         oc.setPhase("awaiting_selection", ctx);
         oc.persistState();
-
-        ctx.ui.notify(`✅ Deep discovery complete: ${top5.length} top + ${expandedIdeas.length} honorable = ${allIdeas.length} total ideas.`, "info");
 
         return {
           content: [{
             type: "text",
-            text: `**Workflow:** ${roadmap}\n\n**NEXT: Call \`orch_select\` NOW to present these ${allIdeas.length} ideas to the user.**\n\n---\n\n🔬 Deep discovery complete (30→5→${allIdeas.length} funnel)\n\n### Top 5 (winnowed from ${rawIdeas.length} raw ideas)\n${top5.map((i, n) => `${n + 1}. **${i.title}** [${i.category}] — ${i.description}`).join("\n")}\n\n### Complementary Ideas (${expandedIdeas.length})\n${expandedIdeas.map((i, n) => `${n + 1}. **${i.title}** [${i.category}] — ${i.description}`).join("\n")}`,
+            text: `**Workflow:** ${roadmap}\n\n**NEXT: Call \`orch_select\` NOW to present these ${finalIdeas.length} ideas to the user.**\n\n---\n\n🔬 Deep discovery complete (30→5→${allIdeas.length} funnel, ${finalIdeas.length} selected)\n\n### Top Ideas (tier: top)\n${finalIdeas.filter(i => i.tier === "top").map((i, n) => `${n + 1}. **${i.title}** [${i.category}] — ${i.description}`).join("\n")}\n\n### Complementary Ideas (tier: honorable)\n${finalIdeas.filter(i => i.tier !== "top").map((i, n) => `${n + 1}. **${i.title}** [${i.category}] — ${i.description}`).join("\n")}`,
           }],
-          details: { profile, scanResult, funnel: true, rawCount: rawIdeas.length, winnowedCount: top5.length, expandedCount: expandedIdeas.length },
+          details: { profile, scanResult, funnel: true, rawCount: rawIdeas.length, winnowedCount: top5.length, expandedCount: expandedIdeas.length, selectedCount: finalIdeas.length },
         };
       }
 

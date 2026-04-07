@@ -248,3 +248,58 @@ export function formatPromptEffectiveness(): string {
 export function resetPromptTracking(): void {
   _promptTracker.clear();
 }
+
+// ─── D. Per-Tool Feedback ────────────────────────────────────
+
+export interface ToolFeedback {
+  toolName: string;
+  sessionId?: string;
+  timestamp: number;
+  /** 1-5 rating */
+  usability: number;
+  /** 1-5 rating */
+  ergonomics: number;
+  /** What went well */
+  strengths: string[];
+  /** What was confusing or missing */
+  weaknesses: string[];
+  /** Specific suggestions */
+  suggestions: string[];
+}
+
+/**
+ * Prompt text for collecting structured tool feedback from an agent.
+ * Paste this into the agent's context after it finishes using a tool.
+ */
+export function toolFeedbackPrompt(toolName: string): string {
+  return `## Tool Feedback Survey: ${toolName}\n\nYou just used ${toolName}. Please provide structured feedback so we can improve it.\n\n### Rate on 1-5:\n- **Usability**: How easy was it to use correctly?\n- **Ergonomics**: Did the API surface feel natural and agent-friendly?\n\n### Qualitative:\n- **Strengths**: What worked well? (list 1-3 items)\n- **Weaknesses**: What was confusing, missing, or annoying? (list 1-3 items)\n- **Suggestions**: Specific improvements you'd make (list 1-3 items)\n\n### Output Format (JSON)\n\`\`\`json\n{\n  "usability": <1-5>,\n  "ergonomics": <1-5>,\n  "strengths": ["..."],\n  "weaknesses": ["..."],\n  "suggestions": ["..."]\n}\n\`\`\``;
+}
+
+export function parseToolFeedback(output: string, toolName: string): ToolFeedback | null {
+  const match = output.match(/```json\s*([\s\S]*?)```/);
+  if (!match) return null;
+  try {
+    const p = JSON.parse(match[1]);
+    return {
+      toolName,
+      timestamp: Date.now(),
+      usability: Math.min(5, Math.max(1, Math.round(p.usability ?? 3))),
+      ergonomics: Math.min(5, Math.max(1, Math.round(p.ergonomics ?? 3))),
+      strengths: Array.isArray(p.strengths) ? p.strengths : [],
+      weaknesses: Array.isArray(p.weaknesses) ? p.weaknesses : [],
+      suggestions: Array.isArray(p.suggestions) ? p.suggestions : [],
+    };
+  } catch { return null; }
+}
+
+/** Save tool feedback to .pi-orchestrator-feedback/tools/<toolName>.jsonl */
+export function saveToolFeedback(cwd: string, feedback: ToolFeedback): void {
+  try {
+    const { mkdirSync: mkd, appendFileSync: apf } = require("fs");
+    const { join: pj } = require("path");
+    const dir = pj(cwd, ".pi-orchestrator-feedback", "tools");
+    mkd(dir, { recursive: true });
+    const file = pj(dir, `${feedback.toolName}.jsonl`);
+    apf(file, JSON.stringify(feedback) + "\n", "utf8");
+  } catch { /* best-effort */ }
+}
