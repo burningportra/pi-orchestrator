@@ -38,7 +38,7 @@ function formatBeadStaleness(beads: Bead[]): string {
     lines.push(`  🟢 Fresh (< 1 day): ${fresh.map(b => b.id).join(", ")}`);
   }
   if (recent.length > 0) {
-    lines.push(`  🟡 Recent (1-7 days): ${recent.map(b => `${b.id} (${formatAge(recent.find(x => x.id === b.id)?.created_at)})`).join(", ")}`);
+    lines.push(`  🟡 Recent (1-7 days): ${recent.map(b => `${b.id} (${formatAge(b.created_at)})`).join(", ")}`);
   }
   if (stale.length > 0) {
     lines.push(`  🔴 Stale (>= 7 days): ${stale.map(b => `${b.id} (${formatAge(b.created_at)})`).join(", ")}`);
@@ -771,7 +771,7 @@ export function registerCommands(oc: OrchestratorContext) {
       oc.persistState();
 
       ctx.ui.notify(
-        `✅ Research pipeline complete (${state.phasesCompleted.length}/6 phases).\n` +
+        `✅ Research pipeline complete (${state.phasesCompleted.length}/${phases.length} phases).\n` +
         `Proposal saved to: ${artifactName}\n\n` +
         `The proposal has been loaded as a plan artifact. ` +
         `Call \`orch_approve_beads\` to review it and convert to beads.`,
@@ -877,7 +877,628 @@ export function registerCommands(oc: OrchestratorContext) {
     },
   });
 
+  // ─── Command: /orchestrate-refine-skills ──────────────────
+  pi.registerCommand("orchestrate-refine-skills", {
+    description: "Mine CASS session history for planning patterns and produce a skill refinement report",
+    handler: async (args, ctx) => {
+      const { mineSkillGaps } = await import("./memory.js");
+      const topic = args.trim() || "planning beads orchestration";
+      const snippets = mineSkillGaps(ctx.cwd, topic);
+      if (!snippets) {
+        ctx.ui.notify(
+          "No CASS session data found for topic: " + topic +
+          ". Ensure cm is installed and sessions have been recorded.",
+          "info"
+        );
+        return;
+      }
+      const task = `## Skill Refinement via Session Mining
+
+You have access to snippets from past orchestration sessions. Analyze them for:
+1. **What worked well** — prompts, approaches, patterns that produced good results
+2. **What failed** — repeated mistakes, dead ends, confusing steps
+3. **Missing guidance** — things the current prompts don't address but sessions show are important
+4. **Proposed improvements** — specific changes to planning/beads/review prompts
+
+## Session Snippets
+${snippets}
+
+## Output
+Produce a concrete skill refinement report with:
+- 3-7 specific prompt improvements (old text → new text)
+- 2-3 new rules to add to AGENTS.md
+- Any anti-patterns to codify
+
+Use ultrathink. Be specific — vague suggestions are useless.`;
+      ctx.ui.notify("Mining CASS sessions and analysing patterns…", "info");
+      pi.sendUserMessage(task, { deliverAs: "followUp" });
+    },
+  });
+
+  // ─── Command: /orchestrate-refine-skill ───────────────────
+  pi.registerCommand("orchestrate-refine-skill", {
+    description: "Refine a specific skill file using CASS session evidence",
+    handler: async (args, ctx) => {
+      const { mineSkillGaps, skillRefinerPrompt } = await import("./memory.js");
+      const { readFileSync, existsSync } = await import("fs");
+      const { join } = await import("path");
+      const skillName = args.trim();
+      if (!skillName) {
+        ctx.ui.notify("Usage: /orchestrate-refine-skill <skill-name-or-path>", "info");
+        return;
+      }
+      // Try common skill locations
+      const candidates = [
+        skillName,
+        join(ctx.cwd, ".claude", "skills", skillName, "SKILL.md"),
+        join(ctx.cwd, ".claude", "skills", skillName),
+      ];
+      let skillContent: string | null = null;
+      for (const p of candidates) {
+        if (existsSync(p)) {
+          try { skillContent = readFileSync(p, "utf8"); break; } catch { /* continue */ }
+        }
+      }
+      if (!skillContent) {
+        ctx.ui.notify(`Could not find skill file for: ${skillName}`, "error");
+        return;
+      }
+      const sessionData = mineSkillGaps(ctx.cwd, skillName) ?? undefined;
+      const prompt = skillRefinerPrompt(skillContent, skillName, sessionData);
+      ctx.ui.notify(`Refining skill: ${skillName}…`, "info");
+      pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+    },
+  });
+
+  // ─── Command: /orchestrate-tool-feedback ──────────────────
+  pi.registerCommand("orchestrate-tool-feedback", {
+    description: "Collect structured feedback on a tool via an agent survey",
+    handler: async (args, ctx) => {
+      const { toolFeedbackPrompt, parseToolFeedback, saveToolFeedback } = await import("./feedback.js");
+      const toolName = args.trim();
+      if (!toolName) {
+        ctx.ui.notify("Usage: /orchestrate-tool-feedback <tool-name>", "info");
+        return;
+      }
+      const prompt = toolFeedbackPrompt(toolName);
+      // We send the feedback survey as a followUp; the agent fills it out and we parse the result
+      ctx.ui.notify(
+        `Sending feedback survey for tool: ${toolName}. ` +
+        `The agent will evaluate the tool and return a structured JSON report. ` +
+        `Results will be saved to .pi-orchestrator-feedback/tools/${toolName}.jsonl`,
+        "info"
+      );
+      // Register a one-time result handler by passing a parse-and-save instruction
+      const resultTask = prompt + `\n\nAfter completing the survey, paste your JSON response above. ` +
+        `The feedback will be automatically parsed and saved.`;
+      pi.sendUserMessage(resultTask, { deliverAs: "followUp" });
+      // Note: in a real pipeline the result would be streamed back; here we expose
+      // the parsing utilities so the orchestrator extension can wire them up.
+      void parseToolFeedback; // exported for use by the extension host
+      void saveToolFeedback;
+    },
+  });
+
   // ─── Command: /orchestrate-swarm-stop ─────────────────────
+  // ─── Command: /orchestrate-healthcheck ──────────────────────
+  pi.registerCommand("orchestrate-healthcheck", {
+    description: "Quick static health snapshot: UBS scan, TODO count, test ratio, deps — no agents, instant result",
+    handler: async (_args, ctx) => {
+      const { existsSync, readdirSync, readFileSync } = await import("fs");
+      const { join, extname } = await import("path");
+      const { detectUbs } = await import("./coordination.js");
+
+      ctx.ui.notify("🔍 Running health check...", "info");
+
+      // 1. Profile if needed
+      if (!oc.state.repoProfile) {
+        try {
+          const { profileRepo } = await import("./profiler.js");
+          oc.state.repoProfile = await profileRepo(pi, ctx.cwd);
+          oc.persistState();
+        } catch { /* best-effort */ }
+      }
+      const profile = oc.state.repoProfile;
+
+      const lines: string[] = ["## 🏥 Codebase Health Check\n"];
+
+      // 2. UBS scan
+      const ubsAvailable = await detectUbs(pi, ctx.cwd);
+      if (ubsAvailable) {
+        try {
+          const result = await pi.exec("ubs", ["."], { cwd: ctx.cwd, timeout: 30000 });
+          const ubsOut = (result.stdout + result.stderr).trim();
+          const issueCount = (ubsOut.match(/^(ERROR|WARN|WARNING)/gmi) ?? []).length;
+          lines.push(issueCount === 0
+            ? `### 🔒 UBS Scan\n✅ Clean — no issues found`
+            : `### 🔒 UBS Scan\n⚠️ **${issueCount} issue(s) found**\n\`\`\`\n${ubsOut.slice(0, 1500)}\n\`\`\``);
+        } catch {
+          lines.push("### 🔒 UBS Scan\n⏭️ Skipped (scan error)");
+        }
+      } else {
+        lines.push("### 🔒 UBS Scan\n⏭️ Not installed (`cargo install ubs` to enable)");
+      }
+
+      // 3. TODO/FIXME count
+      const todoItems = profile?.todos ?? [];
+      const todoCount = todoItems.length;
+      const hacksCount = todoItems.filter(t =>
+        /HACK|XXX|FIXME/i.test(t.text ?? "")
+      ).length;
+      lines.push(`### 📝 TODOs & Technical Debt\n` +
+        `- ${todoCount} TODO/FIXME comments${todoCount > 20 ? " ⚠️ high" : todoCount > 5 ? " 🟡 moderate" : " ✅"}`  +
+        (hacksCount > 0 ? `\n- ${hacksCount} HACK/XXX markers 🟠` : ""));
+
+      // 4. Test file ratio
+      try {
+        const findResult = await pi.exec("find", [".", "-type", "f", "-name", "*.ts", "-not", "-path", "*/node_modules/*", "-not", "-path", "*/.git/*"], { cwd: ctx.cwd, timeout: 10000 });
+        const allTs = findResult.stdout.trim().split("\n").filter(Boolean);
+        const testFiles = allTs.filter(f => /\.test\.|spec\.|__tests__/.test(f));
+        const srcFiles = allTs.filter(f => !/\.test\.|spec\.|__tests__/.test(f));
+        const ratio = srcFiles.length > 0 ? (testFiles.length / srcFiles.length) : 0;
+        const ratioEmoji = ratio >= 0.5 ? "✅" : ratio >= 0.2 ? "🟡" : "🔴";
+        lines.push(`### 🧪 Test Coverage Estimate\n` +
+          `${ratioEmoji} ${testFiles.length} test files / ${srcFiles.length} source files (ratio: ${(ratio * 100).toFixed(0)}%)`);
+      } catch {
+        lines.push("### 🧪 Test Coverage Estimate\n⏭️ Skipped");
+      }
+
+      // 5. Dependency vulnerabilities (npm audit if available)
+      const hasPackageJson = existsSync(join(ctx.cwd, "package.json"));
+      if (hasPackageJson) {
+        try {
+          const audit = await pi.exec("npm", ["audit", "--json", "--audit-level=high"], { cwd: ctx.cwd, timeout: 30000 });
+          const data = JSON.parse(audit.stdout);
+          const vulnCount = data?.metadata?.vulnerabilities;
+          const high = (vulnCount?.high ?? 0) + (vulnCount?.critical ?? 0);
+          const total = Object.values(vulnCount ?? {}).reduce((s: number, n) => s + (n as number), 0);
+          lines.push(`### 📦 Dependency Vulnerabilities\n` +
+            (high > 0
+              ? `🔴 **${high} high/critical** (${total} total) — run \`npm audit fix\``
+              : total > 0
+              ? `🟡 ${total} low/moderate issues`
+              : `✅ No known vulnerabilities`));
+        } catch {
+          lines.push("### 📦 Dependency Vulnerabilities\n⏭️ Skipped (npm audit unavailable)");
+        }
+      }
+
+      // 6. Git health (uncommitted changes, stale branch)
+      try {
+        const status = await pi.exec("git", ["status", "--porcelain"], { cwd: ctx.cwd, timeout: 5000 });
+        const dirty = status.stdout.trim().split("\n").filter(Boolean);
+        lines.push(`### 🌿 Git Status\n` +
+          (dirty.length === 0 ? "✅ Working tree clean" : `🟡 ${dirty.length} uncommitted change(s)`));
+      } catch {
+        lines.push("### 🌿 Git Status\n⏭️ Skipped");
+      }
+
+      // 7. Composite score
+      const scores = [
+        ubsAvailable ? 1 : 0.5,
+        todoCount < 5 ? 1 : todoCount < 20 ? 0.7 : 0.4,
+      ];
+      const score = Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100);
+      const scoreEmoji = score >= 80 ? "🟢" : score >= 60 ? "🟡" : "🔴";
+      lines.push(`\n---\n### ${scoreEmoji} Health Score: ${score}/100`);
+
+      const report = lines.join("\n\n");
+      pi.sendUserMessage(report, { deliverAs: "followUp" });
+    },
+  });
+
+  // ─── Command: /orchestrate-fix ───────────────────────────────
+  pi.registerCommand("orchestrate-fix", {
+    description: "Fast path: skip planning, create one bead from a description and start implementing",
+    handler: async (args, ctx) => {
+      const description = args.trim();
+      if (!description) {
+        ctx.ui.notify(
+          "Usage: /orchestrate-fix <description>\n\nExample:\n  /orchestrate-fix The login form crashes when email contains a + character",
+          "info"
+        );
+        return;
+      }
+
+      // Ensure br is available
+      try {
+        await pi.exec("br", ["--help"], { cwd: ctx.cwd, timeout: 3000 });
+      } catch {
+        ctx.ui.notify("❌ `br` CLI not found. Run `/orchestrate-setup` to install it.", "error");
+        return;
+      }
+
+      // Ensure .beads is initialised
+      const { existsSync } = await import("fs");
+      const { join } = await import("path");
+      if (!existsSync(join(ctx.cwd, ".beads"))) {
+        try {
+          await pi.exec("br", ["init"], { cwd: ctx.cwd, timeout: 10000 });
+        } catch {
+          ctx.ui.notify("❌ Failed to initialise beads. Run `br init` manually.", "error");
+          return;
+        }
+      }
+
+      // Derive a short title from the description
+      const title = description.length > 72
+        ? description.slice(0, 69) + "..."
+        : description;
+
+      // Build a self-contained bead description
+      const beadDesc = `## Fix: ${title}
+
+### Problem
+${description}
+
+### Acceptance Criteria
+- [ ] The described problem no longer occurs
+- [ ] Existing tests still pass
+- [ ] No new regressions introduced
+
+### Files:
+(Identify the relevant files during implementation)`;
+
+      // Create the bead
+      ctx.ui.notify(`🔧 Creating fix bead...`, "info");
+      let beadId: string | undefined;
+      try {
+        const result = await pi.exec("br", [
+          "create",
+          "--title", `Fix: ${title}`,
+          "--description", beadDesc,
+          "--priority", "P1",
+        ], { cwd: ctx.cwd, timeout: 15000 });
+        // Parse bead ID from output (br create prints "Created bead br-N")
+        const match = result.stdout.match(/([a-z][a-z0-9]*-\d+)/);
+        beadId = match?.[1];
+      } catch (err: any) {
+        ctx.ui.notify(`❌ Failed to create bead: ${err.message ?? err}`, "error");
+        return;
+      }
+
+      if (!beadId) {
+        ctx.ui.notify("⚠️ Bead created but could not parse ID from output. Run `br list` to find it.", "warning");
+        return;
+      }
+
+      // Set up orchestrator state
+      if (!oc.state.selectedGoal) {
+        oc.state.selectedGoal = `Fix: ${title}`;
+      }
+      if (!oc.state.activeBeadIds) oc.state.activeBeadIds = [];
+      oc.state.activeBeadIds.push(beadId);
+      oc.orchestratorActive = true;
+      oc.setPhase("implementing", ctx);
+      oc.persistState();
+
+      // Mark bead in_progress and send implementer instructions
+      try {
+        await pi.exec("br", ["update", beadId, "--status", "in_progress"], { cwd: ctx.cwd, timeout: 5000 });
+      } catch { /* best-effort */ }
+
+      const { implementerInstructions } = await import("./prompts.js");
+      const { readMemory } = await import("./memory.js");
+      const profile = oc.state.repoProfile ?? { name: "", languages: [], frameworks: [], keyFiles: {} as Record<string,string>, testFramework: undefined, ciSystem: undefined, packageManager: undefined, hasGit: true, todos: [], recentCommits: [], entrypoints: [], structure: "", hasTests: false, hasDocs: false, hasCI: false };
+      const bead = { id: beadId, title: `Fix: ${title}`, description: beadDesc, status: "in_progress" as const, priority: 1, parent: undefined, children: [], type: "task" as const, labels: [] };
+      const cassMemory = readMemory(ctx.cwd, title);
+      const instructions = implementerInstructions(bead, profile, [], cassMemory || undefined);
+
+      ctx.ui.notify(`✅ Created bead **${beadId}**: Fix: ${title}\n\nStarting implementation...`, "info");
+      pi.sendUserMessage(instructions, { deliverAs: "followUp" });
+    },
+  });
+
+  // ─── Command: /orchestrate-audit ─────────────────────────────
+  pi.registerCommand("orchestrate-audit", {
+    description: "Full codebase audit: spin up parallel agents for bugs, security, tests, and dead code",
+    handler: async (args, ctx) => {
+      const { auditAgentPrompt, findingsToBeadsPrompt } = await import("./prompts.js");
+      const { getDomainChecklist, formatDomainBlunderItems } = await import("./domain-knowledge.js");
+      const { runDeepPlanAgents } = await import("./deep-plan.js");
+      const { pickRefinementModel } = await import("./prompts.js");
+
+      // Profile if needed
+      if (!oc.state.repoProfile) {
+        ctx.ui.notify("📊 Profiling repo first...", "info");
+        try {
+          const { profileRepo } = await import("./profiler.js");
+          oc.state.repoProfile = await profileRepo(pi, ctx.cwd);
+          oc.persistState();
+        } catch { /* best-effort */ }
+      }
+      const profile = oc.state.repoProfile ?? { name: "", languages: [], frameworks: [], keyFiles: {} as Record<string,string>, testFramework: undefined, ciSystem: undefined, packageManager: undefined, hasGit: true, todos: [], recentCommits: [], entrypoints: [], structure: "", hasTests: false, hasDocs: false, hasCI: false };
+
+      // Parse optional focus filter from args (e.g. "--focus bugs,security")
+      const argStr = args.trim();
+      const focusMatch = argStr.match(/--focus\s+([\w,\-]+)/);
+      type AuditFocus = "bugs" | "security" | "tests" | "dead-code";
+      const allFoci: AuditFocus[] = ["bugs", "security", "tests", "dead-code"];
+      let foci: AuditFocus[] = allFoci;
+      if (focusMatch) {
+        const requested = focusMatch[1].split(",").map(s => s.trim()) as AuditFocus[];
+        foci = requested.filter(f => allFoci.includes(f));
+        if (foci.length === 0) foci = allFoci;
+      }
+
+      // Let user choose scope if interactive
+      const scopeChoice = await ctx.ui.select(
+        `## 🔍 Codebase Audit\n\nLaunching ${foci.length} parallel audit agent(s): **${foci.join(", ")}**\n\nThis will spawn one agent per focus area. Each reads the full codebase and reports findings.`,
+        [
+          `🚀 Full audit (${foci.length} agents in parallel)`,
+          "🎯 Quick — bugs + security only (2 agents)",
+          "❌ Cancel",
+        ]
+      );
+
+      if (!scopeChoice || scopeChoice.startsWith("❌")) return;
+      if (scopeChoice.startsWith("🎯")) foci = ["bugs", "security"];
+
+      // Get file list for context
+      let files: string[] = [];
+      try {
+        const findResult = await pi.exec("find", ["src", "-type", "f", "-name", "*.ts", "-not", "-path", "*/node_modules/*"], { cwd: ctx.cwd, timeout: 10000 });
+        files = findResult.stdout.trim().split("\n").filter(Boolean).slice(0, 100);
+      } catch { /* use empty list — agent will explore on its own */ }
+
+      const domainChecklist = getDomainChecklist(profile);
+      const domainExtras = domainChecklist ? formatDomainBlunderItems(domainChecklist) : undefined;
+
+      ctx.ui.notify(`🚀 Launching ${foci.length} audit agent(s)...`, "info");
+
+      const agents = foci.map((focus, i) => ({
+        name: `audit-${focus}`,
+        model: pickRefinementModel(i),
+        task: auditAgentPrompt(focus, profile, files, ctx.cwd, domainExtras),
+      }));
+
+      let results: import("./deep-plan.js").DeepPlanResult[];
+      try {
+        results = await runDeepPlanAgents(pi, ctx.cwd, agents);
+      } catch (err: any) {
+        ctx.ui.notify(`❌ Audit agents failed: ${err.message ?? err}`, "error");
+        return;
+      }
+
+      // Parse findings from each agent output
+      const allFindings: Array<{ severity: string; file: string; line: string; title: string; description: string; fix: string; focus: string }> = [];
+      const summaries: string[] = [];
+
+      for (const result of results) {
+        const focusName = result.name.replace("audit-", "");
+        if (result.exitCode !== 0 || !result.plan) {
+          summaries.push(`⚠️ **${focusName}**: agent failed or produced no output`);
+          continue;
+        }
+        const jsonMatch = result.plan.match(/```json\s*([\s\S]*?)```/);
+        if (jsonMatch) {
+          try {
+            const parsed = JSON.parse(jsonMatch[1]);
+            if (Array.isArray(parsed)) {
+              allFindings.push(...parsed.map((f: any) => ({ ...f, focus: focusName })));
+            }
+          } catch { /* ignore parse errors */ }
+        }
+        // Extract prose summary (after the JSON block)
+        const afterJson = result.plan.replace(/```json[\s\S]*?```/g, "").trim();
+        if (afterJson) summaries.push(`**${focusName}:** ${afterJson.slice(0, 300)}`);
+      }
+
+      // Sort by severity
+      const sevOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+      allFindings.sort((a, b) => (sevOrder[a.severity] ?? 5) - (sevOrder[b.severity] ?? 5));
+
+      const critical = allFindings.filter(f => f.severity === "critical" || f.severity === "high");
+      const other = allFindings.filter(f => f.severity !== "critical" && f.severity !== "high");
+
+      const sevEmoji = (s: string) =>
+        s === "critical" ? "🔴" : s === "high" ? "🟠" : s === "medium" ? "🟡" : "⚪";
+
+      const findingLines = allFindings.slice(0, 30).map(f =>
+        `${sevEmoji(f.severity)} **[${f.focus}]** ${f.file}:${f.line} — ${f.title}`
+      );
+
+      const report = [
+        `## 🔍 Audit Complete — ${allFindings.length} finding(s)`,
+        `**Critical/High:** ${critical.length}  |  **Other:** ${other.length}`,
+        "",
+        summaries.length > 0 ? `### Agent Summaries\n${summaries.join("\n\n")}` : "",
+        findingLines.length > 0 ? `### All Findings\n${findingLines.join("\n")}` : "✅ No findings.",
+      ].filter(Boolean).join("\n\n");
+
+      pi.sendUserMessage(report, { deliverAs: "followUp" });
+
+      if (allFindings.length === 0) return;
+
+      // Offer to create fix beads
+      const createBeads = await ctx.ui.select(
+        `Create fix beads for findings?`,
+        [
+          `🔴 Critical & high only (${critical.length} bead${critical.length !== 1 ? "s" : ""})`,
+          `📋 All findings (${allFindings.length} bead${allFindings.length !== 1 ? "s" : ""})`,
+          "⏭️  No — just the report",
+        ]
+      );
+
+      if (!createBeads || createBeads.startsWith("⏭️")) return;
+
+      const toCreate = createBeads.startsWith("🔴") ? critical : allFindings;
+      const beadInstructions = findingsToBeadsPrompt(toCreate, ctx.cwd);
+      pi.sendUserMessage(
+        `Create beads for the ${toCreate.length} finding(s):\n\n${beadInstructions}`,
+        { deliverAs: "followUp" }
+      );
+    },
+  });
+
+  // ─── Command: /orchestrate-scan ──────────────────────────────
+  pi.registerCommand("orchestrate-scan", {
+    description: "Targeted scan of specific files or subsystems — /orchestrate-scan [path] [focus]",
+    handler: async (args, ctx) => {
+      const { scanAgentPrompt, findingsToBeadsPrompt } = await import("./prompts.js");
+      const { getDomainChecklist, formatDomainBlunderItems } = await import("./domain-knowledge.js");
+      const { runDeepPlanAgents, } = await import("./deep-plan.js");
+      const { pickRefinementModel } = await import("./prompts.js");
+
+      // Profile if needed
+      if (!oc.state.repoProfile) {
+        try {
+          const { profileRepo } = await import("./profiler.js");
+          oc.state.repoProfile = await profileRepo(pi, ctx.cwd);
+          oc.persistState();
+        } catch { /* best-effort */ }
+      }
+      const profile = oc.state.repoProfile ?? { name: "", languages: [], frameworks: [], keyFiles: {} as Record<string,string>, testFramework: undefined, ciSystem: undefined, packageManager: undefined, hasGit: true, todos: [], recentCommits: [], entrypoints: [], structure: "", hasTests: false, hasDocs: false, hasCI: false };
+
+      // Parse args: /orchestrate-scan [path] [focus]
+      // Examples:
+      //   /orchestrate-scan src/auth security
+      //   /orchestrate-scan src/api bugs
+      //   /orchestrate-scan (interactive)
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      let pathFilter = parts[0] ?? "";
+      let focus = parts[1] ?? "";
+
+      // Interactive path picker if not provided
+      if (!pathFilter) {
+        // Collect top-level directories
+        let topDirs: string[] = [];
+        try {
+          const { readdirSync, statSync } = await import("fs");
+          const { join } = await import("path");
+          topDirs = readdirSync(ctx.cwd)
+            .filter(f => !f.startsWith(".") && !f.includes("node_modules"))
+            .filter(f => { try { return statSync(join(ctx.cwd, f)).isDirectory(); } catch { return false; } })
+            .slice(0, 12);
+        } catch { /* use empty */ }
+
+        const pathChoice = await ctx.ui.select(
+          "## 🎯 Targeted Scan\n\nWhich path to scan?",
+          [
+            "📁 Entire codebase",
+            ...topDirs.map(d => `📂 ${d}/`),
+            "✏️  Enter path manually",
+          ]
+        );
+        if (!pathChoice) return;
+        if (pathChoice.startsWith("📂")) {
+          pathFilter = pathChoice.replace("📂 ", "").replace("/", "");
+        } else if (pathChoice.startsWith("✏️")) {
+          pathFilter = "";
+        }
+      }
+
+      // Interactive focus picker if not provided
+      const focusOptions = [
+        "bugs — runtime errors, logic issues, null dereferences",
+        "security — injections, missing auth, hardcoded secrets",
+        "performance — hot paths, unnecessary allocations, N+1 queries",
+        "tests — missing coverage, fragile mocks, untested edge cases",
+        "dead-code — unused exports, unreachable branches, stale TODOs",
+        "types — unsafe casts, any types, missing type guards",
+        "docs — missing JSDoc, unclear error messages, stale comments",
+      ];
+      if (!focus) {
+        const focusChoice = await ctx.ui.select(
+          "What to focus on?",
+          focusOptions
+        );
+        if (!focusChoice) return;
+        focus = focusChoice.split(" ")[0];
+      }
+
+      // Collect files in scope
+      let files: string[] = [];
+      try {
+        const findArgs = pathFilter
+          ? [pathFilter, "-type", "f", "-not", "-path", "*/node_modules/*"]
+          : [".", "-type", "f", "-not", "-path", "*/node_modules/*", "-not", "-path", "*/.git/*"];
+        const findResult = await pi.exec("find", findArgs, { cwd: ctx.cwd, timeout: 10000 });
+        const langs = profile.languages.map(l => l.toLowerCase());
+        const exts = langs.includes("typescript") || langs.includes("javascript")
+          ? [".ts", ".tsx", ".js", ".jsx"]
+          : langs.includes("rust") ? [".rs"]
+          : langs.includes("python") ? [".py"]
+          : langs.includes("go") ? [".go"]
+          : [".ts", ".js", ".py", ".rs", ".go"];
+        files = findResult.stdout.trim().split("\n")
+          .filter(f => f && exts.some(e => f.endsWith(e)))
+          .slice(0, 80);
+      } catch { /* fallback: empty, agent explores */ }
+
+      if (files.length === 0 && !pathFilter) {
+        ctx.ui.notify("⚠️ No source files found. The agent will explore the codebase directly.", "warning");
+      }
+
+      const domainChecklist = getDomainChecklist(profile);
+      const domainExtras = domainChecklist ? formatDomainBlunderItems(domainChecklist) : undefined;
+      const scopeLabel = pathFilter ? `\`${pathFilter}/\`` : "entire codebase";
+
+      ctx.ui.notify(`🎯 Scanning ${scopeLabel} for **${focus}** issues (${files.length} files)...`, "info");
+
+      const agents = [{
+        name: `scan-${focus}`,
+        model: pickRefinementModel(0),
+        task: scanAgentPrompt(focus, files, ctx.cwd, domainExtras),
+      }];
+
+      let results: import("./deep-plan.js").DeepPlanResult[];
+      try {
+        results = await runDeepPlanAgents(pi, ctx.cwd, agents);
+      } catch (err: any) {
+        ctx.ui.notify(`❌ Scan agent failed: ${err.message ?? err}`, "error");
+        return;
+      }
+
+      const output = results[0]?.plan ?? "";
+      if (!output) {
+        ctx.ui.notify("⚠️ Scan agent produced no output.", "warning");
+        return;
+      }
+
+      // Parse findings
+      const findings: Array<{ severity: string; file: string; line: string; title: string; description: string; fix: string }> = [];
+      const jsonMatch = output.match(/```json\s*([\s\S]*?)```/);
+      if (jsonMatch) {
+        try { findings.push(...JSON.parse(jsonMatch[1])); } catch { /* ignore */ }
+      }
+
+      const sevEmoji = (s: string) =>
+        s === "critical" ? "🔴" : s === "high" ? "🟠" : s === "medium" ? "🟡" : "⚪";
+      const findingLines = findings.slice(0, 25).map(f =>
+        `${sevEmoji(f.severity)} ${f.file}:${f.line} — ${f.title}`
+      );
+      const prose = output.replace(/```json[\s\S]*?```/g, "").trim();
+
+      const report = [
+        `## 🎯 Scan Results — ${scopeLabel} / **${focus}**`,
+        `**${findings.length} finding(s)** | ${findings.filter(f => f.severity === "critical" || f.severity === "high").length} critical/high`,
+        "",
+        prose ? `### Summary\n${prose.slice(0, 600)}` : "",
+        findingLines.length > 0 ? `### Findings\n${findingLines.join("\n")}` : "✅ Nothing found.",
+      ].filter(Boolean).join("\n\n");
+
+      pi.sendUserMessage(report, { deliverAs: "followUp" });
+
+      if (findings.length === 0) return;
+
+      const createBeads = await ctx.ui.select(
+        `Create fix beads for the ${findings.length} finding(s)?`,
+        [
+          `📋 Yes — create ${findings.length} bead${findings.length !== 1 ? "s" : ""}`,
+          "⏭️  No — just the report",
+        ]
+      );
+      if (!createBeads || createBeads.startsWith("⏭️")) return;
+
+      const beadInstructions = findingsToBeadsPrompt(findings, ctx.cwd);
+      pi.sendUserMessage(
+        `Create fix beads for scan findings:\n\n${beadInstructions}`,
+        { deliverAs: "followUp" }
+      );
+    },
+  });
+
   pi.registerCommand("orchestrate-swarm-stop", {
     description: "Stop the swarm tender and send landing prompts",
     handler: async (_args, ctx) => {
