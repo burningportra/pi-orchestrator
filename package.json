@@ -1,6 +1,6 @@
 {
   "name": "pi-orchestrator",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Multi-agent orchestrator for pi — deep planning, parallel execution, guided review gates, compound memory. Based on the Agentic Coding Flywheel.",
   "repository": {
     "type": "git",
