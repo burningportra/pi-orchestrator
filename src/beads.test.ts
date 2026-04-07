@@ -375,10 +375,17 @@ describe("validateBeads with bv insights", () => {
       Articulation: ["bead-critical"],
       Slack: [],
     };
+    // readBeads must return open beads matching the IDs in bv insights,
+    // otherwise the open-bead filter will drop them.
+    const openBeads = [
+      { id: "bead-hot", title: "Hot", description: "A bottleneck bead with enough content to pass checks.\n### Files:\n- src/hot.ts\n- [ ] criterion", status: "open", priority: 2, type: "task", labels: [] },
+      { id: "bead-critical", title: "Critical", description: "An articulation point bead with enough content.\n### Files:\n- src/critical.ts\n- [ ] criterion", status: "open", priority: 2, type: "task", labels: [] },
+    ];
     const pi = {
       exec: vi.fn(async (cmd: string, args: string[]) => {
         if (cmd === "which") return { code: 0, stdout: "/usr/local/bin/bv\n", stderr: "" };
         if (cmd === "bv") return { code: 0, stdout: JSON.stringify(insightsData), stderr: "" };
+        if (cmd === "br" && args[0] === "list") return { code: 0, stdout: JSON.stringify(openBeads), stderr: "" };
         return { code: 0, stdout: "[]", stderr: "" };
       }),
     } as unknown as ExtensionAPI;
@@ -398,10 +405,17 @@ describe("validateBeads with bv insights", () => {
       Articulation: [],
       Slack: [],
     };
+    // readBeads must return open beads matching cycle and orphan IDs
+    const openBeads = [
+      { id: "a", title: "A", description: "Bead A", status: "open", priority: 2, type: "task", labels: [] },
+      { id: "b", title: "B", description: "Bead B", status: "open", priority: 2, type: "task", labels: [] },
+      { id: "orphan-1", title: "Orphan", description: "Orphan bead", status: "open", priority: 2, type: "task", labels: [] },
+    ];
     const pi = {
-      exec: vi.fn(async (cmd: string) => {
+      exec: vi.fn(async (cmd: string, args: string[]) => {
         if (cmd === "which") return { code: 0, stdout: "/usr/local/bin/bv\n", stderr: "" };
         if (cmd === "bv") return { code: 0, stdout: JSON.stringify(insightsData), stderr: "" };
+        if (cmd === "br" && args[0] === "list") return { code: 0, stdout: JSON.stringify(openBeads), stderr: "" };
         return { code: 0, stdout: "[]", stderr: "" };
       }),
     } as unknown as ExtensionAPI;

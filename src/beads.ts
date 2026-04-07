@@ -353,21 +353,30 @@ export async function validateBeads(
   // Try bv insights first for richer analysis
   const insights = await bvInsights(pi, cwd);
 
-  if (insights) {
-    // Use bv data for cycles and orphans
-    cycles = insights.Cycles !== null && insights.Cycles.length > 0;
-    orphaned = insights.Orphans ?? [];
+  // Build set of open bead IDs to filter bv results (bv analyzes all beads including closed)
+  const allBeadsForFilter = await readBeads(pi, cwd);
+  const openBeadIds = new Set(allBeadsForFilter.filter((b) => b.status === "open" || b.status === "in_progress").map((b) => b.id));
 
-    // Add warnings for bottlenecks
+  if (insights) {
+    // Use bv data for cycles and orphans — but filter to open beads only
+    // bv --robot-insights includes closed beads in its graph, which causes
+    // stale orphans/articulation points/bottlenecks to pollute validation.
+    // Only count cycles that involve at least one open bead
+    cycles = insights.Cycles !== null && insights.Cycles.some((cycle) => cycle.some((id) => openBeadIds.has(id)));
+    orphaned = (insights.Orphans ?? []).filter((id) => openBeadIds.has(id));
+
+    // Add warnings for bottlenecks (open beads only)
     for (const b of insights.Bottlenecks ?? []) {
-      if (b.Value > 5) {
+      if (b.Value > 5 && openBeadIds.has(b.ID)) {
         warnings.push(`bead ${b.ID} is a bottleneck (betweenness=${b.Value.toFixed(1)}) — consider splitting`);
       }
     }
 
-    // Add warnings for articulation points
+    // Add warnings for articulation points (open beads only)
     for (const id of insights.Articulation ?? []) {
-      warnings.push(`bead ${id} is a single point of failure in the dep graph`);
+      if (openBeadIds.has(id)) {
+        warnings.push(`bead ${id} is a single point of failure in the dep graph`);
+      }
     }
   } else {
     // Fallback: manual cycle/orphan detection
@@ -385,8 +394,7 @@ export async function validateBeads(
     }
 
     try {
-      const allBeads = await readBeads(pi, cwd);
-      const openBeads = allBeads.filter((b) => b.status === "open");
+      const openBeads = allBeadsForFilter.filter((b) => b.status === "open" || b.status === "in_progress");
       if (openBeads.length > 1) {
         const hasDeps = new Set<string>();
         const isDependedOn = new Set<string>();
