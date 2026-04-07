@@ -461,10 +461,17 @@ export function registerCommands(oc: OrchestratorContext) {
           const allCount = existingBeads.length;
           try {
             const ids = existingBeads.map((b) => b.id);
-            await pi.exec("br", ["delete", ...ids, "--force"], { cwd: ctx.cwd, timeout: 10000 });
+            await pi.exec("br", ["delete", ...ids, "--force", "--hard"], { cwd: ctx.cwd, timeout: 15000 });
             ctx.ui.notify(`🗑️ Deleted ${allCount} bead(s).`, "info");
           } catch {
-            ctx.ui.notify("⚠️ Failed to delete beads.", "warning");
+            // Fallback without --hard
+            try {
+              const ids = existingBeads.map((b) => b.id);
+              await pi.exec("br", ["delete", ...ids, "--force"], { cwd: ctx.cwd, timeout: 15000 });
+              ctx.ui.notify(`🗑️ Deleted ${allCount} bead(s).`, "info");
+            } catch {
+              ctx.ui.notify("⚠️ Failed to delete beads.", "warning");
+            }
           }
           // Fall through to fresh start
 

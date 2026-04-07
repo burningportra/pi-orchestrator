@@ -546,18 +546,30 @@ export function registerProfileTool(oc: OrchestratorContext) {
 
       // Clear beads
       if (discoveryMode.startsWith("🗑️")) {
+        let deleted = 0;
         if (allBeadIds.length > 0) {
           try {
-            await oc.pi.exec("br", ["delete", ...allBeadIds, "--force"], { cwd: ctx.cwd, timeout: 10000 });
-            ctx.ui.notify(`🗑️ Deleted ${allBeadIds.length} bead(s).`, "info");
+            // --force bypasses dependent checks; --hard prunes tombstones from JSONL immediately
+            await oc.pi.exec("br", ["delete", ...allBeadIds, "--force", "--hard"], { cwd: ctx.cwd, timeout: 15000 });
+            deleted = allBeadIds.length;
+            ctx.ui.notify(`🗑️ Deleted ${deleted} bead(s).`, "info");
           } catch {
-            ctx.ui.notify("⚠️ Failed to delete beads — try \`br delete --force\` manually.", "warning");
+            // Fallback: try without --hard in case version doesn't support it
+            try {
+              await oc.pi.exec("br", ["delete", ...allBeadIds, "--force"], { cwd: ctx.cwd, timeout: 15000 });
+              deleted = allBeadIds.length;
+              ctx.ui.notify(`🗑️ Deleted ${deleted} bead(s).`, "info");
+            } catch {
+              ctx.ui.notify("⚠️ Failed to delete beads — try \`br delete --force\` manually.", "warning");
+            }
           }
         }
         oc.setPhase("idle", ctx);
         oc.persistState();
+        // Auto-restart orchestration so user doesn't have to manually re-run
+        oc.pi.sendUserMessage("/orchestrate", { deliverAs: "followUp" });
         return {
-          content: [{ type: "text", text: `🗑️ Cleared ${allBeadIds.length} bead(s). Run \`/orchestrate\` again to start fresh.` }],
+          content: [{ type: "text", text: `🗑️ Cleared ${deleted} bead(s). Starting fresh...` }],
           details: { profile, scanResult, cleared: true },
         };
       }
