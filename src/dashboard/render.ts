@@ -44,16 +44,17 @@ function truncate(text: string, maxLen: number): string {
 export function renderPhaseHeader(
   snapshot: DashboardSnapshot,
   theme: DashboardTheme,
+  width = 80,
 ): string[] {
   const lines: string[] = [];
   lines.push(
-    styled(theme, "primary", `${snapshot.phaseEmoji} Phase: ${snapshot.phase}`),
+    styled(theme, "primary", truncate(`${snapshot.phaseEmoji} Phase: ${snapshot.phase}`, width)),
   );
   if (snapshot.repoName && snapshot.repoName !== "Unknown repo") {
     const badge = snapshot.scanSource && snapshot.scanSource !== "unknown"
       ? ` (${snapshot.scanSource})`
       : "";
-    lines.push(styled(theme, "muted", `📁 Repo: ${snapshot.repoName}${badge}`));
+    lines.push(styled(theme, "muted", truncate(`📁 Repo: ${snapshot.repoName}${badge}`, width)));
   }
   return lines;
 }
@@ -83,7 +84,9 @@ export function renderProgressBar(
   // Need at least 2 chars for brackets
   const innerWidth = Math.max(barWidth - 2, 0);
   if (innerWidth === 0) {
-    return `📊 Progress: ${safeCompleted}/${safeTotal} beads`;
+    // barWidth may be 0 on very narrow terminals; fall back to a plain string
+    // capped to the available width (barWidth + overhead = the full allotted space).
+    return truncate(`📊 Progress: ${safeCompleted}/${safeTotal} beads`, barWidth + 22);
   }
 
   const ratio = safeTotal === 0 ? 0 : safeCompleted / safeTotal;
@@ -184,7 +187,7 @@ export function renderDashboardLines(
   }
 
   // 2. Phase header
-  lines.push(...renderPhaseHeader(snapshot, theme));
+  lines.push(...renderPhaseHeader(snapshot, theme, width));
 
   // 3. Goal line
   const goalLine = renderGoalLine(snapshot.goal, width, theme);
@@ -217,5 +220,14 @@ export function renderDashboardLines(
     lines.push(...tenderLines);
   }
 
-  return lines;
+  // Defensive pass: hard-clamp any line that slipped through above the width.
+  // Strip ANSI escape codes before measuring so emoji/color codes don't skew
+  // the count, then re-render the plain text truncated if needed.
+  const stripAnsi = (s: string) =>
+    s.replace(/\x1b\[[0-9;]*m|\x1b\]8;;[^\x07]*\x07/g, "");
+  return lines.map((line) => {
+    const visible = stripAnsi(line);
+    if (visible.length <= width) return line;
+    return styled(theme, "muted", truncate(visible, width));
+  });
 }
