@@ -212,6 +212,7 @@ export default function (pi: ExtensionAPI) {
 
   function setPhase(phase: OrchestratorPhase, ctx: ExtensionContext) {
     state.phase = phase;
+    state.phaseStartedAt = Date.now();
     if (phase === "idle") {
       ctx.ui.setStatus("orchestrator", undefined);
       ctx.ui.setWidget("orchestrator", undefined);

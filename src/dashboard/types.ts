@@ -38,4 +38,18 @@ export interface DashboardSnapshot {
   lastRefreshMs: number;
   staleData: boolean;
   alerts: DashboardAlert[];
+
+  // ── Rich display extras ─────────────────────────────────────────
+  /** How long the current phase has been running (ms). */
+  phaseDurationMs?: number;
+  /** Per-round change counts for sparkline rendering. */
+  polishChanges?: number[];
+  /** Convergence score 0–1 (bead polish or plan refinement). */
+  convergenceScore?: number;
+  /** Foregone conclusion composite readiness score 0–1. */
+  foregoneScore?: number;
+  /** Current polish/iteration round number. */
+  currentRound?: number;
+  /** Plan quality score 0–100. */
+  planQuality?: number;
 }

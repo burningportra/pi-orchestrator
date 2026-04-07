@@ -93,6 +93,33 @@ export function buildDashboardSnapshot(
       };
     });
 
+    // --- Rich display extras ---
+    const phaseDurationMs = state?.phaseStartedAt
+      ? Date.now() - state.phaseStartedAt
+      : undefined;
+
+    const polishChanges =
+      Array.isArray(state?.polishChanges) && state.polishChanges.length > 0
+        ? state.polishChanges
+        : undefined;
+
+    const convergenceScore =
+      state?.polishConvergenceScore ?? state?.planConvergenceScore ?? undefined;
+
+    const foregoneScore =
+      typeof state?.foregoneScore?.overall === "number"
+        ? state.foregoneScore.overall / 100
+        : undefined;
+
+    const currentRound =
+      state?.polishRound > 0
+        ? state.polishRound
+        : (state?.iterationRound ?? 0) > 0
+        ? state.iterationRound
+        : undefined;
+
+    const planQuality = state?.planReadinessScore?.overall;
+
     return {
       phase,
       phaseEmoji,
@@ -106,6 +133,12 @@ export function buildDashboardSnapshot(
       lastRefreshMs: Date.now(),
       staleData,
       alerts,
+      phaseDurationMs,
+      polishChanges,
+      convergenceScore,
+      foregoneScore,
+      currentRound,
+      planQuality,
     };
   } catch (err: unknown) {
     // Degraded snapshot — structurally valid, clearly marked stale

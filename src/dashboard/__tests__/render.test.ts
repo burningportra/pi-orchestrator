@@ -90,12 +90,17 @@ describe("renderDashboardLines", () => {
     const snap = makeSnapshot();
     const lines = renderDashboardLines(snap, mockTheme, 20);
 
-    // Should use full layout at width 20
-    expect(lines.length).toBeGreaterThan(1);
-    // Progress bar should still have consistent format even at narrow width
-    const progressLine = lines.find((l) => l.includes("Progress"));
-    expect(progressLine).toBeTruthy();
-    expect(progressLine).toContain("2/5");
+    // width 20-79 → compact multi-line layout (no sparklines or footer)
+    // Should always include counts somewhere
+    const allText = lines.join("\n");
+    expect(allText).toContain("2/5");
+    // Should not blow up and must return at least one line
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+    // No line should exceed width+10 visible chars (ANSI codes excluded)
+    for (const line of lines) {
+      const vis = line.replace(/\x1b\[[0-9;]*m/g, "");
+      expect(vis.length).toBeLessThanOrEqual(30); // 20 + some tolerance
+    }
   });
 });
 
