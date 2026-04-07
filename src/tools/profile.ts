@@ -112,14 +112,35 @@ export function registerProfileTool(oc: OrchestratorContext) {
       // Workflow roadmap for user orientation
       const roadmap = workflowRoadmap("discovering");
 
+      // Check for existing beads so we can offer a clear option
+      let existingBeadCount = 0;
+      let existingBeadIds: string[] = [];
+      try {
+        const { readBeads } = await import("../beads.js");
+        const existingBeads = await readBeads(oc.pi, ctx.cwd);
+        const activeBeads = existingBeads.filter(b => b.status === "open" || b.status === "in_progress");
+        existingBeadCount = activeBeads.length;
+        existingBeadIds = activeBeads.map(b => b.id);
+      } catch { /* no beads dir */ }
+
       // Offer discovery mode choice — unified menu replaces the old two-step flow
+      const discoveryChoices: string[] = [];
+      if (existingBeadCount > 0) {
+        discoveryChoices.push(`▶️  Work on beads — implement the ${existingBeadCount} existing open bead(s)`);
+      }
+      discoveryChoices.push(
+        "💡 Standard discovery — generate 10-15 scored ideas",
+        "🔬 Deep discovery (30→5→15 funnel) — broader brainstorm with competitive winnowing",
+        "✏️  I know what I want — enter a custom goal",
+      );
+      if (existingBeadCount > 0) {
+        discoveryChoices.push(`🗑️ Clear beads — permanently delete all ${existingBeadCount} open bead(s) and start fresh`);
+      }
+      discoveryChoices.push("❌ Cancel");
+
       const discoveryMode = await ctx.ui.select(
         "How should we discover improvement ideas?",
-        [
-          "💡 Standard discovery — generate 10-15 scored ideas",
-          "🔬 Deep discovery (30→5→15 funnel) — broader brainstorm with competitive winnowing",
-          "✏️  I know what I want — enter a custom goal",
-        ]
+        discoveryChoices
       );
 
       if (discoveryMode?.startsWith("✏️")) {
@@ -432,6 +453,64 @@ export function registerProfileTool(oc: OrchestratorContext) {
             text: `**Workflow:** ${roadmap}\n\n**NEXT: Call \`orch_select\` NOW to present these ${finalIdeas.length} ideas to the user.**\n\n---\n\n🔬 Deep discovery complete (30→5→${allIdeas.length} funnel, ${finalIdeas.length} selected)\n\n### Top Ideas (tier: top)\n${finalIdeas.filter(i => i.tier === "top").map((i, n) => `${n + 1}. **${i.title}** [${i.category}] — ${i.description}`).join("\n")}\n\n### Complementary Ideas (tier: honorable)\n${finalIdeas.filter(i => i.tier !== "top").map((i, n) => `${n + 1}. **${i.title}** [${i.category}] — ${i.description}`).join("\n")}`,
           }],
           details: { profile, scanResult, funnel: true, rawCount: rawIdeas.length, winnowedCount: top5.length, expandedCount: expandedIdeas.length, selectedCount: finalIdeas.length },
+        };
+      }
+
+      // Work on existing beads
+      if (discoveryMode?.startsWith("▶️")) {
+        oc.orchestratorActive = true;
+        oc.setPhase("implementing", ctx);
+        oc.persistState();
+        const { implementerInstructions } = await import("../prompts.js");
+        const { readMemory } = await import("../memory.js");
+        const { readyBeads } = await import("../beads.js");
+        const memRules = readMemory(ctx.cwd);
+        // Pick the first ready (unblocked) bead
+        const ready = await readyBeads(oc.pi, ctx.cwd);
+        const nextBead = ready[0];
+        if (!nextBead) {
+          return {
+            content: [{ type: "text", text: "No ready beads found (all may be blocked by dependencies). Run `br ready` to check." }],
+            details: { profile, scanResult },
+          };
+        }
+        const beadProfile = oc.state.repoProfile ?? profile;
+        const prevResults = Object.values(oc.state.beadResults ?? {});
+        return {
+          content: [{
+            type: "text",
+            text: implementerInstructions(nextBead, beadProfile, prevResults, memRules),
+          }],
+          details: { profile, scanResult, implementingBead: nextBead.id },
+        };
+      }
+
+      // Cancel
+      if (!discoveryMode || discoveryMode.startsWith("❌")) {
+        oc.orchestratorActive = false;
+        oc.setPhase("idle", ctx);
+        oc.persistState();
+        return {
+          content: [{ type: "text", text: "Orchestration cancelled." }],
+          details: { profile, scanResult, cancelled: true },
+        };
+      }
+
+      // Clear beads
+      if (discoveryMode.startsWith("🗑️")) {
+        if (existingBeadIds.length > 0) {
+          try {
+            await oc.pi.exec("br", ["delete", ...existingBeadIds, "--force"], { cwd: ctx.cwd, timeout: 10000 });
+            ctx.ui.notify(`🗑️ Deleted ${existingBeadIds.length} bead(s).`, "info");
+          } catch {
+            ctx.ui.notify("⚠️ Failed to delete beads — try \`br delete --force\` manually.", "warning");
+          }
+        }
+        oc.setPhase("idle", ctx);
+        oc.persistState();
+        return {
+          content: [{ type: "text", text: `🗑️ Cleared ${existingBeadIds.length} bead(s). Run \`/orchestrate\` again to start fresh.` }],
+          details: { profile, scanResult, cleared: true },
         };
       }
 

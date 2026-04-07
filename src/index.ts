@@ -277,33 +277,38 @@ export default function (pi: ExtensionAPI) {
     if (lastStateEntry) {
         state = lastStateEntry;
 
-        // If a previous orchestration was mid-flight, notify user instead of silent reset
-        if (state.phase === "iterating" || state.phase === "implementing" || state.phase === "reviewing") {
-          const openBeads = (state.activeBeadIds ?? []).filter(
-            id => !state.beadResults?.[id] || state.beadResults[id].status !== "success"
-          );
-          const completedCount = Object.values(state.beadResults ?? {}).filter(r => r.status === "success").length;
-          const totalCount = state.activeBeadIds?.length ?? 0;
-          const progressStr = totalCount > 0 ? ` (${completedCount}/${totalCount} beads completed)` : "";
-          
+        // Use stage detection for a richer, phase-aware session-restore notification.
+        // We don't have live bead data here (async read would be needed), so we
+        // derive counts from the persisted state for now — the full live read
+        // happens when the user runs /orchestrate.
+        const { detectSessionStage, formatSessionContext } = await import("./session-state.js");
+        // Build a lightweight bead array from persisted ids + results for stage detection
+        const persistedBeads = (state.activeBeadIds ?? []).map(id => ({
+          id,
+          title: "",
+          description: "",
+          status: (state.beadResults?.[id]?.status === "success" ? "closed" : "open") as "open" | "closed" | "in_progress" | "deferred",
+          priority: 0,
+          type: "task",
+          labels: [] as string[],
+        }));
+        // Mark the current bead as in_progress if known
+        if (state.currentBeadId) {
+          const cur = persistedBeads.find(b => b.id === state.currentBeadId);
+          if (cur && cur.status === "open") cur.status = "in_progress";
+        }
+        const stage = detectSessionStage(state, persistedBeads);
+
+        if (stage.phase !== "idle" && stage.phase !== "complete") {
+          const isActivePhase = stage.phase === "implementing" || stage.phase === "reviewing" || stage.phase === "iterating";
+          const stageCtx = formatSessionContext(stage);
           ctx.ui.notify(
-            `⚠️ Session interrupted during **${state.phase}** phase${progressStr}.\n` +
-            `${openBeads.length} bead(s) were in progress. ` +
+            (isActivePhase ? "⚠️ Session interrupted" : "🔄 Previous session detected") +
+            `\n\n${stageCtx}\n\n` +
             `Run \`/orchestrate\` to resume or \`/orchestrate-stop\` to reset.`,
-            "warning"
+            isActivePhase ? "warning" : "info"
           );
-          // Don't auto-reset - keep state for user to decide
-          orchestratorActive = false;
-        } else if (state.phase !== "idle" && state.phase !== "complete") {
-          // Session was in a non-active phase - show resume prompt
-          const beadProgress = state.activeBeadIds?.length
-            ? `${Object.values(state.beadResults ?? {}).filter(r => r.status === "success").length}/${state.activeBeadIds.length} beads`
-            : "";
-          ctx.ui.notify(
-            `🔄 Previous session detected: **${state.phase}** phase${beadProgress ? ` (${beadProgress})` : ""}.\n` +
-            `Run \`/orchestrate\` to resume or \`/orchestrate-stop\` to reset.`,
-            "info"
-          );
+          // Don't auto-activate — let the user decide via /orchestrate
           orchestratorActive = false;
         } else {
           orchestratorActive = state.phase !== "idle" && state.phase !== "complete";

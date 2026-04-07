@@ -110,7 +110,7 @@ async function isAgentMailReachable(pi: ExtensionAPI): Promise<boolean> {
     ], { timeout: 5000 });
     try {
       const parsed = JSON.parse(result.stdout.trim());
-      return parsed?.status === "ok" || parsed?.status === "healthy";
+      return parsed?.status === "ok" || parsed?.status === "healthy" || parsed?.status === "alive";
     } catch {
       return result.code === 0 && result.stdout.length > 0;
     }

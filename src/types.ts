@@ -263,6 +263,7 @@ export type OrchestratorPhase =
   | "discovering"
   | "awaiting_selection"
   | "planning"
+  | "researching"
   | "awaiting_plan_approval"
   | "creating_beads"
   | "refining_beads"
@@ -351,6 +352,22 @@ export interface OrchestratorState {
   planConvergenceScore?: number;
   /** Plan quality readiness score from the Plan Quality Oracle. */
   planReadinessScore?: import("./plan-quality.js").PlanQualityScore;
+
+  // ─── Research pipeline state ───────────────────────────────
+  /**
+   * Persisted across phases so a session restart can resume from the last
+   * completed phase rather than rerunning the full 7-phase pipeline.
+   */
+  researchState?: {
+    /** GitHub URL being studied. */
+    url: string;
+    /** Short name extracted from the URL (e.g. "myrepo"). */
+    externalName: string;
+    /** Session-relative artifact path for the proposal markdown. */
+    artifactName: string;
+    /** Ordered list of phase names that have already completed. */
+    phasesCompleted: string[];
+  };
 
   // ─── Ideation funnel state ─────────────────────────────────
   /** Raw ideas from broad ideation (phase 1 of 30→5→15 funnel). */

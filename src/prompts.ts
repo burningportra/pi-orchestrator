@@ -147,7 +147,7 @@ If worktree creation fails, the orchestrator falls back to sequential execution 
 1. Call \`orch_profile\` to scan the repository
 2. Call \`orch_discover\` to generate project ideas from the profile
 3. Call \`orch_select\` to present ideas to the user and get their choice
-4. Create beads for the selected goal via \`br create\` in bash, setting dependencies with \`br dep add\`
+4. Create beads for the selected goal via \`br create\` in bash, setting dependencies with \`br dep add\`, then call \`orch_approve_beads\` to enter the bead approval menu
 5. For each bead, implement using code tools (read, write, edit, bash), then call \`orch_review\`
 6. After all beads pass review, the orchestrator runs post-completion checks and offers follow-up actions
 ${coordinationSection}
@@ -645,7 +645,8 @@ export function implementerInstructions(
   bead: Bead,
   profile: RepoProfile,
   previousResults: BeadResult[],
-  cassMemory?: string
+  cassMemory?: string,
+  episodicContext?: string
 ): string {
   const prevContext =
     previousResults.length > 0
@@ -669,7 +670,12 @@ export function implementerInstructions(
       ? `\n## Memory from Prior Orchestrations\n${cassMemory.trim()}\n`
       : "";
 
-  return `## Implement Bead ${bead.id}: ${bead.title}${memorySection}
+  const episodicSection =
+    episodicContext && episodicContext.trim().length > 0
+      ? `\n## Past Session Examples\n${episodicContext.trim()}\n`
+      : "";
+
+  return `## Implement Bead ${bead.id}: ${bead.title}${memorySection}${episodicSection}
 
 ### Description
 ${bead.description}
@@ -707,14 +713,20 @@ After the fresh-eyes review, call \`orch_review\` with a summary of what you did
 export function reviewerInstructions(
   bead: Bead,
   implementationSummary: string,
-  profile: RepoProfile
+  profile: RepoProfile,
+  episodicContext?: string
 ): string {
   const criteriaLines = bead.description
     .split("\n")
     .filter((line) => line.trim().startsWith("- [ ]") || line.trim().startsWith("- [x]"))
     .map((line) => line.trim().replace(/^- \[.\] /, ""));
 
-  return `## Review Bead ${bead.id}: ${bead.title}
+  const episodicSection =
+    episodicContext && episodicContext.trim().length > 0
+      ? `\n## Past Session Examples\n${episodicContext.trim()}\n`
+      : "";
+
+  return `## Review Bead ${bead.id}: ${bead.title}${episodicSection}
 
 ### Acceptance Criteria
 ${criteriaLines.length > 0 ? criteriaLines.map((c) => `- ${c}`).join("\n") : "See bead description."}
@@ -1214,6 +1226,58 @@ export function researchDeepenPrompt(): string {
 Decent start, but surface-level. Push further: more ambition, bolder ideas. Find genuinely surprising, high-impact possibilities.
 
 Go deeper.`;
+}
+
+/**
+ * Post-research handoff prompt — sent as a followUp after all research phases
+ * complete. Uses the same "NEXT: ... NOW" directive style as tool results so
+ * the agent immediately drives the full pipeline rather than just acknowledging.
+ */
+export function researchHandoffPrompt(
+  externalName: string,
+  selectedGoal: string,
+  artifactName: string,
+  phasesCompleted: number,
+  totalPhases: number,
+  hasRepoProfile: boolean
+): string {
+  const profileNote = hasRepoProfile
+    ? ""
+    : "\n\n> ⚠️ No repo profile found. `orch_approve_beads` will profile the repo automatically.";
+
+  return `## Research complete — execute the full pipeline now
+
+**Research for \`${externalName}\` finished** (${phasesCompleted}/${totalPhases} phases).${profileNote}
+
+The reimagined proposal is saved at \`${artifactName}\`.
+Goal: _"${selectedGoal}"_
+
+---
+
+## NEXT: Execute these steps in order, WITHOUT pausing or asking for confirmation.
+
+### Step 1 — Call \`orch_approve_beads\` NOW
+This reads the proposal, scores its quality, and optionally runs up to 4 refinement rounds.
+When it completes, it will return explicit \`br create\` commands — follow them exactly.
+
+### Step 2 — Create beads from the plan (as directed by Step 1)
+Use \`br create\` and \`br dep add\` as specified.
+Each bead must include:
+- A clear title and description
+- \`### Files:\` section listing every file it will touch
+- \`- [ ]\` acceptance criteria
+
+### Step 3 — Call \`orch_approve_beads\` again
+Quality-checks the created beads. Fixes shallow descriptions automatically.
+Approves the beads and transitions to the implementing phase.
+
+### Step 4 — Call \`orch_review\` to start implementing
+Picks the first ready bead and returns implementation instructions.
+Keep calling \`orch_review\` after each bead until all pass.
+
+---
+
+**Call \`orch_approve_beads\` now to begin.**`;
 }
 
 /** Step 3: Inversion analysis - what can WE do that THEY cannot? */

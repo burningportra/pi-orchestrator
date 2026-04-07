@@ -4,6 +4,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { OrchestratorContext } from "../types.js";
 import { implementerInstructions, realityCheckInstructions, randomExplorationInstructions, SWARM_STAGGER_DELAY_MS } from "../prompts.js";
 import { readMemory } from "../memory.js";
+import { getEpisodicContext, sanitiseSlug } from "../episodic-memory.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 import { runGuidedGates } from "../gates.js";
 import { getParallelModelAssignments, resolveExecutionMode } from "./shared.js";
@@ -66,6 +67,15 @@ export function registerReviewTool(oc: OrchestratorContext) {
             oc.setPhase("complete", ctx);
             oc.persistState();
             try { const { reflectMemory } = await import("../memory.js"); reflectMemory(ctx.cwd); } catch { /* best-effort */ }
+            // Mine session into MemPalace (best-effort, fire-and-forget)
+            try {
+              const { mineSession, sanitiseSlug } = await import("../episodic-memory.js");
+              const sessionFile = ctx.sessionManager.getSessionFile();
+              const projectSlug = sanitiseSlug(ctx.cwd);
+              if (sessionFile && mineSession(sessionFile, projectSlug)) {
+                ctx.ui.notify("📚 Session mined into MemPalace");
+              }
+            } catch { /* best-effort */ }
             return {
               content: [{ type: "text", text:
                 `✅ **Orchestration complete** — two consecutive clean review rounds.\n\n` +
@@ -333,6 +343,8 @@ export function registerReviewTool(oc: OrchestratorContext) {
           const allBeads = await readBeads(oc.pi, ctx.cwd);
           const beadResults = Object.values(oc.state.beadResults ?? {});
           const goal = oc.state.selectedGoal ?? "Unknown goal";
+          const rcEpisodic1 = getEpisodicContext(bead.title, sanitiseSlug(ctx.cwd));
+          const rcEpisodicSection1 = rcEpisodic1 ? `\n\n${rcEpisodic1}` : "";
           const agentConfigs = [
             {
               name: `fresh-eyes-${params.beadId}-r${round}`,
@@ -352,7 +364,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
             {
               name: `reality-check-${params.beadId}-r${round}`,
               cwd: ctx.cwd,
-              task: `${rePresPreamble(`reality-check-${params.beadId}-r${round}`)}Reality checker for bead ${params.beadId} (round ${round}).\n\n${realityCheckInstructions(goal, allBeads, beadResults)}\n\nDo NOT edit code. Just report your findings as text.`,
+              task: `${rePresPreamble(`reality-check-${params.beadId}-r${round}`)}Reality checker for bead ${params.beadId} (round ${round}).\n\n${realityCheckInstructions(goal, allBeads, beadResults)}${rcEpisodicSection1}\n\nDo NOT edit code. Just report your findings as text.`,
             },
             {
               name: `random-explore-${params.beadId}-r${round}`,
@@ -407,6 +419,8 @@ export function registerReviewTool(oc: OrchestratorContext) {
           const allBeads = await readBeads(oc.pi, ctx.cwd);
           const beadResults = Object.values(oc.state.beadResults ?? {});
           const goal = oc.state.selectedGoal ?? "Unknown goal";
+          const rcEpisodic2 = getEpisodicContext(bead.title, sanitiseSlug(ctx.cwd));
+          const rcEpisodicSection2 = rcEpisodic2 ? `\n\n${rcEpisodic2}` : "";
           const agentConfigs = [
             {
               name: `fresh-eyes-${params.beadId}-r${round}`,
@@ -426,7 +440,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
             {
               name: `reality-check-${params.beadId}-r${round}`,
               cwd: ctx.cwd,
-              task: `${hitMePreamble(`reality-check-${params.beadId}-r${round}`)}Reality checker for bead ${params.beadId} (round ${round}).\n\n${realityCheckInstructions(goal, allBeads, beadResults)}\n\nDo NOT edit code. Just report your findings as text.`,
+              task: `${hitMePreamble(`reality-check-${params.beadId}-r${round}`)}Reality checker for bead ${params.beadId} (round ${round}).\n\n${realityCheckInstructions(goal, allBeads, beadResults)}${rcEpisodicSection2}\n\nDo NOT edit code. Just report your findings as text.`,
             },
             {
               name: `random-explore-${params.beadId}-r${round}`,
@@ -498,9 +512,10 @@ export function registerReviewTool(oc: OrchestratorContext) {
 
           const prevResults = Object.values(oc.state.beadResults ?? {});
           const cassMemory = readMemory(ctx.cwd, nextBead.title);
+          const episodic = getEpisodicContext(nextBead.title, sanitiseSlug(ctx.cwd));
           // Safe fallback: repoProfile may be undefined after session resume without orch_profile
           const safeProfile = oc.state.repoProfile ?? { name: "", languages: [], frameworks: [], keyFiles: {} as Record<string, string>, testFramework: undefined, ciSystem: undefined, packageManager: undefined, hasGit: true, todos: [], recentCommits: [], entrypoints: [], structure: "", hasTests: false, hasDocs: false, hasCI: false };
-          const implInstr = implementerInstructions(nextBead, safeProfile, prevResults, cassMemory || undefined);
+          const implInstr = implementerInstructions(nextBead, safeProfile, prevResults, cassMemory || undefined, episodic || undefined);
 
           ctx.ui.notify(`✅ Bead ${params.beadId} passed! Moving to bead ${nextBead.id} (${nextBead.title}).`, "info");
 
@@ -546,8 +561,9 @@ export function registerReviewTool(oc: OrchestratorContext) {
               : "";
             const prevResults = Object.values(oc.state.beadResults ?? {});
             const cassMemory = readMemory(ctx.cwd, b.title);
+            const episodic = getEpisodicContext(b.title, sanitiseSlug(ctx.cwd));
             const swarmProfile = oc.state.repoProfile ?? { name: "", languages: [], frameworks: [], keyFiles: {} as Record<string, string>, testFramework: undefined, ciSystem: undefined, packageManager: undefined, hasGit: true, todos: [], recentCommits: [], entrypoints: [], structure: "", hasTests: false, hasDocs: false, hasCI: false };
-            const implInstr = implementerInstructions(b, swarmProfile, prevResults, cassMemory || undefined);
+            const implInstr = implementerInstructions(b, swarmProfile, prevResults, cassMemory || undefined, episodic || undefined);
             const branchModeInstructions = singleBranchMode
               ? "\n\n🤝 Single-branch mode: work in the shared checkout at this cwd. Do not assume an isolated worktree."
               : "\n\n🌿 Worktree mode: if the orchestrator provides an isolated checkout, do your work there.";
@@ -616,7 +632,8 @@ export function registerReviewTool(oc: OrchestratorContext) {
 
               const prevResults = Object.values(oc.state.beadResults ?? {});
               const resumeProfile = oc.state.repoProfile ?? { name: "", languages: [], frameworks: [], keyFiles: {} as Record<string, string>, testFramework: undefined, ciSystem: undefined, packageManager: undefined, hasGit: true, todos: [], recentCommits: [], entrypoints: [], structure: "", hasTests: false, hasDocs: false, hasCI: false };
-              const implInstr = implementerInstructions(nextBead, resumeProfile, prevResults);
+              const episodic = getEpisodicContext(nextBead.title, sanitiseSlug(ctx.cwd));
+              const implInstr = implementerInstructions(nextBead, resumeProfile, prevResults, undefined, episodic || undefined);
 
               return {
                 content: [

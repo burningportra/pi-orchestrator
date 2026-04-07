@@ -11,6 +11,7 @@ export const PHASE_EMOJI: Record<OrchestratorPhase, string> = {
   discovering: "💡",
   awaiting_selection: "🎯",
   planning: "📝",
+  researching: "🔭",
   awaiting_plan_approval: "📋",
   creating_beads: "🔨",
   refining_beads: "🔍",

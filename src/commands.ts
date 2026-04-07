@@ -1,5 +1,7 @@
 import type { CoordinationMode, OrchestratorContext, Bead } from './types.js';
 import { createInitialState } from './types.js';
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { join, basename } from 'path';
 
 /**
  * Format staleness info for open beads, showing when they were created.
@@ -62,6 +64,105 @@ function formatAge(timestamp?: string): string {
   return `${Math.floor(ageDays / 365)}y`;
 }
 
+// ─── Saved plan discovery ──────────────────────────────────────────────────
+
+/**
+ * A saved plan artifact found on disk.
+ */
+interface SavedPlan {
+  /** Display label for the UI selection list */
+  label: string;
+  /** Absolute path to the markdown file */
+  path: string;
+  /** Artifact name relative to its session artifact root (e.g. "plans/foo.md") */
+  artifactName: string;
+  /** ISO timestamp of last modification */
+  mtime: Date;
+}
+
+/** Sub-plan stems that are intermediate outputs, not final plans. */
+const SUB_PLAN_STEMS = new Set(['correctness', 'robustness', 'ergonomics']);
+const SUB_PLAN_SUFFIXES = ['-original'];
+
+/** Push a plan entry if the file looks like a final plan document. */
+function pushPlanEntry(plans: SavedPlan[], fullPath: string, file: string, artifactName: string, source: string): void {
+  const stem = file.replace(/\.md$/, '');
+  if (SUB_PLAN_STEMS.has(stem)) return;
+  if (SUB_PLAN_SUFFIXES.some(s => stem.endsWith(s))) return;
+  let mtime = new Date(0);
+  try { mtime = statSync(fullPath).mtime; } catch { /* ignore */ }
+  const ageDays = Math.floor((Date.now() - mtime.getTime()) / (24 * 60 * 60 * 1000));
+  const ageStr = ageDays < 1 ? 'today' : ageDays < 7 ? `${ageDays}d ago` : ageDays < 30 ? `${Math.floor(ageDays / 7)}w ago` : `${Math.floor(ageDays / 30)}mo ago`;
+  plans.push({ label: `${stem} [${source}] (${ageStr})`, path: fullPath, artifactName, mtime });
+}
+
+/**
+ * Scan for saved plan documents from two sources:
+ *  1. Session artifact directories under sessionDir (artifacts written by orch_plan)
+ *  2. The project’s own docs/ directory (any .md file in docs/ or docs/plans/)
+ *
+ * Sub-plan files (correctness / robustness / ergonomics) are excluded.
+ * Results are sorted most-recent first.
+ */
+function findSavedPlans(sessionDir: string, projectCwd?: string): SavedPlan[] {
+  const plans: SavedPlan[] = [];
+  const seen = new Set<string>();
+
+  // ── 1. Session artifact directories ────────────────────────────────────
+  if (existsSync(sessionDir)) {
+    let sessionEntries: string[] = [];
+    try { sessionEntries = readdirSync(sessionDir); } catch { /* ignore */ }
+
+    for (const sessionId of sessionEntries) {
+      const artifactsDir = join(sessionDir, sessionId, 'artifacts');
+      if (!existsSync(artifactsDir)) continue;
+      let artifactSessions: string[] = [];
+      try { artifactSessions = readdirSync(artifactsDir); } catch { continue; }
+      for (const artifactSessionId of artifactSessions) {
+        const plansDir = join(artifactsDir, artifactSessionId, 'plans');
+        if (!existsSync(plansDir)) continue;
+        let planFiles: string[] = [];
+        try { planFiles = readdirSync(plansDir); } catch { continue; }
+        for (const file of planFiles) {
+          if (!file.endsWith('.md')) continue;
+          const fullPath = join(plansDir, file);
+          if (seen.has(fullPath)) continue;
+          seen.add(fullPath);
+          pushPlanEntry(plans, fullPath, file, `plans/${file}`, 'session');
+        }
+      }
+    }
+  }
+
+  // ── 2. Project docs/ directory ────────────────────────────────────────
+  if (projectCwd) {
+    const docsDirs = [
+      join(projectCwd, 'docs'),
+      join(projectCwd, 'docs', 'plans'),
+      join(projectCwd, 'plans'),
+    ];
+    for (const dir of docsDirs) {
+      if (!existsSync(dir)) continue;
+      let files: string[] = [];
+      try { files = readdirSync(dir); } catch { continue; }
+      for (const file of files) {
+        if (!file.endsWith('.md')) continue;
+        const fullPath = join(dir, file);
+        // Only scan top-level files in each dir (no recursion)
+        try { if (!statSync(fullPath).isFile()) continue; } catch { continue; }
+        if (seen.has(fullPath)) continue;
+        seen.add(fullPath);
+        // Relative path from cwd for the artifactName
+        const rel = fullPath.replace(projectCwd + '/', '');
+        pushPlanEntry(plans, fullPath, file, rel, 'docs');
+      }
+    }
+  }
+
+  // Most-recent first
+  return plans.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+}
+
 function parseOrchestrateArgs(rawArgs?: string): { goalArg?: string; coordinationMode?: CoordinationMode } {
   const input = rawArgs?.trim();
   if (!input) return {};
@@ -88,6 +189,7 @@ export function registerCommands(oc: OrchestratorContext) {
       "Start the repo-aware multi-agent orchestrator",
     handler: async (args, ctx) => {
       const { readBeads } = await import("./beads.js");
+      const { detectSessionStage, formatSessionContext, buildResumeLabel } = await import("./session-state.js");
       
       // Check for existing state that can be resumed
       const hasExistingState = oc.state.phase !== "idle" && oc.state.phase !== "complete";
@@ -99,50 +201,251 @@ export function registerCommands(oc: OrchestratorContext) {
       
       // Resume vs Fresh fork
       if (hasExistingState || hasActiveBeads) {
-        const completedCount = Object.values(oc.state.beadResults ?? {}).filter(r => r.status === "success").length;
-        const totalCount = oc.state.activeBeadIds?.length ?? existingBeads.length;
-        const progressStr = totalCount > 0 ? ` (${completedCount}/${totalCount} beads done)` : "";
         const openBeads = existingBeads.filter(b => b.status === "open" || b.status === "in_progress");
         const openCount = openBeads.length;
-        
-        // Show staleness info for open beads
+        const inProgressBeads = existingBeads.filter(b => b.status === "in_progress");
+        const staleBeads = openBeads.filter(b => {
+          if (!b.created_at) return true;
+          const ageDays = (Date.now() - new Date(b.created_at).getTime()) / (24 * 60 * 60 * 1000);
+          return ageDays >= 7;
+        });
+
+        // Detect/infer exactly which stage the user is in
+        const stage = detectSessionStage(oc.state, existingBeads);
+        const currentBeadTitle = stage.currentBeadId
+          ? existingBeads.find(b => b.id === stage.currentBeadId)?.title
+          : undefined;
+
+        // Build a rich context block for the prompt header
+        const stageContext = formatSessionContext(stage, currentBeadTitle);
         const stalenessInfo = formatBeadStaleness(openBeads);
         
+        // Build context-aware option list
+        const choices: string[] = [];
+
+        // Discover saved plans for this project
+        const sessionDir = ctx.sessionManager.getSessionDir();
+        const savedPlans = findSavedPlans(sessionDir, ctx.cwd);
+
+        // ── Continue working ──
+        choices.push(buildResumeLabel(stage));
+        choices.push(`🎯 Pick a bead — choose a specific bead to work on`);
+        if (inProgressBeads.length > 0) {
+          choices.push(`🔁 Reset stuck — unblock ${inProgressBeads.length} in-progress bead(s) back to open`);
+        }
+
+        // ── Adjust the plan ──
+        choices.push(`➕ Extend — keep existing beads, add new ones via planning`);
+        if (savedPlans.length > 0) {
+          choices.push(`📄 Load saved plan — pick from ${savedPlans.length} previously generated plan(s)`);
+        }
+        if (staleBeads.length > 0) {
+          choices.push(`🧹 Prune stale — archive ${staleBeads.length} stale bead(s) ≥7d, keep the rest`);
+        }
+        choices.push(`🔧 Sync beads — pull latest from JSONL (br sync --import-only)`);
+
+        // ── Start over ──
+        choices.push(`🔄 Fresh — archive all open beads as deferred, start new planning`);
+        choices.push(`🗑️ Clear — permanently delete all ${existingBeads.length} bead(s), start from scratch`);
+
+        choices.push(`❌ Cancel`);
+
+        // Show rich context: stage summary + bead staleness
+        const separator = stalenessInfo ? `\n${stalenessInfo}` : "";
         const choice = await ctx.ui.select(
-          `Existing orchestration detected${progressStr}\n${stalenessInfo}`,
-          [
-            `📂 Resume — continue with ${openCount} open bead(s)`,
-            "🔄 Fresh — archive current beads and start over",
-            "🗑️ Clear — delete all beads and start fresh",
-            "❌ Cancel",
-          ]
+          `Existing orchestration detected\n\n${stageContext}${separator}`,
+          choices
         );
-        
+
+        // ── Handle: Resume ────────────────────────────────────────
         if (choice?.startsWith("📂")) {
-          // Resume: restore active state and continue from where we left off
           oc.orchestratorActive = true;
-          // Only change phase if it was reset to idle/complete; otherwise keep existing phase
+          // Sync the persisted phase to the detected stage if it was idle/complete
           if (oc.state.phase === "idle" || oc.state.phase === "complete") {
-            // Default to implementing if we have beads, otherwise start fresh
-            oc.setPhase(hasActiveBeads ? "implementing" : "profiling", ctx);
+            oc.setPhase(stage.phase !== "idle" && stage.phase !== "complete" ? stage.phase : (hasActiveBeads ? "implementing" : "profiling"), ctx);
           }
           oc.persistState();
-          
-          // Tailor resume message based on current phase
-          const phaseMessages: Record<string, string> = {
-            profiling: "Resuming orchestration. Call `orch_profile` to continue scanning.",
-            discovering: "Resuming orchestration. Call `orch_discover` to continue generating ideas.",
-            awaiting_selection: "Resuming orchestration. Call `orch_select` to pick a goal.",
-            creating_beads: "Resuming orchestration. Continue creating beads with `br create`.",
-            implementing: "Resuming orchestration. Call `orch_review` to check bead status and continue.",
-            reviewing: "Resuming orchestration. Call `orch_review` to continue review.",
-            iterating: "Resuming orchestration. Call `orch_review` to continue iteration.",
-          };
-          const resumeMsg = phaseMessages[oc.state.phase] ?? "Resuming orchestration. Call `orch_review` to check status.";
-          pi.sendUserMessage(resumeMsg, { deliverAs: "followUp" });
+          pi.sendUserMessage(stage.resumePrompt, { deliverAs: "followUp" });
           return;
+
+        // ── Handle: Pick a bead ───────────────────────────────────
+        } else if (choice?.startsWith("🎯")) {
+          if (openBeads.length === 0) {
+            ctx.ui.notify("No open beads to pick from.", "info");
+            return;
+          }
+          const beadChoices = openBeads.map(b => {
+            const status = b.status === "in_progress" ? " 🔄" : "";
+            const age = b.created_at ? ` (${formatAge(b.created_at)})` : "";
+            const title = b.title.length > 60 ? b.title.slice(0, 57) + "..." : b.title;
+            return `${b.id}${status}${age} — ${title}`;
+          });
+          const beadChoice = await ctx.ui.select("Select a bead to work on:", beadChoices);
+          if (!beadChoice) {
+            ctx.ui.notify("Orchestration cancelled.", "info");
+            return;
+          }
+          const beadId = beadChoice.split(/\s+/)[0];
+          // Mark it in-progress
+          try {
+            await pi.exec("br", ["update", beadId, "--status", "in_progress"], { cwd: ctx.cwd, timeout: 5000 });
+          } catch { /* best effort */ }
+          oc.orchestratorActive = true;
+          oc.setPhase("implementing", ctx);
+          oc.persistState();
+          const { implementerInstructions } = await import("./prompts.js");
+          const { readMemory } = await import("./memory.js");
+          const memRules = readMemory(ctx.cwd);
+          const targetBead = openBeads.find(b => b.id === beadId);
+          if (targetBead) {
+            const profile = oc.state.repoProfile ?? { name: "", languages: [], frameworks: [], structure: "", entrypoints: [], recentCommits: [], hasTests: false, hasDocs: false, hasCI: false, todos: [], keyFiles: {} };
+            const prevResults = Object.values(oc.state.beadResults ?? {});
+            pi.sendUserMessage(
+              implementerInstructions(targetBead, profile, prevResults, memRules),
+              { deliverAs: "followUp" }
+            );
+          } else {
+            pi.sendUserMessage(
+              `Implement bead **${beadId}**. Run \`br show ${beadId}\` to see its details, then implement it and call \`orch_review\` when done.`,
+              { deliverAs: "followUp" }
+            );
+          }
+          return;
+
+        // ── Handle: Reset stuck ───────────────────────────────────
+        } else if (choice?.startsWith("🔁")) {
+          let resetCount = 0;
+          for (const bead of inProgressBeads) {
+            try {
+              await pi.exec("br", ["update", bead.id, "--status", "open"], { cwd: ctx.cwd, timeout: 5000 });
+              resetCount++;
+            } catch { /* best effort */ }
+          }
+          ctx.ui.notify(`🔁 Reset ${resetCount} bead(s) from in-progress → open.`, "info");
+          oc.orchestratorActive = true;
+          if (oc.state.phase === "idle" || oc.state.phase === "complete") {
+            oc.setPhase("implementing", ctx);
+          }
+          oc.persistState();
+          pi.sendUserMessage(
+            `Resumed after resetting ${resetCount} stuck bead(s). Call \`orch_review\` to pick the next bead and continue.`,
+            { deliverAs: "followUp" }
+          );
+          return;
+
+        // ── Handle: Extend ────────────────────────────────────────
+        } else if (choice?.startsWith("➕")) {
+          // Sub-choice: add new beads or continue with existing ones
+          const extendChoice = await ctx.ui.select(
+            `Extend plan — ${openCount} open bead(s) active`,
+            [
+              `💡 New ideas — scan repo and propose new beads to add`,
+              `▶️  Continue — keep working on existing beads`,
+            ]
+          );
+          if (!extendChoice) {
+            ctx.ui.notify("Orchestration cancelled.", "info");
+            return;
+          }
+          oc.orchestratorActive = true;
+          if (extendChoice.startsWith("💡")) {
+            // Keep existing beads; go back to discovering/planning to add more
+            oc.setPhase("discovering", ctx);
+            oc.persistState();
+            pi.sendUserMessage(
+              `Extending existing plan with ${openCount} open bead(s) still active.\n\n` +
+              `Call \`orch_discover\` to generate new ideas, then add beads with \`br create\`. ` +
+              `Existing open beads will not be touched.`,
+              { deliverAs: "followUp" }
+            );
+          } else {
+            // Continue implementing the existing open beads
+            oc.setPhase("implementing", ctx);
+            oc.persistState();
+            pi.sendUserMessage(
+              `Continuing with ${openCount} open bead(s). Call \`orch_review\` to pick the next bead and implement it.`,
+              { deliverAs: "followUp" }
+            );
+          }
+          return;
+
+        // ── Handle: Prune stale ───────────────────────────────────
+        } else if (choice?.startsWith("🧹")) {
+          let pruneCount = 0;
+          for (const bead of staleBeads) {
+            try {
+              await pi.exec("br", ["update", bead.id, "--status", "deferred"], { cwd: ctx.cwd, timeout: 5000 });
+              pruneCount++;
+            } catch { /* best effort */ }
+          }
+          ctx.ui.notify(`🧹 Archived ${pruneCount} stale bead(s) as deferred.`, "info");
+          const remaining = openBeads.filter(b => !staleBeads.find(s => s.id === b.id));
+          if (remaining.length === 0) {
+            ctx.ui.notify("No active beads remain — starting fresh planning.", "info");
+            // Fall through to fresh start below
+          } else {
+            oc.orchestratorActive = true;
+            if (oc.state.phase === "idle" || oc.state.phase === "complete") {
+              oc.setPhase("implementing", ctx);
+            }
+            oc.persistState();
+            pi.sendUserMessage(
+              `Pruned ${pruneCount} stale bead(s). ${remaining.length} bead(s) remain active.\n\n` +
+              `Call \`orch_review\` to continue implementing: ${remaining.map(b => b.id).join(", ")}.`,
+              { deliverAs: "followUp" }
+            );
+            return;
+          }
+
+        // ── Handle: Load saved plan ────────────────────────────────
+        } else if (choice?.startsWith("📄 Load saved plan")) {
+          const planChoices = savedPlans.map(p => p.label);
+          planChoices.push("← Back");
+          const planChoice = await ctx.ui.select("Select a saved plan:", planChoices);
+          if (!planChoice || planChoice === "← Back") {
+            ctx.ui.notify("Plan selection cancelled.", "info");
+            return;
+          }
+          const selectedIdx = planChoices.indexOf(planChoice);
+          const selectedPlan = savedPlans[selectedIdx];
+          if (!selectedPlan) { ctx.ui.notify("Plan not found.", "warning"); return; }
+          let planContent = "";
+          try { planContent = readFileSync(selectedPlan.path, "utf8"); } catch {
+            ctx.ui.notify(`⚠️ Could not read plan: ${selectedPlan.path}`, "warning");
+            return;
+          }
+          oc.orchestratorActive = true;
+          oc.state.planDocument = selectedPlan.artifactName;
+          oc.setPhase("creating_beads", ctx);
+          oc.persistState();
+          const { beadCreationPrompt: _bcp, formatRepoProfile: _frp } = await import("./prompts.js");
+          const _goal = oc.state.selectedGoal ?? selectedPlan.label;
+          const _repoCtx = oc.state.repoProfile ? _frp(oc.state.repoProfile) : "";
+          pi.sendUserMessage(
+            `**Loaded saved plan: ${selectedPlan.label}**\n\n` +
+            `Create beads from this plan using \`br create\` and \`br dep add\` in bash.\n\n` +
+            `---\n\n${planContent}\n\n---\n\n` +
+            _bcp(_goal, _repoCtx, oc.state.constraints),
+            { deliverAs: "followUp" }
+          );
+          return;
+
+        // ── Handle: Sync beads ────────────────────────────────────
+        } else if (choice?.startsWith("🔧 Sync beads")) {
+          ctx.ui.notify("🔄 Syncing beads from JSONL…", "info");
+          try {
+            const syncResult = await pi.exec("br", ["sync", "--import-only"], { cwd: ctx.cwd, timeout: 15000 });
+            const msg = (syncResult.stdout.trim() || syncResult.stderr.trim() || "Sync complete.").slice(0, 120);
+            ctx.ui.notify(`✅ Bead sync done: ${msg}`, "info");
+          } catch (err: any) {
+            ctx.ui.notify(`⚠️ Sync failed: ${err?.message ?? err}`, "warning");
+          }
+          // Re-enter the /orchestrate menu so user can pick next action
+          pi.sendUserMessage("/orchestrate", { deliverAs: "followUp" });
+          return;
+
+        // ── Handle: Fresh ─────────────────────────────────────────
         } else if (choice?.startsWith("🔄")) {
-          // Archive: defer all open beads, then start fresh
           for (const bead of existingBeads) {
             if (bead.status === "open" || bead.status === "in_progress") {
               try {
@@ -152,8 +455,9 @@ export function registerCommands(oc: OrchestratorContext) {
           }
           ctx.ui.notify(`📦 Archived ${openCount} open bead(s) as deferred.`, "info");
           // Fall through to fresh start
+
+        // ── Handle: Clear ─────────────────────────────────────────
         } else if (choice?.startsWith("🗑️")) {
-          // Clear: delete all beads in one shot, then start fresh
           const allCount = existingBeads.length;
           try {
             const ids = existingBeads.map((b) => b.id);
@@ -163,6 +467,8 @@ export function registerCommands(oc: OrchestratorContext) {
             ctx.ui.notify("⚠️ Failed to delete beads.", "warning");
           }
           // Fall through to fresh start
+
+        // ── Handle: Cancel ────────────────────────────────────────
         } else {
           ctx.ui.notify("Orchestration cancelled.", "info");
           return;
@@ -185,6 +491,61 @@ export function registerCommands(oc: OrchestratorContext) {
       }
       oc.orchestratorActive = true;
       oc.persistState();
+
+      // ── Fresh start: offer to load a saved plan before profiling ──
+      if (!goalArg) {
+        const freshSessionDir = ctx.sessionManager.getSessionDir();
+        const freshPlans = findSavedPlans(freshSessionDir, ctx.cwd);
+        if (freshPlans.length > 0) {
+          const freshChoices = [
+            "🔍 Profile repo — scan, discover ideas, then plan (default)",
+            `📄 Load saved plan — pick from ${freshPlans.length} previously generated plan(s)`,
+          ];
+          const freshChoice = await ctx.ui.select(
+            "🌟 Start fresh orchestration:",
+            freshChoices
+          );
+          if (freshChoice?.startsWith("📄 Load saved plan")) {
+            const planChoices = freshPlans.map(p => p.label);
+            planChoices.push("← Cancel");
+            const planChoice = await ctx.ui.select("Select a saved plan:", planChoices);
+            if (planChoice && planChoice !== "← Cancel") {
+              const selectedIdx = planChoices.indexOf(planChoice);
+              const selectedPlan = freshPlans[selectedIdx];
+              if (selectedPlan) {
+                let planContent = "";
+                try { planContent = readFileSync(selectedPlan.path, "utf8"); } catch {
+                  ctx.ui.notify(`⚠️ Could not read plan: ${selectedPlan.path}`, "warning");
+                }
+                if (planContent) {
+                  oc.state.planDocument = selectedPlan.artifactName;
+                  oc.setPhase("creating_beads", ctx);
+                  oc.persistState();
+                  const { beadCreationPrompt: _bcp2, formatRepoProfile: _frp2 } = await import("./prompts.js");
+                  const _goal2 = selectedPlan.label;
+                  const _repoCtx2 = oc.state.repoProfile ? _frp2(oc.state.repoProfile) : "";
+                  pi.sendUserMessage(
+                    `**Loaded saved plan: ${selectedPlan.label}**\n\n` +
+                    `Create beads from this plan using \`br create\` and \`br dep add\` in bash.\n\n` +
+                    `---\n\n${planContent}\n\n---\n\n` +
+                    _bcp2(_goal2, _repoCtx2, []),
+                    { deliverAs: "followUp" }
+                  );
+                  return;
+                }
+              }
+            }
+            // Cancelled or failed — fall through to normal profile path
+          } else if (freshChoice === undefined) {
+            ctx.ui.notify("Orchestration cancelled.", "info");
+            oc.orchestratorActive = false;
+            oc.setPhase("idle", ctx);
+            oc.persistState();
+            return;
+          }
+          // freshChoice === profile or undefined/cancel — fall through
+        }
+      }
 
       if (goalArg) {
         pi.sendUserMessage(
@@ -644,9 +1005,10 @@ export function registerCommands(oc: OrchestratorContext) {
           "2. Deepen (push past conservative suggestions)\n" +
           "3. Inversion analysis (what can WE do that THEY can't?)\n" +
           "4. 5x blunder hunt\n" +
-          "5. Multi-model competing feedback\n" +
-          "6. Synthesize best feedback into final proposal\n" +
-          "7. Hand off to plan→beads→implement pipeline",
+          "5. User review (accept / edit / pause)\n" +
+          "6. Multi-model competing feedback\n" +
+          "7. Synthesize best feedback into final proposal\n" +
+          "Then: plan approval → bead creation → implementation loop",
           "info"
         );
         return;
@@ -654,48 +1016,78 @@ export function registerCommands(oc: OrchestratorContext) {
 
       const researchModule = await import("./research-pipeline.js");
       const { extractProjectName, runResearchPhase } = researchModule;
-      const { writeFileSync, mkdirSync } = await import("fs");
+      const { researchHandoffPrompt } = await import("./prompts.js");
+      const { writeFileSync, readFileSync, existsSync, mkdirSync } = await import("fs");
       const { dirname } = await import("path");
+      const { sessionArtifactPath } = await import("./session-artifacts.js");
 
       const externalName = extractProjectName(url);
-      const projectName = oc.state.repoProfile?.name ?? "this project";
-
-      // Session artifact for the proposal
       const artifactName = `research/${externalName}-proposal.md`;
-      const sessionFile = ctx.sessionManager.getSessionFile();
-      const sessionId = ctx.sessionManager.getSessionId();
-      let artifactPath: string;
-      if (sessionFile && sessionId) {
-        const path = await import("path");
-        const artifactRoot = path.join(path.dirname(sessionFile), "artifacts", sessionId);
-        artifactPath = path.join(artifactRoot, artifactName);
-      } else {
-        artifactPath = (await import("path")).join(ctx.cwd, ".pi-orchestrator-artifacts", artifactName);
-      }
+      const artifactPath = sessionArtifactPath(ctx, artifactName);
       mkdirSync(dirname(artifactPath), { recursive: true });
 
-      const state = {
+      // ── Pre-flight: auto-profile if repo profile is missing ──────────────────
+      if (!oc.state.repoProfile) {
+        ctx.ui.notify("📊 No repo profile found — running quick profile before research...", "info");
+        try {
+          const { profileRepo } = await import("./profiler.js");
+          oc.state.repoProfile = await profileRepo(pi, ctx.cwd);
+          oc.persistState();
+          ctx.ui.notify(`✅ Profiled: ${oc.state.repoProfile.name} (${oc.state.repoProfile.languages.join(", ")})`, "info");
+        } catch (err: any) {
+          ctx.ui.notify(`⚠️ Could not profile repo: ${err.message ?? err}. Continuing without profile.`, "warning");
+        }
+      }
+
+      const projectName = oc.state.repoProfile?.name ?? "this project";
+
+      // ── Resume detection: skip phases completed in prior sessions ────────────
+      const existingResearch = oc.state.researchState;
+      const isResumingSameUrl = existingResearch?.url === url;
+      const alreadyCompleted = new Set<string>(
+        isResumingSameUrl ? (existingResearch?.phasesCompleted ?? []) : []
+      );
+
+      // Load saved proposal text from disk when resuming
+      let initialProposal = "";
+      if (isResumingSameUrl && existsSync(artifactPath)) {
+        try { initialProposal = readFileSync(artifactPath, "utf8"); } catch { /* ignore */ }
+      }
+
+      if (isResumingSameUrl && alreadyCompleted.size > 0) {
+        ctx.ui.notify(
+          `🔁 Resuming research for \`${externalName}\` — skipping ${alreadyCompleted.size} completed phase(s): ${[...alreadyCompleted].join(", ")}`,
+          "info"
+        );
+      }
+
+      const pipelineState = {
         externalUrl: url,
         externalName,
         projectName,
-        currentPhase: "investigate",
-        proposal: "",
+        currentPhase: "investigate" as const,
+        proposal: initialProposal,
         artifactName,
-        phasesCompleted: [],
+        phasesCompleted: [...alreadyCompleted] as string[],
       };
 
+      // ── Activate orchestrator + enter researching phase ──────────────────────
+      oc.orchestratorActive = true;
+      oc.setPhase("researching", ctx);
+      oc.state.researchState = { url, externalName, artifactName, phasesCompleted: [...alreadyCompleted] };
+      oc.persistState();
+
       const phases: Array<{ phase: string; label: string; emoji: string }> = [
-        { phase: "investigate", label: "Investigating external project", emoji: "📚" },
-        { phase: "deepen", label: "Deepening analysis", emoji: "🔍" },
-        { phase: "inversion", label: "Inversion analysis", emoji: "🔄" },
-        { phase: "blunder_hunt", label: "5x blunder hunt", emoji: "🔨" },
-        { phase: "user_review", label: "User review", emoji: "📝" },
-        { phase: "multi_model", label: "Multi-model feedback", emoji: "🧠" },
-        { phase: "synthesis", label: "Synthesizing feedback", emoji: "🔗" },
+        { phase: "investigate",  label: "Investigating external project", emoji: "📚" },
+        { phase: "deepen",       label: "Deepening analysis",             emoji: "🔍" },
+        { phase: "inversion",    label: "Inversion analysis",             emoji: "🔄" },
+        { phase: "blunder_hunt", label: "5x blunder hunt",                emoji: "🔨" },
+        { phase: "user_review",  label: "User review",                    emoji: "📝" },
+        { phase: "multi_model",  label: "Multi-model feedback",           emoji: "🧠" },
+        { phase: "synthesis",    label: "Synthesizing feedback",          emoji: "🔗" },
       ];
 
-      // user_review callback: shown between blunder_hunt and multi_model.
-      // Presents the proposal with accept / edit / pause options.
+      // user_review callback shown between blunder_hunt and multi_model.
       const userReviewCallback = async (proposal: string): Promise<{ accepted: boolean; editedProposal?: string }> => {
         const PREVIEW_CHARS = 2000;
         const preview = proposal.length > PREVIEW_CHARS
@@ -718,8 +1110,7 @@ export function registerCommands(oc: OrchestratorContext) {
           ctx.ui.notify(
             `Pipeline paused for manual editing.\n` +
             `Edit the proposal at:\n  ${artifactPath}\n\n` +
-            `When done, rerun \`/orchestrate-research ${url}\` — or call \`orch_approve_beads\` ` +
-            `if you want to skip straight to bead creation with the edited proposal.`,
+            `When done, rerun \`/orchestrate-research ${url}\` to resume from this point.`,
             "info"
           );
           return { accepted: false };
@@ -727,8 +1118,8 @@ export function registerCommands(oc: OrchestratorContext) {
 
         if (!choice || choice.startsWith("⏸️")) {
           ctx.ui.notify(
-            `Research pipeline paused after blunder hunt.\nProposal saved to: ${artifactName}\n\n` +
-            `To resume, you can manually feed this proposal into the planning pipeline.`,
+            `Research pipeline paused.\nProposal saved to: ${artifactName}\n\n` +
+            `Rerun \`/orchestrate-research ${url}\` to resume from the user-review phase.`,
             "info"
           );
           return { accepted: false };
@@ -740,35 +1131,56 @@ export function registerCommands(oc: OrchestratorContext) {
       const phaseLog: string[] = [];
 
       for (const { phase, label, emoji } of phases) {
-        ctx.ui.notify(`${emoji} Phase: ${label}...`, "info");
-        (state as any).currentPhase = phase;
+        // Skip phases already completed in a prior session
+        if (alreadyCompleted.has(phase)) {
+          phaseLog.push(`⏭️ ${emoji} **${label}** — skipped (completed in prior session)`);
+          continue;
+        }
 
-        // Determine whether to pass the review callback (only for user_review phase)
+        ctx.ui.notify(`${emoji} Phase ${phases.findIndex(p => p.phase === phase) + 1}/7: ${label}...`, "info");
+        (pipelineState as any).currentPhase = phase;
+
         const reviewCb = phase === "user_review" ? userReviewCallback : undefined;
 
         try {
-          const result = await runResearchPhase(pi, ctx.cwd, phase as any, state as any, undefined, reviewCb);
+          const result = await runResearchPhase(pi, ctx.cwd, phase as any, pipelineState as any, undefined, reviewCb);
           if (result.proposal) {
-            state.proposal = result.proposal;
-            writeFileSync(artifactPath, state.proposal, "utf8");
+            pipelineState.proposal = result.proposal;
+            writeFileSync(artifactPath, pipelineState.proposal, "utf8");
           }
-          (state as any).phasesCompleted.push(phase);
 
           if (!result.success) {
-            // user_review returning success=false means user chose to pause
-            if (phase === "user_review") return;
+            if (phase === "user_review") {
+              // User chose to pause — persist progress so resume skips completed phases
+              oc.state.researchState = {
+                url, externalName, artifactName,
+                phasesCompleted: [...pipelineState.phasesCompleted],
+              };
+              oc.persistState();
+              return;
+            }
             const warn = `⚠️ ${emoji} **${label}** had issues: ${result.error ?? "partial output"}. Continuing.`;
             ctx.ui.notify(warn, "warning");
             phaseLog.push(warn);
-          } else if (phase !== "user_review" && phase !== "multi_model") {
-            // Emit a visible chat message after each substantive phase so there's proof of progress
-            const snippet = state.proposal.slice(0, 300).replace(/\n+/g, " ");
-            const hasProposal = state.proposal.length > 100;
-            const status = hasProposal
-              ? `✅ ${emoji} **${label}** complete${result.model ? ` (${result.model})` : ""} — proposal ${state.proposal.length} chars\n\n> ${snippet}${state.proposal.length > 300 ? "..." : ""}\n\n_Artifact: ${artifactName}_`
-              : `⚠️ ${emoji} **${label}** produced no output — check that the repo URL is accessible.`;
-            phaseLog.push(status);
-            ctx.ui.notify(status, hasProposal ? "info" : "warning");
+          } else {
+            // Mark complete and persist immediately — crash-safe progress tracking
+            pipelineState.phasesCompleted.push(phase);
+            alreadyCompleted.add(phase);
+            oc.state.researchState = {
+              url, externalName, artifactName,
+              phasesCompleted: [...pipelineState.phasesCompleted],
+            };
+            oc.persistState();
+
+            if (phase !== "user_review" && phase !== "multi_model") {
+              const snippet = pipelineState.proposal.slice(0, 300).replace(/\n+/g, " ");
+              const hasProposal = pipelineState.proposal.length > 100;
+              const status = hasProposal
+                ? `✅ ${emoji} **${label}** complete${result.model ? ` (${result.model})` : ""} — proposal ${pipelineState.proposal.length} chars\n\n> ${snippet}${pipelineState.proposal.length > 300 ? "..." : ""}\n\n_Artifact: ${artifactName}_`
+                : `⚠️ ${emoji} **${label}** produced no output — check that the repo URL is accessible.`;
+              phaseLog.push(status);
+              ctx.ui.notify(status, hasProposal ? "info" : "warning");
+            }
           }
         } catch (err: any) {
           const errMsg = `❌ ${emoji} **${label}** failed: ${err.message ?? err}. Continuing with current proposal.`;
@@ -777,26 +1189,35 @@ export function registerCommands(oc: OrchestratorContext) {
         }
       }
 
-      // Hand off to planning pipeline
-      oc.state.selectedGoal = `Research-reimagine: ${externalName} ideas for ${projectName}`;
+      // ── All phases done — transition to the full flywheel pipeline ────────────
+      const selectedGoal = `Research-reimagine: ${externalName} ideas for ${projectName}`;
+      oc.state.selectedGoal = selectedGoal;
       oc.state.planDocument = artifactName;
       oc.state.planRefinementRound = 0;
-      oc.orchestratorActive = true;
+      // Clear research state — pipeline has advanced to plan approval
+      oc.state.researchState = undefined;
       oc.setPhase("awaiting_plan_approval", ctx);
       oc.persistState();
 
+      const completedCount = pipelineState.phasesCompleted.length;
       ctx.ui.notify(
-        `✅ Research pipeline complete (${state.phasesCompleted.length}/${phases.length} phases).\n` +
+        `✅ Research pipeline complete (${completedCount}/${phases.length} phases).\n` +
         `Proposal saved to: ${artifactName}\n\n` +
-        `The proposal has been loaded as a plan artifact. ` +
-        `Call \`orch_approve_beads\` to review it and convert to beads.`,
+        `Transitioning to plan approval → bead creation → implementation.`,
         "info"
       );
 
+      // Directive follow-up using the same "NEXT: ... NOW" pattern as tool results,
+      // so the agent immediately drives the full flywheel rather than just acknowledging.
       pi.sendUserMessage(
-        `Research pipeline complete for ${externalName} (${state.phasesCompleted.length}/${phases.length} phases).\n\n` +
-        `**Phase log:**\n${phaseLog.map((l) => `- ${l}`).join("\n")}\n\n` +
-        `Proposal saved to \`${artifactName}\`. Call \`orch_approve_beads\` to review it and create beads.`,
+        researchHandoffPrompt(
+          externalName,
+          selectedGoal,
+          artifactName,
+          completedCount,
+          phases.length,
+          !!oc.state.repoProfile
+        ),
         { deliverAs: "followUp" }
       );
     },

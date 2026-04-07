@@ -215,6 +215,13 @@ export function registerApproveTool(oc: OrchestratorContext) {
           oc.state.polishChanges = [];
           oc.state.polishOutputSizes = [currentPlanSnapshot.size];
           oc.state.polishConverged = false;
+          // Save original plan to docs/plans/ on first view (before any refinement)
+          if ((oc.state.planRefinementRound ?? 0) === 0) {
+            try {
+              const { saveDocsPlan } = await import("./plan.js");
+              saveDocsPlan(ctx.cwd, oc.state.selectedGoal!, "original", plan);
+            } catch { /* best-effort */ }
+          }
         }
 
         _lastPlanSnapshot = currentPlanSnapshot;
@@ -390,6 +397,17 @@ export function registerApproveTool(oc: OrchestratorContext) {
         oc.state.polishChanges = [];
         oc.state.polishOutputSizes = [];
         oc.state.polishConverged = false;
+        oc.state.polishRound = 0;
+        _lastBeadSnapshot = undefined;
+        _lastBeadSnapshotFull = undefined;
+        // Save final plan to docs/plans/ at approval
+        if (oc.state.planDocument) {
+          try {
+            const finalPlan = readFileSync(sessionArtifactPath(ctx, oc.state.planDocument), "utf8");
+            const { saveDocsPlan } = await import("./plan.js");
+            saveDocsPlan(ctx.cwd, oc.state.selectedGoal!, "final", finalPlan);
+          } catch { /* best-effort */ }
+        }
         oc.setPhase("creating_beads", ctx);
         oc.persistState();
 
@@ -403,10 +421,23 @@ export function registerApproveTool(oc: OrchestratorContext) {
           creationPrompt = withCassContext(creationPrompt, ctx.cwd, `creating beads for: ${oc.state.selectedGoal}`);
         } catch { /* best-effort */ }
 
+        // Auto-inject MemPalace episodic context into bead creation prompt
+        try {
+          const { getEpisodicContext, sanitiseSlug } = await import("../episodic-memory.js");
+          const projectSlug = sanitiseSlug(ctx.cwd);
+          const episodic = getEpisodicContext(
+            `creating beads for: ${oc.state.selectedGoal}`,
+            projectSlug
+          );
+          if (episodic) {
+            creationPrompt = `${episodic}\n---\n\n${creationPrompt}`;
+          }
+        } catch { /* best-effort */ }
+
         return {
           content: [{
             type: "text",
-            text: `**NEXT: Create beads from the approved plan using \`br create\` and \`br dep add\` in bash NOW.**\n\nArtifact: \`${oc.state.planDocument}\`\n\n---\n\n${creationPrompt}`,
+            text: `**NEXT: Create beads from the approved plan using \`br create\` and \`br dep add\` in bash NOW. When all beads are created, call \`orch_approve_beads\` again to enter the bead approval menu.**\n\nArtifact: \`${oc.state.planDocument}\`\n\n---\n\n${creationPrompt}\n\n---\n\n**After creating all beads:** call \`orch_approve_beads\` to review and approve before implementation begins.`,
           }],
           details: { approved: true, plan: true, creatingBeads: true, planDocument: oc.state.planDocument },
         };
@@ -1384,10 +1415,14 @@ cd ${ctx.cwd}`;
       oc.state.currentBeadId = firstBead.id;
       oc.persistState();
 
+      const { getEpisodicContext, sanitiseSlug } = await import("../episodic-memory.js");
+      const firstBeadEpisodic = getEpisodicContext(firstBead.title, sanitiseSlug(ctx.cwd));
       const implInstr = implementerInstructions(
         firstBead,
         oc.state.repoProfile!,
-        Object.values(oc.state.beadResults ?? {})
+        Object.values(oc.state.beadResults ?? {}),
+        undefined,
+        firstBeadEpisodic || undefined
       );
 
       return {

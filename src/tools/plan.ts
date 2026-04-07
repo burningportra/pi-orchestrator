@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname } from "path";
+import { dirname, join } from "path";
 import { runDeepPlanAgents, type DeepPlanAgent, type DeepPlanResult } from "../deep-plan.js";
 import type { OrchestratorContext } from "../types.js";
 import {
@@ -14,6 +14,26 @@ import {
 import { sessionArtifactPath } from "../session-artifacts.js";
 import { getDeepPlanModels, detectAvailableModels, formatDetectedModels } from "../model-detection.js";
 import { readMemory } from "../memory.js";
+
+/**
+ * Save a plan snapshot to docs/plans/ in the project repo.
+ * Filenames: docs/plans/<date>-<slug>-<suffix>.md
+ * Best-effort — errors are silently swallowed.
+ */
+export function saveDocsPlan(cwd: string, goal: string, suffix: "original" | "final", content: string): string | undefined {
+  try {
+    const slug = slugifyGoal(goal);
+    const date = new Date().toISOString().slice(0, 10);
+    const dir = join(cwd, "docs", "plans");
+    mkdirSync(dir, { recursive: true });
+    const filename = `${date}-${slug}-${suffix}.md`;
+    const dest = join(dir, filename);
+    writeFileSync(dest, content, "utf8");
+    return `docs/plans/${filename}`;
+  } catch {
+    return undefined;
+  }
+}
 
 function slugifyGoal(goal: string): string {
   return goal
@@ -267,6 +287,7 @@ export function registerPlanTool(oc: OrchestratorContext) {
       const artifactPath = sessionArtifactPath(ctx, artifactName);
       mkdirSync(dirname(artifactPath), { recursive: true });
       writeFileSync(artifactPath, synthesizedPlan, "utf8");
+      saveDocsPlan(ctx.cwd, goal, "original", synthesizedPlan);
 
       oc.state.planDocument = artifactName;
       oc.state.planRefinementRound = 0;
