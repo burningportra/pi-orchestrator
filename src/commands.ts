@@ -589,10 +589,9 @@ export function registerCommands(oc: OrchestratorContext) {
       const sessionId = ctx.sessionManager.getSessionId();
       let artifactPath: string;
       if (sessionFile && sessionId) {
-        const artifactRoot = sessionFile.includes("/sessions/")
-          ? sessionFile.replace(/\/sessions\/[^/]+$/, `/artifacts/${sessionId}`)
-          : (await import("path")).join((await import("path")).dirname(sessionFile), "..", "artifacts", sessionId);
-        artifactPath = (await import("path")).join(artifactRoot, artifactName);
+        const path = await import("path");
+        const artifactRoot = path.join(path.dirname(sessionFile), "artifacts", sessionId);
+        artifactPath = path.join(artifactRoot, artifactName);
       } else {
         artifactPath = (await import("path")).join(ctx.cwd, ".pi-orchestrator-artifacts", artifactName);
       }

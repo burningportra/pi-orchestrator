@@ -140,9 +140,7 @@ function sessionArtifactPath(ctx: any, name: string): string {
   const sessionId = ctx.sessionManager.getSessionId();
 
   if (sessionFile && sessionId) {
-    const artifactRoot = sessionFile.includes("/sessions/")
-      ? sessionFile.replace(/\/sessions\/[^/]+$/, `/artifacts/${sessionId}`)
-      : join(dirname(sessionFile), "..", "artifacts", sessionId);
+    const artifactRoot = join(dirname(sessionFile), "artifacts", sessionId);
     return join(artifactRoot, name);
   }
 
