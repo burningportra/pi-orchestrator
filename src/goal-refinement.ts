@@ -440,6 +440,7 @@ export async function runGoalRefinement(
   // 1. Generate questions via LLM
   // Write prompt to temp file to avoid shell escaping issues and argument length limits
   // (same pattern as deep-plan.ts)
+  // Retry up to 2 times on empty output (pi --print can occasionally return empty stdout)
   let questions: RefinementQuestion[];
   try {
     const prompt = goalRefinementPrompt(rawGoal, profile);
@@ -450,38 +451,55 @@ export async function runGoalRefinement(
 
     ctx.ui.notify("🎯 Generating clarifying questions...", "info");
 
-    const result = await pi.exec(
-      "pi",
-      [
-        "--print",
-        "--no-extensions",
-        "--no-skills",
-        "--no-prompt-templates",
-        "--tools", "read",
-        `@${promptFile}`,
-      ],
-      { timeout: 90000, cwd: ctx.cwd }
-    );
+    const MAX_ATTEMPTS = 3;
+    let output = "";
+    let lastCode = 0;
+    let lastStdout = "";
+    let lastStderr = "";
 
-    if (result.code !== 0) {
-      ctx.ui.notify(
-        `⚠️ Goal refinement failed (exit ${result.code}): ${result.stderr.slice(0, 200)}. Using raw goal.`,
-        "warning"
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const result = await pi.exec(
+        "pi",
+        [
+          "--print",
+          "--no-extensions",
+          "--no-skills",
+          "--no-prompt-templates",
+          "--tools", "read",
+          `@${promptFile}`,
+        ],
+        { timeout: 90000, cwd: ctx.cwd }
       );
-      return fallback;
+
+      lastCode = result.code;
+      lastStdout = result.stdout;
+      lastStderr = result.stderr;
+
+      if (result.code !== 0) {
+        ctx.ui.notify(
+          `⚠️ Goal refinement failed (exit ${result.code}): ${result.stderr.slice(0, 200)}. Using raw goal.`,
+          "warning"
+        );
+        return fallback;
+      }
+
+      output = (result.stdout || result.stderr || "").trim();
+      if (output) break;
+
+      if (attempt < MAX_ATTEMPTS) {
+        ctx.ui.notify(`⚠️ Goal refinement returned empty output (attempt ${attempt}/${MAX_ATTEMPTS}). Retrying...`, "warning");
+      }
     }
 
-    // pi --print outputs to stdout; check stderr as fallback
-    const output = (result.stdout || result.stderr || "").trim();
     if (!output) {
-      // Log diagnostic info to help debug empty output
       const diagParts = [
-        `stdout=${result.stdout?.length ?? 0}B`,
-        `stderr=${result.stderr?.length ?? 0}B`,
-        `code=${result.code}`,
+        `stdout=${lastStdout?.length ?? 0}B`,
+        `stderr=${lastStderr?.length ?? 0}B`,
+        `code=${lastCode}`,
         `promptSize=${prompt.length}B`,
+        `attempts=${MAX_ATTEMPTS}`,
       ];
-      ctx.ui.notify(`⚠️ Goal refinement returned empty output (${diagParts.join(", ")}). Using raw goal.`, "warning");
+      ctx.ui.notify(`⚠️ Goal refinement returned empty output after ${MAX_ATTEMPTS} attempts (${diagParts.join(", ")}). Using raw goal.`, "warning");
       return fallback;
     }
 
