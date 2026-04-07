@@ -43,6 +43,12 @@ export default function (pi: ExtensionAPI) {
   let state: OrchestratorState = createInitialState();
   let orchestratorActive = false;
 
+  // Dashboard widget state (single instance to prevent flashing)
+  let dashboardWidgetRegistered = false;
+  let currentDashboardSnapshot: import("./dashboard/types.js").DashboardSnapshot | null = null;
+  let lastRenderLines: string[] | null = null;
+  let lastRenderWidth: number | null = null;
+
   // Helper: spawn hit-me review agents inline via pi.exec (like deep-plan.ts)
   interface HitMeResult {
     text: string;
@@ -165,22 +171,27 @@ export default function (pi: ExtensionAPI) {
       getTenderSummary: () => swarmTender?.getSummary(),
       onUpdate: (snapshot) => {
         try {
-          ctx.ui.setWidget("orchestrator", (tui: any, theme: any) => {
-            let cachedLines: string[] | null = null;
-            let cachedWidth: number | null = null;
-            return {
+          // Update the global snapshot for the widget to render
+          currentDashboardSnapshot = snapshot;
+          lastRenderLines = null; // Invalidate cache
+          
+          // Only call setWidget ONCE when first registering the widget
+          if (!dashboardWidgetRegistered) {
+            ctx.ui.setWidget("orchestrator", (tui: any, theme: any) => ({
               render(width: number): string[] {
-                if (cachedWidth === width && cachedLines) return cachedLines;
-                cachedLines = renderDashboardLines(snapshot, theme, width);
-                cachedWidth = width;
-                return cachedLines;
+                if (!currentDashboardSnapshot) return [];
+                if (lastRenderWidth === width && lastRenderLines) return lastRenderLines;
+                lastRenderLines = renderDashboardLines(currentDashboardSnapshot, theme, width);
+                lastRenderWidth = width;
+                return lastRenderLines;
               },
               invalidate() {
-                cachedLines = null;
-                cachedWidth = null;
+                lastRenderLines = null;
+                lastRenderWidth = null;
               },
-            };
-          });
+            }));
+            dashboardWidgetRegistered = true;
+          }
         } catch {
           // Fallback to simple string array
           ctx.ui.setWidget("orchestrator", renderFallbackWidget());
@@ -197,10 +208,20 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.setStatus("orchestrator", undefined);
       ctx.ui.setWidget("orchestrator", undefined);
       dashboardController?.stop();
+      // Reset widget state for next orchestration
+      dashboardWidgetRegistered = false;
+      currentDashboardSnapshot = null;
+      lastRenderLines = null;
+      lastRenderWidth = null;
     } else if (phase === "complete") {
       ctx.ui.setStatus("orchestrator", "✅ Orchestrator: done");
       ctx.ui.setWidget("orchestrator", undefined);
       dashboardController?.stop();
+      // Reset widget state for next orchestration
+      dashboardWidgetRegistered = false;
+      currentDashboardSnapshot = null;
+      lastRenderLines = null;
+      lastRenderWidth = null;
     } else {
       ctx.ui.setStatus(
         "orchestrator",

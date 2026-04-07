@@ -1030,8 +1030,12 @@ export const SWARM_STAGGER_DELAY_MS = 30_000; // 30 seconds between agent starts
 //
 // Format: "provider/modelId" as accepted by `pi --model`.
 // Update these when new model versions ship or providers change.
+//
+// NOTE: These are FALLBACK defaults. The actual model selection uses
+// detectAvailableModels() from model-detection.ts to pick the best
+// available models from detected providers.
 
-/** Models used by the multi-model deep planning agents. */
+/** Default models used by the multi-model deep planning agents (fallbacks). */
 export const DEEP_PLAN_MODELS = {
   correctness: "openai-codex/gpt-5.4",
   robustness: "anthropic/claude-opus-4-6",

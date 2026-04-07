@@ -12,6 +12,7 @@ import {
   DEEP_PLAN_MODELS,
 } from "../prompts.js";
 import { sessionArtifactPath } from "../session-artifacts.js";
+import { getDeepPlanModels, detectAvailableModels, formatDetectedModels } from "../model-detection.js";
 
 function slugifyGoal(goal: string): string {
   return goal
@@ -39,24 +40,29 @@ export function buildMultiModelPlanSubagentConfigs(
   goal: string,
   profile: OrchestratorContext["state"]["repoProfile"],
   scanResult: OrchestratorContext["state"]["scanResult"],
+  ctx?: ExtensionContext,
 ) {
   const artifactNames = multiModelPlanArtifactNames(goal);
+  
+  // Use detected models if context is available, otherwise fall back to defaults
+  const models = ctx ? getDeepPlanModels(ctx) : DEEP_PLAN_MODELS;
+  
   const planners = [
     {
       name: "correctness",
-      model: DEEP_PLAN_MODELS.correctness,
+      model: models.correctness,
       task: competingPlanAgentPrompt("correctness", goal, profile!, scanResult),
       artifactName: artifactNames.planners.correctness,
     },
     {
       name: "robustness",
-      model: DEEP_PLAN_MODELS.robustness,
+      model: models.robustness,
       task: competingPlanAgentPrompt("robustness", goal, profile!, scanResult),
       artifactName: artifactNames.planners.robustness,
     },
     {
       name: "ergonomics",
-      model: DEEP_PLAN_MODELS.ergonomics,
+      model: models.ergonomics,
       task: competingPlanAgentPrompt("ergonomics", goal, profile!, scanResult),
       artifactName: artifactNames.planners.ergonomics,
     },
@@ -76,10 +82,11 @@ export function buildMultiModelPlanSubagentConfigs(
 
 function loadPlannerArtifacts(ctx: ExtensionContext, goal: string): DeepPlanResult[] {
   const artifactNames = multiModelPlanArtifactNames(goal);
+  const models = getDeepPlanModels(ctx);
   const plannerEntries = [
-    ["correctness", artifactNames.planners.correctness, DEEP_PLAN_MODELS.correctness],
-    ["robustness", artifactNames.planners.robustness, DEEP_PLAN_MODELS.robustness],
-    ["ergonomics", artifactNames.planners.ergonomics, DEEP_PLAN_MODELS.ergonomics],
+    ["correctness", artifactNames.planners.correctness, models.correctness],
+    ["robustness", artifactNames.planners.robustness, models.robustness],
+    ["ergonomics", artifactNames.planners.ergonomics, models.ergonomics],
   ] as const;
 
   return plannerEntries.flatMap(([name, artifactName, model]) => {
@@ -132,7 +139,7 @@ export function registerPlanTool(oc: OrchestratorContext) {
       }
 
       const artifactNames = multiModelPlanArtifactNames(goal);
-      const interactivePlannerConfigs = buildMultiModelPlanSubagentConfigs(ctx.cwd, goal, profile, scanResult);
+      const interactivePlannerConfigs = buildMultiModelPlanSubagentConfigs(ctx.cwd, goal, profile, scanResult, ctx);
       const savedPlannerResults = loadPlannerArtifacts(ctx, goal);
 
       if (ctx.hasUI && savedPlannerResults.length < interactivePlannerConfigs.length) {
@@ -167,20 +174,23 @@ export function registerPlanTool(oc: OrchestratorContext) {
         };
       }
 
+      // Use detected models for non-interactive path
+      const detectedModels = getDeepPlanModels(ctx);
+      
       const planners: DeepPlanAgent[] = [
         {
           name: "correctness",
-          model: DEEP_PLAN_MODELS.correctness,
+          model: detectedModels.correctness,
           task: competingPlanAgentPrompt("correctness", goal, profile, scanResult),
         },
         {
           name: "robustness",
-          model: DEEP_PLAN_MODELS.robustness,
+          model: detectedModels.robustness,
           task: competingPlanAgentPrompt("robustness", goal, profile, scanResult),
         },
         {
           name: "ergonomics",
-          model: DEEP_PLAN_MODELS.ergonomics,
+          model: detectedModels.ergonomics,
           task: competingPlanAgentPrompt("ergonomics", goal, profile, scanResult),
         },
       ];
@@ -193,17 +203,22 @@ export function registerPlanTool(oc: OrchestratorContext) {
         const failures = planResults
           .map((r) => `  - ${r.name} (${r.model}): exit=${r.exitCode}${r.error ? `, error=${r.error}` : ""}${r.plan ? `, output=${r.plan.slice(0, 200)}` : ""}`)
           .join("\n");
+        
+        // Show detected models for debugging
+        const detected = detectAvailableModels(ctx);
+        const detectedInfo = formatDetectedModels(detected);
+        
         throw new Error(
           `All competing planning agents failed. Details:\n${failures}\n\n` +
-          `This usually means the model IDs are not available in your pi configuration. ` +
-          `Try \`orch_plan({ mode: "single_model" })\` as a fallback, or check \`/models\` for available model IDs.`
+          `${detectedInfo}\n\n` +
+          `Try \`orch_plan({ mode: "single_model" })\` as a fallback.`
         );
       }
 
       const synthesisResult = await runDeepPlanAgents(
         oc.pi,
         ctx.cwd,
-        [{ name: "synthesis", model: DEEP_PLAN_MODELS.synthesis, task: planSynthesisPrompt(successfulPlans) }],
+        [{ name: "synthesis", model: detectedModels.synthesis, task: planSynthesisPrompt(successfulPlans) }],
         signal
       );
       const synthesizedPlan = synthesisResult[0]?.plan?.trim();
