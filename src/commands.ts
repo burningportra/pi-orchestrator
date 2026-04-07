@@ -1,5 +1,66 @@
-import type { CoordinationMode, OrchestratorContext } from './types.js';
+import type { CoordinationMode, OrchestratorContext, Bead } from './types.js';
 import { createInitialState } from './types.js';
+
+/**
+ * Format staleness info for open beads, showing when they were created.
+ * Groups beads by age: fresh (< 1 day), recent (< 7 days), stale (>= 7 days).
+ */
+function formatBeadStaleness(beads: Bead[]): string {
+  if (beads.length === 0) return "";
+
+  const now = Date.now();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  const fresh: Bead[] = [];
+  const recent: Bead[] = [];
+  const stale: Bead[] = [];
+
+  for (const bead of beads) {
+    if (!bead.created_at) {
+      stale.push(bead); // No created_at = assume stale
+      continue;
+    }
+    const createdMs = new Date(bead.created_at).getTime();
+    const ageDays = (now - createdMs) / DAY_MS;
+
+    if (ageDays < 1) {
+      fresh.push(bead);
+    } else if (ageDays < 7) {
+      recent.push(bead);
+    } else {
+      stale.push(bead);
+    }
+  }
+
+  const lines: string[] = [];
+
+  if (fresh.length > 0) {
+    lines.push(`  🟢 Fresh (< 1 day): ${fresh.map(b => b.id).join(", ")}`);
+  }
+  if (recent.length > 0) {
+    lines.push(`  🟡 Recent (1-7 days): ${recent.map(b => `${b.id} (${formatAge(recent.find(x => x.id === b.id)?.created_at)})`).join(", ")}`);
+  }
+  if (stale.length > 0) {
+    lines.push(`  🔴 Stale (>= 7 days): ${stale.map(b => `${b.id} (${formatAge(b.created_at)})`).join(", ")}`);
+  }
+
+  return lines.join("\n");
+}
+
+/** Format a timestamp as relative age (e.g., "2d", "3w"). */
+function formatAge(timestamp?: string): string {
+  if (!timestamp) return "unknown";
+
+  const now = Date.now();
+  const createdMs = new Date(timestamp).getTime();
+  const ageDays = Math.floor((now - createdMs) / (24 * 60 * 60 * 1000));
+
+  if (ageDays < 1) return "< 1d";
+  if (ageDays < 7) return `${ageDays}d`;
+  if (ageDays < 30) return `${Math.floor(ageDays / 7)}w`;
+  if (ageDays < 365) return `${Math.floor(ageDays / 30)}mo`;
+  return `${Math.floor(ageDays / 365)}y`;
+}
 
 function parseOrchestrateArgs(rawArgs?: string): { goalArg?: string; coordinationMode?: CoordinationMode } {
   const input = rawArgs?.trim();
@@ -41,13 +102,18 @@ export function registerCommands(oc: OrchestratorContext) {
         const completedCount = Object.values(oc.state.beadResults ?? {}).filter(r => r.status === "success").length;
         const totalCount = oc.state.activeBeadIds?.length ?? existingBeads.length;
         const progressStr = totalCount > 0 ? ` (${completedCount}/${totalCount} beads done)` : "";
-        const openCount = existingBeads.filter(b => b.status === "open" || b.status === "in_progress").length;
+        const openBeads = existingBeads.filter(b => b.status === "open" || b.status === "in_progress");
+        const openCount = openBeads.length;
+        
+        // Show staleness info for open beads
+        const stalenessInfo = formatBeadStaleness(openBeads);
         
         const choice = await ctx.ui.select(
-          `Existing orchestration detected${progressStr}`,
+          `Existing orchestration detected${progressStr}\n${stalenessInfo}`,
           [
             `📂 Resume — continue with ${openCount} open bead(s)`,
             "🔄 Fresh — archive current beads and start over",
+            "🗑️ Clear — delete all beads and start fresh",
             "❌ Cancel",
           ]
         );
@@ -85,6 +151,18 @@ export function registerCommands(oc: OrchestratorContext) {
             }
           }
           ctx.ui.notify(`📦 Archived ${openCount} open bead(s) as deferred.`, "info");
+          // Fall through to fresh start
+        } else if (choice?.startsWith("🗑️")) {
+          // Clear: delete all beads, then start fresh
+          const allCount = existingBeads.length;
+          let deleted = 0;
+          for (const bead of existingBeads) {
+            try {
+              await pi.exec("br", ["delete", bead.id, "--yes"], { cwd: ctx.cwd, timeout: 5000 });
+              deleted++;
+            } catch { /* best effort */ }
+          }
+          ctx.ui.notify(`🗑️ Deleted ${deleted}/${allCount} bead(s).`, "info");
           // Fall through to fresh start
         } else {
           ctx.ui.notify("Orchestration cancelled.", "info");

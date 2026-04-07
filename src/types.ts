@@ -166,6 +166,12 @@ export interface Bead {
   estimate?: number; // minutes
   /** Parent bead ID (from --parent flag). */
   parent?: string;
+  /** ISO timestamp when bead was created. */
+  created_at?: string;
+  /** ISO timestamp when bead was last updated. */
+  updated_at?: string;
+  /** ISO timestamp when bead was closed (if closed). */
+  closed_at?: string;
 }
 
 export interface BeadResult {

@@ -187,7 +187,13 @@ export async function readBeads(
   cwd: string
 ): Promise<Bead[]> {
   try {
-    const result = await pi.exec("br", ["list", "--json"], { timeout: 10000, cwd });
+    // Request created_at and updated_at fields for staleness detection
+    const result = await pi.exec("br", [
+      "list",
+      "--json",
+      "--fields", "id,title,description,status,priority,issue_type,labels,estimate,parent,created_at,updated_at,closed_at",
+      "--deferred", // include deferred beads
+    ], { timeout: 10000, cwd });
     const data = JSON.parse(result.stdout);
     return (Array.isArray(data) ? data : data?.issues ?? []) as Bead[];
   } catch {
