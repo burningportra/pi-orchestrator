@@ -2,11 +2,11 @@ import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { readFileSync } from "fs";
-import { dirname, join } from "path";
 import type { OrchestratorContext, Bead, CoordinationMode } from "../types.js";
 import { implementerInstructions, freshContextRefinementPrompt, computeConvergenceScore, blunderHuntInstructions, SWARM_STAGGER_DELAY_MS, beadCreationPrompt, planRefinementPrompt, freshPlanRefinementPrompt, planToBeadsPrompt, formatPlanToBeadAuditWarnings, pickRefinementModel } from "../prompts.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 import { planQualityScoringPrompt, parsePlanQualityScore, formatPlanQualityScore, type PlanQualityScore } from "../plan-quality.js";
+import { sessionArtifactPath } from "../session-artifacts.js";
 
 // ─── Module-level bead snapshots for change detection ────────
 // These live at module scope so they persist across multiple calls to
@@ -135,17 +135,6 @@ const MAX_POLISH_ROUNDS = 12;
 type PlanSnapshot = { fingerprint: string; lineCount: number; size: number; content: string };
 let _lastPlanSnapshot: PlanSnapshot | undefined;
 
-function sessionArtifactPath(ctx: any, name: string): string {
-  const sessionFile = ctx.sessionManager.getSessionFile();
-  const sessionId = ctx.sessionManager.getSessionId();
-
-  if (sessionFile && sessionId) {
-    const artifactRoot = join(dirname(sessionFile), "artifacts", sessionId);
-    return join(artifactRoot, name);
-  }
-
-  return join(ctx.cwd, ".pi-orchestrator-artifacts", name);
-}
 
 function snapshotPlan(plan: string): PlanSnapshot {
   return {
