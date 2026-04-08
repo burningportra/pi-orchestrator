@@ -1,4 +1,12 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+  forceReleaseFileReservation,
+  checkFileReservations,
+  fetchInbox,
+  sendMessage,
+  whoisAgent,
+  type ExecFn,
+} from "./agent-mail.js";
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -54,6 +62,8 @@ export interface SwarmTenderOptions {
   onTick?: (statuses: AgentStatus[]) => void;
   /** Called every cadenceIntervalMs with the operator cadence checklist. */
   onCadenceCheck?: (checklist: string) => void;
+  /** Agent Mail orchestrator identity (for sending stuck-agent messages). */
+  orchestratorAgentName?: string;
 }
 
 export class SwarmTender {
@@ -67,6 +77,7 @@ export class SwarmTender {
   private onTick?: (statuses: AgentStatus[]) => void;
   private onCadenceCheck?: (checklist: string) => void;
   private lastCadencePromptAt: number = Date.now();
+  private orchestratorAgentName?: string;
 
   constructor(
     pi: ExtensionAPI,
@@ -81,6 +92,7 @@ export class SwarmTender {
     this.onConflict = options?.onConflict;
     this.onTick = options?.onTick;
     this.onCadenceCheck = options?.onCadenceCheck;
+    this.orchestratorAgentName = options?.orchestratorAgentName;
 
     this.agents = new Map();
     for (const wt of worktrees) {
@@ -209,5 +221,55 @@ export class SwarmTender {
     if (this.agents.size === 0) {
       this.stop();
     }
+  }
+
+  /**
+   * Force-release stale file reservations from a stuck agent.
+   * Uses Agent Mail's force_release_file_reservation to clear locks
+   * so other agents can proceed.
+   */
+  async releaseStaleReservations(
+    stuckAgentName: string,
+    reservationIds: number[],
+    note?: string
+  ): Promise<void> {
+    const exec = this.pi.exec as unknown as ExecFn;
+    for (const id of reservationIds) {
+      await forceReleaseFileReservation(
+        exec, this.cwd, stuckAgentName, id,
+        note ?? `SwarmTender: agent ${stuckAgentName} stuck for >${this.config.stuckThreshold / 1000}s`,
+        true
+      );
+    }
+  }
+
+  /**
+   * Send a nudge message to a stuck agent via Agent Mail.
+   * Prompts the agent to check in or report blockers.
+   */
+  async nudgeStuckAgent(
+    stuckAgentName: string,
+    threadId: string
+  ): Promise<void> {
+    if (!this.orchestratorAgentName) return;
+    const exec = this.pi.exec as unknown as ExecFn;
+    await sendMessage(exec, this.cwd, this.orchestratorAgentName, [stuckAgentName],
+      `[SwarmTender] Are you stuck?`,
+      `You haven't made changes in >${this.config.stuckThreshold / 1000}s. ` +
+      `Please report your status:\n` +
+      `- If blocked, describe the blocker so we can re-route work.\n` +
+      `- If still working, send a progress update.\n` +
+      `- If done, release your file reservations with \`am_release\`.`,
+      { threadId, importance: "high", ackRequired: true }
+    );
+  }
+
+  /**
+   * Get whois profile for an agent via Agent Mail.
+   * Useful for diagnosing which agent is stuck and what it was doing.
+   */
+  async inspectAgent(agentName: string): Promise<any> {
+    const exec = this.pi.exec as unknown as ExecFn;
+    return whoisAgent(exec, this.cwd, agentName);
   }
 }
