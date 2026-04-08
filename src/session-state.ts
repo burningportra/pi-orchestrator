@@ -113,7 +113,7 @@ const PHASE_META: Record<OrchestratorPhase, PhaseMeta> = {
     buildResumePrompt: (s) =>
       `Resuming orchestration${s.goal ? ` for goal: "${s.goal}"` : ""}. ` +
       `A plan is ready${s.planDocument ? ` at \`${s.planDocument}\`` : ""}. ` +
-      `Call \`orch_approve_beads\` to review it and create beads.`,
+      `Call \`orch_approve_beads\` to review it and stay inside the plan approval → bead creation workflow.`,
   },
   creating_beads: {
     label: "Creating beads",
@@ -122,9 +122,9 @@ const PHASE_META: Record<OrchestratorPhase, PhaseMeta> = {
     buildResumePrompt: (s) =>
       s.openBeadCount > 0
         ? `Resuming orchestration${s.goal ? ` for goal: "${s.goal}"` : ""}. ` +
-          `${s.openBeadCount} bead(s) already created. Call \`orch_approve_beads\` to review and approve them.`
+          `${s.openBeadCount} bead(s) already created. Call \`orch_approve_beads\` to review and approve them inside the workflow menus.`
         : `Resuming orchestration${s.goal ? ` for goal: "${s.goal}"` : ""}. ` +
-          `Continue creating beads with \`br create\`, then call \`orch_approve_beads\` when done.`,
+          `Continue creating beads with \`br create\`, then call \`orch_approve_beads\` when done to re-enter the approval menu.`,
   },
   refining_beads: {
     label: "Refining beads",
@@ -132,7 +132,7 @@ const PHASE_META: Record<OrchestratorPhase, PhaseMeta> = {
     nextAction: "Continue refining beads.",
     buildResumePrompt: (s) =>
       `Resuming bead refinement${s.goal ? ` for goal: "${s.goal}"` : ""}. ` +
-      `Call \`orch_approve_beads\` to check quality and continue.`,
+      `Call \`orch_approve_beads\` to check quality and continue inside the approval workflow.`,
   },
   awaiting_bead_approval: {
     label: "Beads ready — awaiting approval",
@@ -140,7 +140,7 @@ const PHASE_META: Record<OrchestratorPhase, PhaseMeta> = {
     nextAction: "Call `orch_approve_beads` to approve.",
     buildResumePrompt: (s) =>
       `Resuming orchestration${s.goal ? ` for goal: "${s.goal}"` : ""}. ` +
-      `${s.openBeadCount} bead(s) are ready for approval. Call \`orch_approve_beads\` to review them.`,
+      `${s.openBeadCount} bead(s) are ready for approval. Call \`orch_approve_beads\` to review them and stay inside the workflow menus.`,
   },
   implementing: {
     label: "Implementing",
@@ -155,7 +155,7 @@ const PHASE_META: Record<OrchestratorPhase, PhaseMeta> = {
         : "";
       return (
         `Resuming implementation${s.goal ? ` for goal: "${s.goal}"` : ""}${progress}.${current} ` +
-        `Call \`orch_review\` to check bead status and continue.`
+        `Call \`orch_review\` to check bead status and continue inside the implementation/review workflow.`
       );
     },
   },
@@ -165,7 +165,7 @@ const PHASE_META: Record<OrchestratorPhase, PhaseMeta> = {
     nextAction: "Call `orch_review` to continue.",
     buildResumePrompt: (s) =>
       `Resuming review${s.goal ? ` for goal: "${s.goal}"` : ""}. ` +
-      `Call \`orch_review\` to continue the review process.`,
+      `Call \`orch_review\` to continue the review process inside the workflow menus.`,
   },
   iterating: {
     label: "Iterating on feedback",
@@ -177,7 +177,7 @@ const PHASE_META: Record<OrchestratorPhase, PhaseMeta> = {
         : "";
       return (
         `Resuming iteration${s.goal ? ` for goal: "${s.goal}"` : ""}${progress}. ` +
-        `Call \`orch_review\` to continue iterating on feedback.`
+        `Call \`orch_review\` to continue iterating on feedback inside the workflow menus.`
       );
     },
   },

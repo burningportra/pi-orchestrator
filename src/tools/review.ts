@@ -117,8 +117,8 @@ export function registerReviewTool(oc: OrchestratorContext) {
             type: "text",
             text: `⏪ Regressed to **plan phase**. Bead and review state has been reset.\n\n` +
               (oc.state.planDocument
-                ? `Revise the plan at \`${oc.state.planDocument}\`, then call \`orch_approve_beads\` to re-enter the approval flow.`
-                : `Call \`orch_plan\` to generate a new plan, then \`orch_approve_beads\`.`),
+                ? `Revise the plan at \`${oc.state.planDocument}\`, then call \`orch_approve_beads\` to re-enter the approval flow and stay inside the orchestrate workflow.`
+                : `Call \`orch_plan\` to generate a new plan, then \`orch_approve_beads\` to re-enter the workflow menus.`),
           }],
           details: { regression: true, targetPhase: "planning" },
         };
@@ -134,7 +134,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
           content: [{
             type: "text",
             text: `⏪ Regressed to **bead creation phase**.\n\n` +
-              `Create new beads for missing scope or revise existing beads, then call \`orch_approve_beads\`.\n\n` +
+              `Create new beads for missing scope or revise existing beads, then call \`orch_approve_beads\` to stay inside the approval workflow.\n\n` +
               `Existing bead results are preserved — only add what's missing.`,
           }],
           details: { regression: true, targetPhase: "creating_beads" },
@@ -282,7 +282,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
                 return {
                   content: [{
                     type: "text",
-                    text: `⚠️ Space violation detected during bead ${params.beadId}. Regressing to bead creation.\n\n${violationText}\n\nCreate new beads to cover the unexpected scope, then call \`orch_approve_beads\`.`,
+                    text: `⚠️ Space violation detected during bead ${params.beadId}. Regressing to bead creation.\n\n${violationText}\n\nCreate new beads to cover the unexpected scope, then call \`orch_approve_beads\` to return to the workflow menus.`,
                   }],
                   details: { review: { beadId: params.beadId, passed: true }, spaceViolation: true, regression: "creating_beads" },
                 };
@@ -295,7 +295,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
                 return {
                   content: [{
                     type: "text",
-                    text: `⚠️ Space violation detected during bead ${params.beadId}. Regressing to plan revision.\n\n${violationText}\n\nRevise the plan at \`${oc.state.planDocument ?? "(no plan artifact)"}\`, then call \`orch_approve_beads\`.`,
+                    text: `⚠️ Space violation detected during bead ${params.beadId}. Regressing to plan revision.\n\n${violationText}\n\nRevise the plan at \`${oc.state.planDocument ?? "(no plan artifact)"}\`, then call \`orch_approve_beads\` to return to the workflow menus.`,
                   }],
                   details: { review: { beadId: params.beadId, passed: true }, spaceViolation: true, regression: "planning" },
                 };
@@ -377,7 +377,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
             content: [
               {
                 type: "text",
-                text: `**Review agents must complete before advancing. Call \`parallel_subagents\` NOW with the config below.**\n\n## 🔥 Hit me — Bead ${params.beadId}, Round ${round} (re-presented)\n\n\`\`\`json\n${reviewJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` again for bead ${params.beadId} with what was fixed.`,
+                text: `**Review agents must complete before advancing. Call \`parallel_subagents\` NOW with the config below.**\n\n## 🔥 Hit me — Bead ${params.beadId}, Round ${round} (re-presented)\n\n\`\`\`json\n${reviewJson}\n\`\`\`\n\nAfter all complete, present findings and apply fixes. Then call \`orch_review\` again for bead ${params.beadId} with what was fixed to stay inside the review workflow.`,
               },
             ],
             details: { review: { beadId: params.beadId, passed: true }, hitMe: true, round, bead: params.beadId, rePresented: true },
@@ -458,7 +458,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
             content: [
               {
                 type: "text",
-                text: `## 🔥 Hit me — Bead ${params.beadId} (${bead.title}), Round ${round}\n\n${hitMeResults.text}\n\n${hitMeResults.diff ? `### Diff\n\`\`\`diff\n${hitMeResults.diff}\n\`\`\`\n\n` : ""}After reviewing the findings above, call \`orch_review\` again for bead ${params.beadId} with what was fixed.`,
+                text: `## 🔥 Hit me — Bead ${params.beadId} (${bead.title}), Round ${round}\n\n${hitMeResults.text}\n\n${hitMeResults.diff ? `### Diff\n\`\`\`diff\n${hitMeResults.diff}\n\`\`\`\n\n` : ""}After reviewing the findings above, call \`orch_review\` again for bead ${params.beadId} with what was fixed to stay inside the review workflow.`,
               },
             ],
             details: { review: { beadId: params.beadId, passed: true }, hitMe: true, round, bead: params.beadId },
@@ -586,14 +586,14 @@ export function registerReviewTool(oc: OrchestratorContext) {
           const staggerSeconds = SWARM_STAGGER_DELAY_MS / 1000;
           const launchInstruction = ready.length > 2
             ? `⏱️ **STAGGER LAUNCH**: You have ${ready.length} agents to launch. Launch them ONE AT A TIME with ${staggerSeconds}-second gaps between each to prevent thundering herd. Call \`subagent\` for each agent config below sequentially, waiting ${staggerSeconds}s between calls.`
-            : `**NEXT: Call \`parallel_subagents\` NOW to implement ${ready.length} ready beads.**`;
+            : `**NEXT: Call \`parallel_subagents\` NOW to implement ${ready.length} ready beads inside the orchestrate workflow.**`;
           ctx.ui.notify(`✅ Bead ${params.beadId} passed! ${ready.length} beads now ready for parallel implementation.`, "info");
 
           return {
             content: [
               {
                 type: "text",
-                text: `✅ Bead ${params.beadId} (${bead.title}) passed.\n\n${launchInstruction}\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each bead.`,
+                text: `✅ Bead ${params.beadId} (${bead.title}) passed.\n\n${launchInstruction}\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each bead to stay inside the implementation/review workflow.`,
               },
             ],
             details: { review: { beadId: params.beadId, passed: true }, readyBeads: ready.map((b) => b.id), launchingParallel: true },
@@ -639,7 +639,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
                 content: [
                   {
                     type: "text",
-                    text: `⚠️ Skipping bead ${params.beadId} (max retries). Moving to bead ${nextBead.id} (${nextBead.title}):\n\n${implInstr}`,
+                    text: `⚠️ Skipping bead ${params.beadId} (max retries). Moving to bead ${nextBead.id} (${nextBead.title}) inside the implementation workflow:\n\n${implInstr}`,
                   },
                 ],
                 details: { review, skipped: true, nextBead: nextBead.id },
@@ -667,7 +667,7 @@ export function registerReviewTool(oc: OrchestratorContext) {
           content: [
             {
               type: "text",
-              text: `❌ Bead ${params.beadId} (${bead.title}) did not pass review (attempt ${oc.state.retryCount}/${oc.state.maxRetries}).\n\nRevision needed: ${params.revisionInstructions ?? params.feedback}\n\nPlease fix the issues using the code tools, then call \`orch_review\` again.`,
+              text: `❌ Bead ${params.beadId} (${bead.title}) did not pass review (attempt ${oc.state.retryCount}/${oc.state.maxRetries}).\n\nRevision needed: ${params.revisionInstructions ?? params.feedback}\n\nPlease fix the issues using the code tools, then call \`orch_review\` again to stay inside the review workflow.`,
             },
           ],
           details: { review, retryCount: oc.state.retryCount },

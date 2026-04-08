@@ -35,12 +35,16 @@ export function saveDocsPlan(cwd: string, goal: string, suffix: "original" | "fi
   }
 }
 
-function slugifyGoal(goal: string): string {
+export function slugifyGoal(goal: string): string {
   return goal
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 60) || "plan";
+}
+
+export function singleModelPlanArtifactName(goal: string) {
+  return `plans/${slugifyGoal(goal)}.md`;
 }
 
 export function multiModelPlanArtifactNames(goal: string) {
@@ -151,14 +155,21 @@ export function registerPlanTool(oc: OrchestratorContext) {
       const scanResult = oc.state.scanResult;
 
       if (mode === "single_model") {
+        const artifactName = singleModelPlanArtifactName(goal);
+        oc.state.planDocument = artifactName;
+        oc.state.planRefinementRound = 0;
         oc.setPhase("planning", ctx);
         oc.persistState();
         return {
           content: [{
             type: "text",
-            text: `**NEXT: Generate a single-model plan document and save it as a session artifact using \`write_artifact\` NOW.**\n\n${planDocumentPrompt(goal, profile, scanResult)}`,
+            text:
+              `**NEXT: Generate a single-model plan document and save it as a session artifact using \`write_artifact\` NOW.**\n\n` +
+              `Use exactly this artifact name: \`${artifactName}\`.\n\n` +
+              `${planDocumentPrompt(goal, profile, scanResult)}\n\n` +
+              `After writing the artifact, immediately continue the workflow by calling \`orch_approve_beads\` to review the plan in-menu.`,
           }],
-          details: { mode, goal },
+          details: { mode, goal, artifactName },
         };
       }
 
@@ -301,7 +312,11 @@ export function registerPlanTool(oc: OrchestratorContext) {
       return {
         content: [{
           type: "text",
-          text: `Generated a synthesized multi-model plan and saved it as session artifact \`${artifactName}\`.\n\nPlanner runs:\n${plannerSummary}\n\nReview the saved plan, refine it if needed, then create beads from it.`,
+          text:
+            `**NEXT: Call \`orch_approve_beads\` NOW to review the synthesized plan in-menu.**\n\n` +
+            `Saved synthesized multi-model plan to session artifact \`${artifactName}\`.\n\n` +
+            `Planner runs:\n${plannerSummary}\n\n` +
+            `Stay inside the orchestration workflow: review/approve the plan first, then create beads from the approved plan via the menu flow.`,
         }],
         details: {
           mode,

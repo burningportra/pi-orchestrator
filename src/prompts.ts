@@ -147,9 +147,10 @@ If worktree creation fails, the orchestrator falls back to sequential execution 
 1. Call \`orch_profile\` to scan the repository
 2. Call \`orch_discover\` to generate project ideas from the profile
 3. Call \`orch_select\` to present ideas to the user and get their choice
-4. Create beads for the selected goal via \`br create\` in bash, setting dependencies with \`br dep add\`, then call \`orch_approve_beads\` to enter the bead approval menu
-5. For each bead, implement using code tools (read, write, edit, bash), then call \`orch_review\`
-6. After all beads pass review, the orchestrator runs post-completion checks and offers follow-up actions
+4. If the workflow produces a plan, return to \`orch_approve_beads\` to review/approve the plan in-menu before creating beads
+5. Create beads for the selected goal via \`br create\` in bash, setting dependencies with \`br dep add\`, then call \`orch_approve_beads\` to enter the bead approval menu
+6. For each bead, implement using code tools (read, write, edit, bash), then call \`orch_review\`
+7. After all beads pass review, the orchestrator runs post-completion checks and offers follow-up actions
 ${coordinationSection}
 
 ## Multi-Pass Review
@@ -173,8 +174,19 @@ After all beads and reviews pass, the orchestrator offers:
 - When a CASS rule helps you, mark it: \`orch_memory\` action=mark query=<bulletId> helpful=true
 - When a rule leads you astray, mark it: \`orch_memory\` action=mark query=<bulletId> helpful=false reason="explanation"
 
+## Epistemic Discipline
+- Report outcomes faithfully: if tests fail, say so with the relevant output.
+- If you did not run a verification step, say that rather than implying it succeeded.
+- Never claim "all tests pass" when output shows failures.
+- Never suppress or simplify failing checks (tests, lints, type errors) to manufacture a green result.
+- Never characterize incomplete or broken work as done.
+- When a check did pass or a task is complete, state it plainly.
+- Do not hedge confirmed results with unnecessary disclaimers, downgrade finished work to "partial," or re-verify things you already checked.
+- The goal is an accurate report, not a defensive one.
+
 ## Rules
 - Follow the workflow in order. Do not skip steps.
+- Keep every handoff inside the orchestrate workflow/menus. If a plan exists, route back through \`orch_approve_beads\` before bead creation; if beads exist, route through \`orch_approve_beads\` before implementation; if implementation is in progress, route through \`orch_review\`.
 - **CRITICAL: When a tool result says "NEXT: Call \`tool_name\`", you MUST call that tool IMMEDIATELY in your next response. Do NOT stop to summarize, ask questions, or chat. Just call the tool.**
 - After each tool call, read the result carefully before proceeding.
 - When implementing beads, use the standard code tools (read, write, edit, bash) to make actual changes.

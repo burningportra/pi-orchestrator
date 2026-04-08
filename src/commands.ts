@@ -331,7 +331,7 @@ export function registerCommands(oc: OrchestratorContext) {
             );
           } else {
             pi.sendUserMessage(
-              `Implement bead **${beadId}**. Run \`br show ${beadId}\` to see its details, then implement it and call \`orch_review\` when done.`,
+              `Implement bead **${beadId}**. Run \`br show ${beadId}\` to see its details, then implement it and call \`orch_review\` when done to stay inside the orchestrate workflow.`,
               { deliverAs: "followUp" }
             );
           }
@@ -353,7 +353,7 @@ export function registerCommands(oc: OrchestratorContext) {
           }
           oc.persistState();
           pi.sendUserMessage(
-            `Resumed after resetting ${resetCount} stuck bead(s). Call \`orch_review\` to pick the next bead and continue.`,
+            `Resumed after resetting ${resetCount} stuck bead(s). Call \`orch_review\` to pick the next bead and continue inside the orchestrate workflow.`,
             { deliverAs: "followUp" }
           );
           return;
@@ -379,7 +379,7 @@ export function registerCommands(oc: OrchestratorContext) {
             oc.persistState();
             pi.sendUserMessage(
               `Extending existing plan with ${openCount} open bead(s) still active.\n\n` +
-              `Call \`orch_discover\` to generate new ideas, then add beads with \`br create\`. ` +
+              `Call \`orch_discover\` to generate new ideas, then add beads with \`br create\` and return through \`orch_approve_beads\`. ` +
               `Existing open beads will not be touched.`,
               { deliverAs: "followUp" }
             );
@@ -388,7 +388,7 @@ export function registerCommands(oc: OrchestratorContext) {
             oc.setPhase("implementing", ctx);
             oc.persistState();
             pi.sendUserMessage(
-              `Continuing with ${openCount} open bead(s). Call \`orch_review\` to pick the next bead and implement it.`,
+              `Continuing with ${openCount} open bead(s). Call \`orch_review\` to pick the next bead and implement it inside the orchestrate workflow.`,
               { deliverAs: "followUp" }
             );
           }
@@ -416,7 +416,7 @@ export function registerCommands(oc: OrchestratorContext) {
             oc.persistState();
             pi.sendUserMessage(
               `Pruned ${pruneCount} stale bead(s). ${remaining.length} bead(s) remain active.\n\n` +
-              `Call \`orch_review\` to continue implementing: ${remaining.map(b => b.id).join(", ")}.`,
+              `Call \`orch_review\` to continue implementing inside the orchestrate workflow: ${remaining.map(b => b.id).join(", ")}.`,
               { deliverAs: "followUp" }
             );
             return;
@@ -441,16 +441,13 @@ export function registerCommands(oc: OrchestratorContext) {
           }
           oc.orchestratorActive = true;
           oc.state.planDocument = selectedPlan.artifactName;
-          oc.setPhase("creating_beads", ctx);
+          oc.setPhase("awaiting_plan_approval", ctx);
           oc.persistState();
-          const { beadCreationPrompt: _bcp, formatRepoProfile: _frp } = await import("./prompts.js");
-          const _goal = oc.state.selectedGoal ?? selectedPlan.label;
-          const _repoCtx = oc.state.repoProfile ? _frp(oc.state.repoProfile) : "";
           pi.sendUserMessage(
             `**Loaded saved plan: ${selectedPlan.label}**\n\n` +
-            `Create beads from this plan using \`br create\` and \`br dep add\` in bash.\n\n` +
-            `---\n\n${planContent}\n\n---\n\n` +
-            _bcp(_goal, _repoCtx, oc.state.constraints),
+            `**NEXT: Call \`orch_approve_beads\` NOW to review this plan inside the orchestration workflow.**\n\n` +
+            `Artifact: \`${selectedPlan.artifactName}\`\n\n` +
+            `Do not skip directly to bead creation — keep the run inside the plan approval → bead creation → bead approval happy path.`,
             { deliverAs: "followUp" }
           );
           return;
@@ -553,16 +550,13 @@ export function registerCommands(oc: OrchestratorContext) {
                 }
                 if (planContent) {
                   oc.state.planDocument = selectedPlan.artifactName;
-                  oc.setPhase("creating_beads", ctx);
+                  oc.setPhase("awaiting_plan_approval", ctx);
                   oc.persistState();
-                  const { beadCreationPrompt: _bcp2, formatRepoProfile: _frp2 } = await import("./prompts.js");
-                  const _goal2 = selectedPlan.label;
-                  const _repoCtx2 = oc.state.repoProfile ? _frp2(oc.state.repoProfile) : "";
                   pi.sendUserMessage(
                     `**Loaded saved plan: ${selectedPlan.label}**\n\n` +
-                    `Create beads from this plan using \`br create\` and \`br dep add\` in bash.\n\n` +
-                    `---\n\n${planContent}\n\n---\n\n` +
-                    _bcp2(_goal2, _repoCtx2, []),
+                    `**NEXT: Call \`orch_approve_beads\` NOW to review this plan inside the orchestration workflow.**\n\n` +
+                    `Artifact: \`${selectedPlan.artifactName}\`\n\n` +
+                    `Do not skip directly to bead creation — keep the run inside the plan approval → bead creation → bead approval happy path.`,
                     { deliverAs: "followUp" }
                   );
                   return;
@@ -583,7 +577,7 @@ export function registerCommands(oc: OrchestratorContext) {
 
       if (goalArg) {
         pi.sendUserMessage(
-          `Start the orchestrator workflow for this repo. I want to: ${goalArg}\n\nBegin by calling \`orch_profile\` to scan the repo, then skip discovery and go straight to creating beads with my stated goal.`,
+          `Start the orchestrator workflow for this repo. I want to: ${goalArg}\n\nBegin by calling \`orch_profile\` to scan the repo, then stay inside the orchestrate workflow/menus while routing my stated goal through the normal planning or bead-creation path.`,
           { deliverAs: "followUp" }
         );
       } else {

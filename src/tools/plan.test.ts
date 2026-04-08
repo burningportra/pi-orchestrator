@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildMultiModelPlanSubagentConfigs, multiModelPlanArtifactNames } from "./plan.js";
+import {
+  buildMultiModelPlanSubagentConfigs,
+  multiModelPlanArtifactNames,
+  singleModelPlanArtifactName,
+  slugifyGoal,
+} from "./plan.js";
 
 const profile = {
   name: "demo",
@@ -18,6 +23,22 @@ const profile = {
   readme: "",
 } as any;
 
+describe("slugifyGoal", () => {
+  it("creates stable kebab-case slugs for plan artifacts", () => {
+    expect(slugifyGoal("Add end-to-end /orchestrate smoke tests")).toBe(
+      "add-end-to-end-orchestrate-smoke-tests",
+    );
+  });
+});
+
+describe("singleModelPlanArtifactName", () => {
+  it("creates deterministic single-model artifact names", () => {
+    expect(singleModelPlanArtifactName("TopStepX API Rate Limiter Guard")).toBe(
+      "plans/topstepx-api-rate-limiter-guard.md",
+    );
+  });
+});
+
 describe("multiModelPlanArtifactNames", () => {
   it("creates deterministic final and per-planner artifact names", () => {
     const artifacts = multiModelPlanArtifactNames("TopStepX API Rate Limiter Guard");
@@ -31,6 +52,27 @@ describe("multiModelPlanArtifactNames", () => {
     expect(artifacts.planners.ergonomics).toBe(
       "plans/topstepx-api-rate-limiter-guard-multi-model/ergonomics.md",
     );
+  });
+});
+
+describe("plan workflow handoff", () => {
+  it("tells the agent to continue into orch_approve_beads after writing the single-model plan", () => {
+    const { readFileSync } = require("fs");
+    const { join } = require("path");
+    const source = readFileSync(join(__dirname, "plan.ts"), "utf8");
+
+    expect(source).toContain("After writing the artifact, immediately continue the workflow by calling");
+    expect(source).toContain("orch_approve_beads");
+    expect(source).toContain("oc.state.planDocument = artifactName");
+  });
+
+  it("keeps the multi-model path inside orch_approve_beads after synthesis", () => {
+    const { readFileSync } = require("fs");
+    const { join } = require("path");
+    const source = readFileSync(join(__dirname, "plan.ts"), "utf8");
+
+    expect(source).toContain("review the synthesized plan in-menu");
+    expect(source).toContain("Stay inside the orchestration workflow");
   });
 });
 

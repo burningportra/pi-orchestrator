@@ -341,7 +341,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
           return {
             content: [{
               type: "text",
-              text: `**NEXT: Run 4 sequential plan refinement rounds, then call \`orch_approve_beads\` to review the final result.**\n\nFor each round (1-4):\n1. Spawn a fresh sub-agent using the \`subagent\` tool (fork: false)\n2. Wait for it to complete before starting the next round\n3. After all 4 rounds, call \`orch_approve_beads\` to review the improved plan\n\n${roundInstructions}`,
+              text: `**NEXT: Run 4 sequential plan refinement rounds, then call \`orch_approve_beads\` to review the final result in-menu.**\n\nStay inside the orchestration workflow: plan refinement must return to \`orch_approve_beads\`, not skip ahead.\n\nFor each round (1-4):\n1. Spawn a fresh sub-agent using the \`subagent\` tool (fork: false)\n2. Wait for it to complete before starting the next round\n3. After all 4 rounds, call \`orch_approve_beads\` to review the improved plan\n\n${roundInstructions}`,
             }],
             details: { approved: false, plan: true, refining: true, autoRefine: true, rounds: 4, planDocument: oc.state.planDocument, planRound },
           };
@@ -358,7 +358,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
           return {
             content: [{
               type: "text",
-              text: `💡 You're at round ${planRound}. Guide recommends 4-5 rounds total — ${4 - planRound} more to go.\n\n**NEXT: Spawn a fresh sub-agent for plan refinement, then call \`orch_approve_beads\` again.**\n\nUse \`subagent\` with these parameters:\n\`\`\`json\n${JSON.stringify({ name: `plan-refine-r${planRound + 1}`, task: `${freshPrompt}\n\nAfter refining, write the updated plan to the artifact: \`${oc.state.planDocument}\`\nUse write_artifact with name "${oc.state.planDocument}".`, model: refinementModel, cwd: ctx.cwd }, null, 2)}\n\`\`\`\n\nThis uses **${refinementModel}** (model rotation prevents taste convergence).\nAfter the sub-agent completes, call \`orch_approve_beads\` to review changes.`,
+              text: `💡 You're at round ${planRound}. Guide recommends 4-5 rounds total — ${4 - planRound} more to go.\n\n**NEXT: Spawn a fresh sub-agent for plan refinement, then call \`orch_approve_beads\` again to stay inside the plan-approval menu flow.**\n\nUse \`subagent\` with these parameters:\n\`\`\`json\n${JSON.stringify({ name: `plan-refine-r${planRound + 1}`, task: `${freshPrompt}\n\nAfter refining, write the updated plan to the artifact: \`${oc.state.planDocument}\`\nUse write_artifact with name "${oc.state.planDocument}".`, model: refinementModel, cwd: ctx.cwd }, null, 2)}\n\`\`\`\n\nThis uses **${refinementModel}** (model rotation prevents taste convergence).\nAfter the sub-agent completes, call \`orch_approve_beads\` to review changes.`,
             }],
             details: { approved: false, plan: true, refining: true, freshAgent: true, model: refinementModel, planDocument: oc.state.planDocument, planRound },
           };
@@ -380,7 +380,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
           return {
             content: [{
               type: "text",
-              text: `**NEXT: Spawn a fresh sub-agent for plan refinement, then call \`orch_approve_beads\` again.**\n\nUse \`subagent\` with these parameters:\n\`\`\`json\n${JSON.stringify({
+              text: `**NEXT: Spawn a fresh sub-agent for plan refinement, then call \`orch_approve_beads\` again to stay inside the plan-approval menu flow.**\n\nUse \`subagent\` with these parameters:\n\`\`\`json\n${JSON.stringify({
                 name: `plan-refine-r${planRound + 1}`,
                 task: `${freshPrompt}\n\nAfter refining, write the updated plan to the artifact: \`${oc.state.planDocument}\`\nUse write_artifact with name \"${oc.state.planDocument}\".`,
                 model: refinementModel,
@@ -437,7 +437,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
         return {
           content: [{
             type: "text",
-            text: `**NEXT: Create beads from the approved plan using \`br create\` and \`br dep add\` in bash NOW. When all beads are created, call \`orch_approve_beads\` again to enter the bead approval menu.**\n\nArtifact: \`${oc.state.planDocument}\`\n\n---\n\n${creationPrompt}\n\n---\n\n**After creating all beads:** call \`orch_approve_beads\` to review and approve before implementation begins.`,
+            text: `**NEXT: Create beads from the approved plan using \`br create\` and \`br dep add\` in bash NOW. When all beads are created, call \`orch_approve_beads\` again to re-enter the bead approval menu.**\n\nStay inside the orchestration workflow: approved plan → bead creation → bead approval → implementation.\n\nArtifact: \`${oc.state.planDocument}\`\n\n---\n\n${creationPrompt}\n\n---\n\n**After creating all beads:** call \`orch_approve_beads\` to review and approve before implementation begins.`,
           }],
           details: { approved: true, plan: true, creatingBeads: true, planDocument: oc.state.planDocument },
         };
@@ -454,7 +454,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
 
       if (beads.length === 0) {
         return {
-          content: [{ type: "text", text: "No open beads found. Create beads with `br create` first, then call `orch_approve_beads`." }],
+          content: [{ type: "text", text: "No open beads found. Stay inside the orchestration workflow: create beads with `br create` first, then call `orch_approve_beads` to return to the menu." }],
           details: { approved: false },
         };
       }
@@ -809,7 +809,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
         if (!advChoice || advChoice.startsWith("⬅️")) {
           // Back to main menu — re-trigger approval
           return {
-            content: [{ type: "text", text: "Call `orch_approve_beads` again to return to the approval menu." }],
+            content: [{ type: "text", text: "Call `orch_approve_beads` again to return to the approval menu and stay inside the orchestrate workflow." }],
             details: { approved: false },
           };
         }
@@ -852,7 +852,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
           content: [
             {
               type: "text",
-              text: `**NEXT: Review and refine the beads using br CLI, then call \`orch_approve_beads\` again.**\n\n${beadRefinementPrompt(round, oc.state.polishChanges)}\n\n---\n\nCurrent beads (${beads.length} total):\n${compactBeadList}\n\nUse \`br show <id>\` for full bead details.`,
+              text: `**NEXT: Review and refine the beads using br CLI, then call \`orch_approve_beads\` again to return to the approval menu.**\n\nStay inside the bead-approval workflow while refining.\n\n${beadRefinementPrompt(round, oc.state.polishChanges)}\n\n---\n\nCurrent beads (${beads.length} total):\n${compactBeadList}\n\nUse \`br show <id>\` for full bead details.`,
             },
           ],
           details: { approved: false, refining: true, beadCount: beads.length, polishRound: round },
@@ -970,7 +970,7 @@ cd ${ctx.cwd}`;
           });
         } catch (err: any) {
           return {
-            content: [{ type: "text", text: `❌ WHAT/WHY/HOW audit failed: ${err.message ?? err}\n\nCall \`orch_approve_beads\` again to continue.` }],
+            content: [{ type: "text", text: `❌ WHAT/WHY/HOW audit failed: ${err.message ?? err}\n\nCall \`orch_approve_beads\` again to continue inside the approval workflow.` }],
             details: { approved: false, auditError: String(err) },
           };
         }
@@ -1027,7 +1027,7 @@ cd ${ctx.cwd}`;
 
         // Continue without refining
         return {
-          content: [{ type: "text", text: `${auditDisplay}\n\nCall \`orch_approve_beads\` again to continue.` }],
+          content: [{ type: "text", text: `${auditDisplay}\n\nCall \`orch_approve_beads\` again to continue inside the approval workflow.` }],
           details: { approved: false, whatWhyHowAudit: true, weakBeadCount: weakBeads.length },
         };
       }
@@ -1078,7 +1078,7 @@ cd ${ctx.cwd}`;
           return {
             content: [{
               type: "text",
-              text: `**Closed ${result.closed.length} orphaned beads:** ${result.closed.join(", ")}${result.failed.length > 0 ? `\n⚠️ Failed to close: ${result.failed.join(", ")}` : ""}\n\nCall \`orch_approve_beads\` again to see updated graph health.`,
+              text: `**Closed ${result.closed.length} orphaned beads:** ${result.closed.join(", ")}${result.failed.length > 0 ? `\n⚠️ Failed to close: ${result.failed.join(", ")}` : ""}\n\nCall \`orch_approve_beads\` again to see updated graph health and stay inside the approval workflow.`,
             }],
             details: { approved: false, remediation: "orphans", closed: result.closed, failed: result.failed },
           };
@@ -1160,7 +1160,7 @@ cd ${ctx.cwd}`;
         return {
           content: [{
             type: "text",
-            text: "Call `orch_approve_beads` again to return to the approval menu.",
+            text: "Call `orch_approve_beads` again to return to the approval menu and stay inside the orchestrate workflow.",
           }],
           details: { approved: false },
         };
@@ -1187,7 +1187,7 @@ cd ${ctx.cwd}`;
           return {
             content: [{
               type: "text",
-              text: `**Cross-model review (${reviewResult.model}):** Review failed: ${reviewResult.error}\n\nCall \`orch_approve_beads\` again to continue.`,
+              text: `**Cross-model review (${reviewResult.model}):** Review failed: ${reviewResult.error}\n\nCall \`orch_approve_beads\` again to continue inside the approval workflow.`,
             }],
             details: { approved: false, crossModelReview: true, model: reviewResult.model, error: reviewResult.error },
           };
@@ -1221,7 +1221,7 @@ cd ${ctx.cwd}`;
           return {
             content: [{
               type: "text",
-              text: `**Cross-model review (${reviewResult.model}):** No structured suggestions found.\n\nCall \`orch_approve_beads\` again to continue.`,
+              text: `**Cross-model review (${reviewResult.model}):** No structured suggestions found.\n\nCall \`orch_approve_beads\` again to continue inside the approval workflow.`,
             }],
             details: { approved: false, crossModelReview: true, model: reviewResult.model },
           };
@@ -1257,7 +1257,7 @@ cd ${ctx.cwd}`;
         return {
           content: [{
             type: "text",
-            text: "Cross-model suggestions ignored. Call `orch_approve_beads` again to continue.",
+            text: "Cross-model suggestions ignored. Call `orch_approve_beads` again to continue inside the approval workflow.",
           }],
           details: { approved: false, crossModelReview: true, ignored: true },
         };
@@ -1400,8 +1400,8 @@ cd ${ctx.cwd}`;
             {
               type: "text",
               text: ready.length > 2
-                ? `⏱️ **STAGGER LAUNCH**: You have ${ready.length} agents to launch. Launch them ONE AT A TIME with ${SWARM_STAGGER_DELAY_MS / 1000}-second gaps between each to prevent thundering herd. Call \`subagent\` for each agent config below sequentially, waiting ${SWARM_STAGGER_DELAY_MS / 1000}s between calls.${bvRecommendation}\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each bead with the sub-agent's summary.\n\n---\n\nBeads approved! ${beads.length} total, ${ready.length} ready now.\n\n${modeLabel}`
-                : `**NEXT: Call \`parallel_subagents\` NOW to launch ${ready.length} parallel beads.**${bvRecommendation}\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each bead with the sub-agent's summary.\n\n---\n\nBeads approved! ${beads.length} total, ${ready.length} ready now.\n\n${modeLabel}`,
+                ? `⏱️ **STAGGER LAUNCH**: You have ${ready.length} agents to launch. Launch them ONE AT A TIME with ${SWARM_STAGGER_DELAY_MS / 1000}-second gaps between each to prevent thundering herd. Call \`subagent\` for each agent config below sequentially, waiting ${SWARM_STAGGER_DELAY_MS / 1000}s between calls.${bvRecommendation}\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each bead with the sub-agent's summary to stay inside the implementation/review workflow.\n\n---\n\nBeads approved! ${beads.length} total, ${ready.length} ready now.\n\n${modeLabel}`
+                : `**NEXT: Call \`parallel_subagents\` NOW to launch ${ready.length} parallel beads.**${bvRecommendation}\n\n\`\`\`json\n${parallelJson}\n\`\`\`\n\nAfter all agents complete, call \`orch_review\` for each bead with the sub-agent's summary to stay inside the implementation/review workflow.\n\n---\n\nBeads approved! ${beads.length} total, ${ready.length} ready now.\n\n${modeLabel}`,
             },
           ],
           details: { approved: true, beadCount: beads.length, readyCount: ready.length, parallel: true },
@@ -1429,7 +1429,7 @@ cd ${ctx.cwd}`;
         content: [
           {
             type: "text",
-            text: `**NEXT: Implement bead ${firstBead.id} NOW, then call \`orch_review\` when done.**\n\nBeads approved! ${beads.length} total, starting with ${firstBead.id}.\n\n---\n\n${implInstr}`,
+            text: `**NEXT: Implement bead ${firstBead.id} NOW, then call \`orch_review\` when done to stay inside the implementation/review workflow.**\n\nBeads approved! ${beads.length} total, starting with ${firstBead.id}.\n\n---\n\n${implInstr}`,
           },
         ],
         details: { approved: true, beadCount: beads.length, readyCount: ready.length, firstBead: firstBead.id },

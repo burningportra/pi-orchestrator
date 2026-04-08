@@ -225,7 +225,7 @@ export function registerProfileTool(oc: OrchestratorContext) {
           return {
             content: [{
               type: "text",
-              text: `**NEXT: Call \`orch_plan\` with mode \`single_model\` NOW.**\n\nGoal: "${enrichedGoal}"${constraintsSummary}\n\nGenerate a detailed implementation plan as a markdown artifact. Once the plan is approved, beads will be created from it.`,
+              text: `**NEXT: Call \`orch_plan\` with mode \`single_model\` NOW.**\n\nGoal: "${enrichedGoal}"${constraintsSummary}\n\nGenerate a detailed implementation plan as a markdown artifact. Stay inside the orchestrate workflow: after the plan is written, return to \`orch_approve_beads\` for plan approval before creating beads.`,
             }],
             details: { profile, scanResult, customGoal: goal, selected: true, goal: enrichedGoal, constraints: oc.state.constraints, workflow: "plan_first" },
           };
@@ -238,7 +238,7 @@ export function registerProfileTool(oc: OrchestratorContext) {
           return {
             content: [{
               type: "text",
-              text: `**NEXT: Call \`orch_plan\` with mode \`multi_model\` NOW.**\n\nGoal: "${enrichedGoal}"${constraintsSummary}\n\nRun competing planners for correctness, robustness, and ergonomics, then synthesize them into one plan document artifact.`,
+              text: `**NEXT: Call \`orch_plan\` with mode \`multi_model\` NOW.**\n\nGoal: "${enrichedGoal}"${constraintsSummary}\n\nRun competing planners for correctness, robustness, and ergonomics, then synthesize them into one plan document artifact. Stay inside the orchestrate workflow: after synthesis, return to \`orch_approve_beads\` for plan approval before creating beads.`,
             }],
             details: { profile, scanResult, customGoal: goal, selected: true, goal: enrichedGoal, constraints: oc.state.constraints, workflow: "multi_model_plan" },
           };
@@ -262,7 +262,7 @@ export function registerProfileTool(oc: OrchestratorContext) {
         return {
           content: [{
             type: "text",
-            text: `**NEXT: Create beads for this goal using \`br create\` and \`br dep add\` in bash NOW.**\n\nGoal: "${enrichedGoal}"${constraintsSummary}\n\n---\n\n${instructions}`,
+            text: `**NEXT: Create beads for this goal using \`br create\` and \`br dep add\` in bash NOW.**\n\nGoal: "${enrichedGoal}"${constraintsSummary}\n\nStay inside the orchestrate workflow: once the beads exist, return to \`orch_approve_beads\` for bead approval before implementation.\n\n---\n\n${instructions}`,
           }],
           details: { profile, scanResult, customGoal: goal, selected: true, goal: enrichedGoal, constraints: oc.state.constraints, workflow: "direct" },
         };

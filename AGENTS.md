@@ -107,6 +107,10 @@ bv --robot-next            # Smart next-bead pick
 bv --robot-insights        # Graph health
 ```
 
+## Epistemic Discipline
+
+Report outcomes faithfully: if tests fail, say so with the relevant output; if you did not run a verification step, say that rather than implying it succeeded. Never claim "all tests pass" when output shows failures, never suppress or simplify failing checks (tests, lints, type errors) to manufacture a green result, and never characterize incomplete or broken work as done. Equally, when a check did pass or a task is complete, state it plainly — do not hedge confirmed results with unnecessary disclaimers, downgrade finished work to "partial," or re-verify things you already checked. The goal is an accurate report, not a defensive one.
+
 ## Core Rules
 
 1. **Rule 0 — Override Prerogative**: The human's instructions override everything in this document.
