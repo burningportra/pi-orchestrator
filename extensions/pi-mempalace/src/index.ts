@@ -142,6 +142,9 @@ export default function piMempalaceExtension(pi: ExtensionAPI) {
           "warning"
         );
       }
+    } else {
+      // Show load confirmation the same way other extensions do
+      process.stderr.write(`[pi-mempalace] episodic memory active (wing: ${projectSlug})\n`);
     }
   });
 
