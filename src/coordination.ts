@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync, chmodSync } from "fs";
 import { join } from "path";
 import type { CoordinationMode } from "./types.js";
 import type { ExecFn } from "./agent-mail.js";
+import { brExec, resilientExec } from "./cli-exec.js";
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -91,31 +92,24 @@ export function getCachedBackend(): CoordinationBackend | null {
 
 async function detectBeads(pi: ExtensionAPI, cwd: string): Promise<boolean> {
   // Check br CLI is installed
-  try {
-    const result = await pi.exec("br", ["--help"], { timeout: 3000, cwd });
-    if (result.code !== 0) return false;
-  } catch {
-    return false;
-  }
+  const result = await brExec(pi, ["--help"], { timeout: 3000, cwd, maxRetries: 0 });
+  if (!result.ok) return false;
 
   // Check .beads/ directory exists (initialized)
   return existsSync(join(cwd, ".beads"));
 }
 
 async function isAgentMailReachable(pi: ExtensionAPI): Promise<boolean> {
+  const result = await resilientExec(pi, "curl", [
+    "-s", "--max-time", "2",
+    "http://127.0.0.1:8765/health/liveness",
+  ], { timeout: 5000, maxRetries: 1 });
+  if (!result.ok) return false;
   try {
-    const result = await pi.exec("curl", [
-      "-s", "--max-time", "2",
-      "http://127.0.0.1:8765/health/liveness",
-    ], { timeout: 5000 });
-    try {
-      const parsed = JSON.parse(result.stdout.trim());
-      return parsed?.status === "ok" || parsed?.status === "healthy" || parsed?.status === "alive";
-    } catch {
-      return result.code === 0 && result.stdout.length > 0;
-    }
+    const parsed = JSON.parse(result.value.stdout.trim());
+    return parsed?.status === "ok" || parsed?.status === "healthy" || parsed?.status === "alive";
   } catch {
-    return false;
+    return result.value.code === 0 && result.value.stdout.length > 0;
   }
 }
 
@@ -124,26 +118,23 @@ async function detectAgentMail(pi: ExtensionAPI): Promise<boolean> {
   if (await isAgentMailReachable(pi)) return true;
 
   // Not running — check if installed and try to start it
-  try {
-    const whichResult = await pi.exec("uv", ["run", "python", "-c", "import mcp_agent_mail"], { timeout: 5000 });
-    if (whichResult.code !== 0) return false; // not installed
-  } catch {
-    return false;
-  }
+  const whichResult = await resilientExec(pi, "uv", ["run", "python", "-c", "import mcp_agent_mail"], {
+    timeout: 5000,
+    maxRetries: 0,
+  });
+  if (!whichResult.ok || whichResult.value.code !== 0) return false; // not installed
 
   // Installed but not running — start in background
-  try {
-    await pi.exec("bash", ["-c",
-      "nohup uv run python -m mcp_agent_mail.cli serve-http > /dev/null 2>&1 &"
-    ], { timeout: 5000 });
+  const startResult = await resilientExec(pi, "bash", ["-c",
+    "nohup uv run python -m mcp_agent_mail.cli serve-http > /dev/null 2>&1 &"
+  ], { timeout: 5000, maxRetries: 0 });
 
-    // Wait up to 5 seconds for it to become reachable
-    for (let i = 0; i < 10; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      if (await isAgentMailReachable(pi)) return true;
-    }
-  } catch {
-    // Failed to start — fall through
+  if (!startResult.ok) return false;
+
+  // Wait up to 5 seconds for it to become reachable
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    if (await isAgentMailReachable(pi)) return true;
   }
 
   return false;
@@ -212,12 +203,8 @@ let _ubsAvailable: boolean | null = null;
  */
 export async function detectUbs(pi: ExtensionAPI, cwd: string): Promise<boolean> {
   if (_ubsAvailable !== null) return _ubsAvailable;
-  try {
-    const result = await pi.exec("ubs", ["--help"], { timeout: 3000, cwd });
-    _ubsAvailable = result.code === 0;
-  } catch {
-    _ubsAvailable = false;
-  }
+  const result = await resilientExec(pi, "ubs", ["--help"], { timeout: 3000, cwd, maxRetries: 0 });
+  _ubsAvailable = result.ok && result.value.code === 0;
   return _ubsAvailable;
 }
 
@@ -228,20 +215,18 @@ export function resetUbsCache(): void {
 
 async function detectSophia(pi: ExtensionAPI, cwd: string): Promise<boolean> {
   // CLI available
-  try {
-    const result = await pi.exec("sophia", ["--help"], { timeout: 3000, cwd });
-    if (result.code !== 0) return false;
-  } catch {
-    return false;
-  }
+  const helpResult = await resilientExec(pi, "sophia", ["--help"], { timeout: 3000, cwd, maxRetries: 0 });
+  if (!helpResult.ok || helpResult.value.code !== 0) return false;
 
   // SOPHIA.yaml present (initialized)
   if (!existsSync(join(cwd, "SOPHIA.yaml"))) return false;
 
   // Can list CRs (fully functional)
+  const listResult = await resilientExec(pi, "sophia", ["cr", "list", "--json"], { timeout: 3000, cwd, maxRetries: 0 });
+  if (!listResult.ok || listResult.value.code !== 0) return false;
+
   try {
-    const result = await pi.exec("sophia", ["cr", "list", "--json"], { timeout: 3000, cwd });
-    const parsed = JSON.parse(result.stdout);
+    const parsed = JSON.parse(listResult.value.stdout);
     return parsed.ok === true;
   } catch {
     return false;

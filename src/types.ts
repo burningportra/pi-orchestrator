@@ -182,6 +182,40 @@ export interface BeadResult {
   summary: string;
 }
 
+export type OpeningCeremonyMode = "animated" | "static" | "skip";
+
+export interface OpeningCeremonyFrame {
+  text: string;
+  delayMs: number;
+}
+
+export interface OpeningCeremonyWriter {
+  write(text: string): void | Promise<void>;
+}
+
+export interface OpeningCeremonyRuntime {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+}
+
+export interface OpeningCeremonyOptions {
+  enabled?: boolean;
+  interactive?: boolean;
+  reducedMotion?: boolean;
+  quiet?: boolean;
+  terminalWidth?: number;
+  maxDurationMs?: number;
+  runtime?: OpeningCeremonyRuntime;
+}
+
+export interface OpeningCeremonyResult {
+  rendered: boolean;
+  mode: OpeningCeremonyMode;
+  frameCount: number;
+  durationMs: number;
+  error?: string;
+}
+
 export interface BeadReview {
   beadId: string;
   passed: boolean;

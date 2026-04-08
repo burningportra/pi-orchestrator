@@ -29,6 +29,7 @@ You: /orchestrate
 
 - **Multi-model planning** — Have 3 different AI models compete on your plan, then synthesize the best parts
 - **Bead-based execution** — Tasks created as beads with dependency tracking via br CLI
+- **Resilient CLI recovery** — `br`, `bv`, `git`, `find`, `npm`, `ubs`, and coordination probes now run through a structured exec layer with retry for transient failures and graceful degradation when tools disappear mid-session
 - **Bead template library** — Optional scaffolds for common bead shapes: `add-api-endpoint`, `refactor-module`, and `add-tests`
 - **4-agent review** — Fresh-eyes, polish, ergonomics, and reality-check reviewers run in parallel
 - **CASS memory** — Procedural memory via [cm CLI](https://github.com/Dicklesworthstone/cass_memory_system) — relevance-scored rules, anti-patterns, and cross-session learning
@@ -94,8 +95,12 @@ Validation in `src/beads.ts` enforces this hygiene. Open beads fail validation i
 ```bash
 git clone https://github.com/burningportra/pi-orchestrator.git
 cd pi-orchestrator && npm install
+npm run build
+npm test
 pi -e ./src/index.ts
 ```
+
+When changing orchestration internals, prefer the shared CLI wrapper layer in `src/cli-exec.ts` instead of adding new raw `pi.exec(...)` calls. The wrapper gives you structured failures, transient retry where appropriate, and predictable fallback behavior for user-facing flows.
 
 ## License
 

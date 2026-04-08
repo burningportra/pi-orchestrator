@@ -14,4 +14,14 @@ describe("saved plan workflow continuity", () => {
     expect(source).toContain("Do not skip directly to bead creation");
     expect(source).toContain("Artifact: \\`${selectedPlan.artifactName}\\`");
   });
+
+  it("makes the startup-only opening ceremony hook explicit before any startup UI", () => {
+    expect(source).toContain("const runOrchestrateStartupFlow = async () => {");
+    expect(source).toContain("Opening ceremony hook:");
+    expect(source).toContain("await runOrchestrateStartupFlow();");
+    expect(source).toContain("Existing orchestration detected");
+    expect(source).toContain("Start the orchestrator workflow for this repo. Begin by calling `orch_profile` to scan the repository.");
+
+    expect(source).toMatch(/Opening ceremony hook:[\s\S]*await runOrchestrateStartupFlow\(\);/);
+  });
 });

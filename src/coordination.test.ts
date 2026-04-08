@@ -98,6 +98,7 @@ describe("detectCoordinationBackend", () => {
     mockPi.exec.mockImplementation(async (cmd: string, args: string[]) => {
       if (cmd === "br" && args[0] === "--help") return { code: 0, stdout: "br help", stderr: "" };
       if (cmd === "curl") return { code: 1, stdout: "", stderr: "" }; // unreachable
+      if (cmd === "uv") return { code: 1, stdout: "", stderr: "" }; // not installed, degrade cleanly
       if (cmd === "sophia" && args[0] === "--help") return { code: 0, stdout: "sophia help", stderr: "" };
       if (cmd === "sophia" && args[0] === "cr") return { code: 0, stdout: '{"ok":true}', stderr: "" };
       return { code: 1, stdout: "", stderr: "" };
@@ -133,6 +134,45 @@ describe("detectCoordinationBackend", () => {
     const result = await detectCoordinationBackend(mockPi, "/fake/cwd");
     expect(result.beads).toBe(false);
     expect(result.sophia).toBe(true);
+  });
+
+  it("returns sophia false instead of throwing when sophia JSON is invalid", async () => {
+    mockPi.exec.mockImplementation(async (cmd: string, args: string[]) => {
+      if (cmd === "br" && args[0] === "--help") return { code: 0, stdout: "br help", stderr: "" };
+      if (cmd === "curl") return { code: 0, stdout: '{"status":"ok"}', stderr: "" };
+      if (cmd === "sophia" && args[0] === "--help") return { code: 0, stdout: "sophia help", stderr: "" };
+      if (cmd === "sophia" && args[0] === "cr") return { code: 0, stdout: 'not json', stderr: "" };
+      return { code: 1, stdout: "", stderr: "" };
+    });
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.endsWith(".beads")) return true;
+      if (p.endsWith("SOPHIA.yaml")) return true;
+      return false;
+    });
+
+    const result = await detectCoordinationBackend(mockPi, "/fake/cwd");
+    expect(result.beads).toBe(true);
+    expect(result.agentMail).toBe(true);
+    expect(result.sophia).toBe(false);
+  });
+
+  it("returns agentMail false when probes fail or startup cannot launch", async () => {
+    mockPi.exec.mockImplementation(async (cmd: string, args: string[]) => {
+      if (cmd === "br" && args[0] === "--help") return { code: 0, stdout: "br help", stderr: "" };
+      if (cmd === "curl") throw new Error("connection refused");
+      if (cmd === "uv") return { code: 0, stdout: "", stderr: "" };
+      if (cmd === "bash") throw new Error("spawn failed");
+      if (cmd === "sophia") return { code: 1, stdout: "", stderr: "" };
+      return { code: 1, stdout: "", stderr: "" };
+    });
+
+    mockExistsSync.mockImplementation((p: string) => p.endsWith(".beads"));
+
+    const result = await detectCoordinationBackend(mockPi, "/fake/cwd");
+    expect(result.beads).toBe(true);
+    expect(result.agentMail).toBe(false);
+    expect(result.sophia).toBe(false);
   });
 
   it("caches the result on second call", async () => {

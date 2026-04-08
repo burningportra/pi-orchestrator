@@ -8,6 +8,7 @@ import { getEpisodicContext, sanitiseSlug } from "../episodic-memory.js";
 import { agentMailTaskPreamble } from "../agent-mail.js";
 import { runGuidedGates } from "../gates.js";
 import { getParallelModelAssignments, resolveExecutionMode } from "./shared.js";
+import { brExec, resilientExec } from "../cli-exec.js";
 
 export function registerReviewTool(oc: OrchestratorContext) {
   oc.pi.registerTool({
@@ -152,11 +153,14 @@ export function registerReviewTool(oc: OrchestratorContext) {
         const reopened: string[] = [];
         for (const [id, result] of Object.entries(oc.state.beadResults ?? {})) {
           if (result.status === "partial") {
-            try {
-              await oc.pi.exec("br", ["update", id, "--status", "open"], { cwd: ctx.cwd, timeout: 5000 });
+            const reopenResult = await brExec(oc.pi, ["update", id, "--status", "open"], {
+              cwd: ctx.cwd,
+              timeout: 5000,
+            });
+            if (reopenResult.ok) {
               delete oc.state.beadResults![id];
               reopened.push(id);
-            } catch { /* best effort */ }
+            }
           }
         }
         oc.persistState();
@@ -253,11 +257,13 @@ export function registerReviewTool(oc: OrchestratorContext) {
         try {
           const { detectSpaceViolations, formatSpaceViolations } = await import("../space-detector.js");
           let filesChanged: string[] = [];
-          try {
-            const gitResult = await oc.pi.exec("git", ["diff", "--name-only", "HEAD~1"], { cwd: ctx.cwd, timeout: 5000 });
-            filesChanged = gitResult.stdout.trim().split("\n").filter(Boolean);
-          } catch {
-            // git diff may fail if no commits yet — skip detection
+          const gitResult = await resilientExec(oc.pi, "git", ["diff", "--name-only", "HEAD~1"], {
+            cwd: ctx.cwd,
+            timeout: 5000,
+            maxRetries: 1,
+          });
+          if (gitResult.ok) {
+            filesChanged = gitResult.value.stdout.trim().split("\n").filter(Boolean);
           }
 
           if (filesChanged.length > 0) {

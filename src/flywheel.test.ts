@@ -556,6 +556,29 @@ describe("implementerInstructions", () => {
     expect(output).toContain("bv --robot-next");
     expect(output).toContain("br ready");
   });
+
+  it("does not duplicate the past-session heading when episodic context is already wrapped", () => {
+    const bead = {
+      id: "test-1",
+      title: "Test bead",
+      description: "Do something",
+      status: "ready" as const,
+      deps: [],
+    };
+    const profile = {
+      languages: ["TypeScript"],
+      frameworks: ["vitest"],
+      testFramework: "vitest",
+    };
+    const output = implementerInstructions(
+      bead as any,
+      profile as any,
+      [],
+      undefined,
+      "## Past Session Examples\n- prior run details"
+    );
+    expect(output.match(/## Past Session Examples/g)).toHaveLength(1);
+  });
 });
 
 describe("learningsExtractionPrompt", () => {

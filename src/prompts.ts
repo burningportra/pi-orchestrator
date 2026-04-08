@@ -652,6 +652,14 @@ ${beads.map((b) => {
 If remaining beads don't close the gap, the fix is to revise beads or add missing work, not to push harder on implementation.`;
 }
 
+function normalizePromptSection(content: string | undefined, heading: string): string {
+  const trimmed = content?.trim();
+  if (!trimmed) return "";
+  return trimmed.startsWith(heading)
+    ? `\n${trimmed}\n`
+    : `\n${heading}\n${trimmed}\n`;
+}
+
 // ─── Implementer Instructions ────────────────────────────────
 export function implementerInstructions(
   bead: Bead,
@@ -677,15 +685,8 @@ export function implementerInstructions(
   const filesMatch = bead.description.match(/### Files:\s*(.+?)(?:\n###|\n\n|$)/s);
   const files = filesMatch ? filesMatch[1].trim() : "See bead description";
 
-  const memorySection =
-    cassMemory && cassMemory.trim().length > 0
-      ? `\n## Memory from Prior Orchestrations\n${cassMemory.trim()}\n`
-      : "";
-
-  const episodicSection =
-    episodicContext && episodicContext.trim().length > 0
-      ? `\n## Past Session Examples\n${episodicContext.trim()}\n`
-      : "";
+  const memorySection = normalizePromptSection(cassMemory, "## Memory from Prior Orchestrations");
+  const episodicSection = normalizePromptSection(episodicContext, "## Past Session Examples");
 
   return `## Implement Bead ${bead.id}: ${bead.title}${memorySection}${episodicSection}
 
@@ -704,21 +705,13 @@ ${files}
 ${prevContext}
 
 ### Marching Orders
-First read the relevant files to fully understand the code and technical architecture.
-Use \`orch_memory\` to search for relevant learnings from prior orchestrations if applicable.
-Then implement this bead using the standard code tools (read, write, edit, bash).
-Work systematically. Make focused, targeted changes. Stay within scope.
+- Read the relevant files first.
+- Use \`orch_memory\` if prior learnings would help.
+- Implement with focused changes only.
+- Do a fresh-eyes review of modified code before finishing.
+- When done, call \`orch_review\` with what you changed and what you checked.
 
-**After implementing, do a fresh-eyes review:** reread all new and modified code. Look for bugs, logic errors, missing edge cases, and unclear naming. Fix what you find.
-
-**Picking your next bead:**
-- **Solo agent:** \`bv --robot-next\` — picks the single highest-priority bead by PageRank + betweenness centrality.
-- **Swarm (multiple agents active):** \`bv --robot-triage\` — routes to a parallel-safe bead that avoids bottleneck contention with other agents. Use this when you know others are working.
-- Fallback: \`br ready --json\` if bv is unavailable.
-
-**Graph health (if stuck):** \`bv --robot-insights\` reports PageRank, betweenness, critical path, and cycle detection for the full dependency graph.
-
-After the fresh-eyes review, call \`orch_review\` with a summary of what you did and what the review found.`;
+**Next bead routing:** \`bv --robot-next\` for solo work, \`bv --robot-triage\` for swarms, fallback \`br ready --json\`. Use \`bv --robot-insights\` if the graph looks stuck.`;
 }
 
 // ─── Reviewer Instructions ───────────────────────────────────
@@ -733,10 +726,7 @@ export function reviewerInstructions(
     .filter((line) => line.trim().startsWith("- [ ]") || line.trim().startsWith("- [x]"))
     .map((line) => line.trim().replace(/^- \[.\] /, ""));
 
-  const episodicSection =
-    episodicContext && episodicContext.trim().length > 0
-      ? `\n## Past Session Examples\n${episodicContext.trim()}\n`
-      : "";
+  const episodicSection = normalizePromptSection(episodicContext, "## Past Session Examples");
 
   return `## Review Bead ${bead.id}: ${bead.title}${episodicSection}
 

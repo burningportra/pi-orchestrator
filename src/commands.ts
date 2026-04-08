@@ -2,6 +2,7 @@ import type { CoordinationMode, OrchestratorContext, Bead } from './types.js';
 import { createInitialState } from './types.js';
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join, basename } from 'path';
+import { brExec, resilientExec } from './cli-exec.js';
 
 /**
  * Format staleness info for open beads, showing when they were created.
@@ -188,17 +189,19 @@ export function registerCommands(oc: OrchestratorContext) {
     description:
       "Start the repo-aware multi-agent orchestrator",
     handler: async (args, ctx) => {
-      const { readBeads } = await import("./beads.js");
-      const { detectSessionStage, formatSessionContext, buildResumeLabel } = await import("./session-state.js");
-      const { readCheckpoint: readCp, clearCheckpoint: clearCp } = await import("./checkpoint.js");
-      
-      // Check for existing state that can be resumed
-      let hasExistingState = oc.state.phase !== "idle" && oc.state.phase !== "complete";
-      let existingBeads: import("./types.js").Bead[] = [];
-      try {
-        existingBeads = await readBeads(pi, ctx.cwd);
-      } catch { /* no beads dir */ }
-      const hasActiveBeads = existingBeads.some(b => b.status === "open" || b.status === "in_progress");
+      const { runOpeningCeremony } = await import("./opening-ceremony.js");
+      const runOrchestrateStartupFlow = async () => {
+        const { readBeads } = await import("./beads.js");
+        const { detectSessionStage, formatSessionContext, buildResumeLabel } = await import("./session-state.js");
+        const { readCheckpoint: readCp, clearCheckpoint: clearCp } = await import("./checkpoint.js");
+        
+        // Check for existing state that can be resumed
+        let hasExistingState = oc.state.phase !== "idle" && oc.state.phase !== "complete";
+        let existingBeads: import("./types.js").Bead[] = [];
+        try {
+          existingBeads = await readBeads(pi, ctx.cwd);
+        } catch { /* no beads dir */ }
+        const hasActiveBeads = existingBeads.some(b => b.status === "open" || b.status === "in_progress");
 
       // Checkpoint recovery: if state is idle and no active beads, check disk checkpoint
       let checkpointWarnings: string[] = [];
@@ -312,9 +315,7 @@ export function registerCommands(oc: OrchestratorContext) {
           }
           const beadId = beadChoice.split(/\s+/)[0];
           // Mark it in-progress
-          try {
-            await pi.exec("br", ["update", beadId, "--status", "in_progress"], { cwd: ctx.cwd, timeout: 5000 });
-          } catch { /* best effort */ }
+          await brExec(pi, ["update", beadId, "--status", "in_progress"], { cwd: ctx.cwd, timeout: 5000 });
           oc.orchestratorActive = true;
           oc.setPhase("implementing", ctx);
           oc.persistState();
@@ -341,10 +342,8 @@ export function registerCommands(oc: OrchestratorContext) {
         } else if (choice?.startsWith("🔁")) {
           let resetCount = 0;
           for (const bead of inProgressBeads) {
-            try {
-              await pi.exec("br", ["update", bead.id, "--status", "open"], { cwd: ctx.cwd, timeout: 5000 });
-              resetCount++;
-            } catch { /* best effort */ }
+            const r = await brExec(pi, ["update", bead.id, "--status", "open"], { cwd: ctx.cwd, timeout: 5000 });
+            if (r.ok) resetCount++;
           }
           ctx.ui.notify(`🔁 Reset ${resetCount} bead(s) from in-progress → open.`, "info");
           oc.orchestratorActive = true;
@@ -398,10 +397,8 @@ export function registerCommands(oc: OrchestratorContext) {
         } else if (choice?.startsWith("🧹")) {
           let pruneCount = 0;
           for (const bead of staleBeads) {
-            try {
-              await pi.exec("br", ["update", bead.id, "--status", "deferred"], { cwd: ctx.cwd, timeout: 5000 });
-              pruneCount++;
-            } catch { /* best effort */ }
+            const r = await brExec(pi, ["update", bead.id, "--status", "deferred"], { cwd: ctx.cwd, timeout: 5000 });
+            if (r.ok) pruneCount++;
           }
           ctx.ui.notify(`🧹 Archived ${pruneCount} stale bead(s) as deferred.`, "info");
           const remaining = openBeads.filter(b => !staleBeads.find(s => s.id === b.id));
@@ -455,12 +452,12 @@ export function registerCommands(oc: OrchestratorContext) {
         // ── Handle: Sync beads ────────────────────────────────────
         } else if (choice?.startsWith("🔧 Sync beads")) {
           ctx.ui.notify("🔄 Syncing beads from JSONL…", "info");
-          try {
-            const syncResult = await pi.exec("br", ["sync", "--import-only"], { cwd: ctx.cwd, timeout: 15000 });
-            const msg = (syncResult.stdout.trim() || syncResult.stderr.trim() || "Sync complete.").slice(0, 120);
+          const syncResult = await brExec(pi, ["sync", "--import-only"], { cwd: ctx.cwd, timeout: 15000 });
+          if (syncResult.ok) {
+            const msg = (syncResult.value.stdout.trim() || syncResult.value.stderr.trim() || "Sync complete.").slice(0, 120);
             ctx.ui.notify(`✅ Bead sync done: ${msg}`, "info");
-          } catch (err: any) {
-            ctx.ui.notify(`⚠️ Sync failed: ${err?.message ?? err}`, "warning");
+          } else {
+            ctx.ui.notify(`⚠️ Sync failed: ${syncResult.error.stderr || syncResult.error.command}`, "warning");
           }
           // Re-enter the /orchestrate menu so user can pick next action
           pi.sendUserMessage("/orchestrate", { deliverAs: "followUp" });
@@ -470,9 +467,7 @@ export function registerCommands(oc: OrchestratorContext) {
         } else if (choice?.startsWith("🔄")) {
           for (const bead of existingBeads) {
             if (bead.status === "open" || bead.status === "in_progress") {
-              try {
-                await pi.exec("br", ["update", bead.id, "--status", "deferred"], { cwd: ctx.cwd, timeout: 5000 });
-              } catch { /* best effort */ }
+              await brExec(pi, ["update", bead.id, "--status", "deferred"], { cwd: ctx.cwd, timeout: 5000 });
             }
           }
           ctx.ui.notify(`📦 Archived ${openCount} open bead(s) as deferred.`, "info");
@@ -482,17 +477,16 @@ export function registerCommands(oc: OrchestratorContext) {
         // ── Handle: Clear ─────────────────────────────────────────
         } else if (choice?.startsWith("🗑️")) {
           const allCount = existingBeads.length;
-          try {
-            const ids = existingBeads.map((b) => b.id);
-            await pi.exec("br", ["delete", ...ids, "--force", "--hard"], { cwd: ctx.cwd, timeout: 15000 });
+          const ids = existingBeads.map((b) => b.id);
+          const hardDel = await brExec(pi, ["delete", ...ids, "--force", "--hard"], { cwd: ctx.cwd, timeout: 15000, maxRetries: 0 });
+          if (hardDel.ok) {
             ctx.ui.notify(`🗑️ Deleted ${allCount} bead(s).`, "info");
-          } catch {
+          } else {
             // Fallback without --hard
-            try {
-              const ids = existingBeads.map((b) => b.id);
-              await pi.exec("br", ["delete", ...ids, "--force"], { cwd: ctx.cwd, timeout: 15000 });
+            const softDel = await brExec(pi, ["delete", ...ids, "--force"], { cwd: ctx.cwd, timeout: 15000, maxRetries: 0 });
+            if (softDel.ok) {
               ctx.ui.notify(`🗑️ Deleted ${allCount} bead(s).`, "info");
-            } catch {
+            } else {
               ctx.ui.notify("⚠️ Failed to delete beads.", "warning");
             }
           }
@@ -575,17 +569,47 @@ export function registerCommands(oc: OrchestratorContext) {
         }
       }
 
-      if (goalArg) {
-        pi.sendUserMessage(
-          `Start the orchestrator workflow for this repo. I want to: ${goalArg}\n\nBegin by calling \`orch_profile\` to scan the repo, then stay inside the orchestrate workflow/menus while routing my stated goal through the normal planning or bead-creation path.`,
-          { deliverAs: "followUp" }
-        );
-      } else {
-        pi.sendUserMessage(
-          "Start the orchestrator workflow for this repo. Begin by calling `orch_profile` to scan the repository.",
-          { deliverAs: "followUp" }
-        );
-      }
+        if (goalArg) {
+          pi.sendUserMessage(
+            `Start the orchestrator workflow for this repo. I want to: ${goalArg}\n\nBegin by calling \`orch_profile\` to scan the repo, then stay inside the orchestrate workflow/menus while routing my stated goal through the normal planning or bead-creation path.`,
+            { deliverAs: "followUp" }
+          );
+        } else {
+          pi.sendUserMessage(
+            "Start the orchestrator workflow for this repo. Begin by calling `orch_profile` to scan the repository.",
+            { deliverAs: "followUp" }
+          );
+        }
+      };
+
+      // Opening ceremony hook:
+      // Insert any startup-only presentation immediately before running the
+      // command startup flow below so it fires once per /orchestrate invocation
+      // before any resume menu, saved-plan selector, notify(), or orch_profile
+      // follow-up message is shown.
+      // Animate only in raw TTY (no TUI) — in pi's TUI, console.log
+      // output cannot use ANSI cursor movement to overwrite previous frames,
+      // so animated mode would stack all frames on top of each other.
+      const canAnimateCeremony = Boolean(process.stdout.isTTY && !ctx.hasUI);
+      let ceremonyPrevLines = 0;
+      await runOpeningCeremony(
+        {
+          write: (text) => {
+            const trimmed = text.trimEnd();
+            // In animated mode, clear the previous frame before writing the next
+            if (ceremonyPrevLines > 0 && canAnimateCeremony) {
+              process.stdout.write(`\x1b[${ceremonyPrevLines}A\x1b[J`);
+            }
+            console.log(trimmed);
+            ceremonyPrevLines = trimmed.split('\n').length;
+          },
+        },
+        {
+          interactive: canAnimateCeremony,
+          terminalWidth: process.stdout.columns,
+        }
+      );
+      await runOrchestrateStartupFlow();
     },
   });
 
@@ -725,7 +749,7 @@ export function registerCommands(oc: OrchestratorContext) {
           `${e.index}: [${e.id}] (${e.category}) ${e.content.slice(0, 60).replace(/\n/g, " ")}${e.content.length > 60 ? "…" : ""}`
         );
         const selected = await ctx.ui.select("Select a memory entry to view:", choices);
-        if (selected == null) return;
+        if (selected === undefined) return;
         const idx = parseInt(selected, 10);
         const entry = entries.find((e) => e.index === idx);
         if (entry) {
@@ -780,7 +804,7 @@ export function registerCommands(oc: OrchestratorContext) {
           `${e.index}: [${e.id}] (${e.category}) ${e.content.slice(0, 60).replace(/\n/g, " ")}${e.content.length > 60 ? "…" : ""}`
         );
         const selected = await ctx.ui.select("Select entry to mark as harmful:", choices);
-        if (selected == null) {
+        if (selected === undefined) {
           ctx.ui.notify("Prune cancelled.", "info");
           return;
         }
@@ -872,13 +896,13 @@ export function registerCommands(oc: OrchestratorContext) {
       ];
       
       // Check br
-      try {
-        const brResult = await pi.exec("br", ["--help"], { timeout: 3000, cwd: ctx.cwd });
-        checks[0].installed = brResult.code === 0;
+      const brHelpResult = await brExec(pi, ["--help"], { timeout: 3000, cwd: ctx.cwd, maxRetries: 0, logWarnings: false });
+      checks[0].installed = brHelpResult.ok;
+      if (brHelpResult.ok) {
         const { existsSync } = await import("fs");
         const { join } = await import("path");
         checks[0].initialized = existsSync(join(ctx.cwd, ".beads"));
-      } catch { /* not installed */ }
+      }
       
       // Check agent-mail
       checks[1].installed = backend.agentMail;
@@ -911,16 +935,12 @@ export function registerCommands(oc: OrchestratorContext) {
           );
           if (install) {
             ctx.ui.notify(`Running: ${check.installCmd}`, "info");
-            try {
-              const result = await pi.exec("bash", ["-c", check.installCmd], { timeout: 120000, cwd: ctx.cwd });
-              if (result.code === 0) {
-                ctx.ui.notify(`✅ ${check.name} installed successfully.`, "info");
-                check.installed = true;
-              } else {
-                ctx.ui.notify(`❌ Installation failed: ${result.stderr || result.stdout}`, "error");
-              }
-            } catch (err: any) {
-              ctx.ui.notify(`❌ Installation failed: ${err.message ?? err}`, "error");
+            const installResult = await resilientExec(pi, "bash", ["-c", check.installCmd], { timeout: 120000, cwd: ctx.cwd, maxRetries: 0 });
+            if (installResult.ok) {
+              ctx.ui.notify(`✅ ${check.name} installed successfully.`, "info");
+              check.installed = true;
+            } else {
+              ctx.ui.notify(`❌ Installation failed: ${installResult.error.stderr || installResult.error.stdout}`, "error");
             }
           }
         }
@@ -932,15 +952,11 @@ export function registerCommands(oc: OrchestratorContext) {
           );
           if (init) {
             ctx.ui.notify(`Running: ${check.initCmd}`, "info");
-            try {
-              const result = await pi.exec("bash", ["-c", check.initCmd], { timeout: 30000, cwd: ctx.cwd });
-              if (result.code === 0) {
-                ctx.ui.notify(`✅ ${check.name} initialized successfully.`, "info");
-              } else {
-                ctx.ui.notify(`❌ Initialization failed: ${result.stderr || result.stdout}`, "error");
-              }
-            } catch (err: any) {
-              ctx.ui.notify(`❌ Initialization failed: ${err.message ?? err}`, "error");
+            const initResult = await resilientExec(pi, "bash", ["-c", check.initCmd], { timeout: 30000, cwd: ctx.cwd, maxRetries: 0 });
+            if (initResult.ok) {
+              ctx.ui.notify(`✅ ${check.name} initialized successfully.`, "info");
+            } else {
+              ctx.ui.notify(`❌ Initialization failed: ${initResult.error.stderr || initResult.error.stdout}`, "error");
             }
           }
         }
@@ -996,10 +1012,9 @@ export function registerCommands(oc: OrchestratorContext) {
       }
       
       // Re-open the bead
-      try {
-        await pi.exec("br", ["update", beadId, "--status", "open"], { cwd: ctx.cwd, timeout: 5000 });
-      } catch (err: any) {
-        ctx.ui.notify(`❌ Failed to update bead status: ${err.message ?? err}`, "error");
+      const reopenResult = await brExec(pi, ["update", beadId, "--status", "open"], { cwd: ctx.cwd, timeout: 5000 });
+      if (!reopenResult.ok) {
+        ctx.ui.notify(`❌ Failed to update bead status: ${reopenResult.error.stderr || reopenResult.error.command}`, "error");
         return;
       }
       
@@ -1470,14 +1485,14 @@ Use ultrathink. Be specific — vague suggestions are useless.`;
       // 2. UBS scan
       const ubsAvailable = await detectUbs(pi, ctx.cwd);
       if (ubsAvailable) {
-        try {
-          const result = await pi.exec("ubs", ["."], { cwd: ctx.cwd, timeout: 30000 });
-          const ubsOut = (result.stdout + result.stderr).trim();
+        const ubsResult = await resilientExec(pi, "ubs", ["."], { cwd: ctx.cwd, timeout: 30000, maxRetries: 0 });
+        if (ubsResult.ok) {
+          const ubsOut = (ubsResult.value.stdout + ubsResult.value.stderr).trim();
           const issueCount = (ubsOut.match(/^(ERROR|WARN|WARNING)/gmi) ?? []).length;
           lines.push(issueCount === 0
             ? `### 🔒 UBS Scan\n✅ Clean — no issues found`
             : `### 🔒 UBS Scan\n⚠️ **${issueCount} issue(s) found**\n\`\`\`\n${ubsOut.slice(0, 1500)}\n\`\`\``);
-        } catch {
+        } else {
           lines.push("### 🔒 UBS Scan\n⏭️ Skipped (scan error)");
         }
       } else {
@@ -1495,46 +1510,52 @@ Use ultrathink. Be specific — vague suggestions are useless.`;
         (hacksCount > 0 ? `\n- ${hacksCount} HACK/XXX markers 🟠` : ""));
 
       // 4. Test file ratio
-      try {
-        const findResult = await pi.exec("find", [".", "-type", "f", "-name", "*.ts", "-not", "-path", "*/node_modules/*", "-not", "-path", "*/.git/*"], { cwd: ctx.cwd, timeout: 10000 });
-        const allTs = findResult.stdout.trim().split("\n").filter(Boolean);
+      const findTsResult = await resilientExec(pi, "find", [".", "-type", "f", "-name", "*.ts", "-not", "-path", "*/node_modules/*", "-not", "-path", "*/.git/*"], { cwd: ctx.cwd, timeout: 10000, maxRetries: 0 });
+      if (findTsResult.ok) {
+        const allTs = findTsResult.value.stdout.trim().split("\n").filter(Boolean);
         const testFiles = allTs.filter(f => /\.test\.|spec\.|__tests__/.test(f));
         const srcFiles = allTs.filter(f => !/\.test\.|spec\.|__tests__/.test(f));
         const ratio = srcFiles.length > 0 ? (testFiles.length / srcFiles.length) : 0;
         const ratioEmoji = ratio >= 0.5 ? "✅" : ratio >= 0.2 ? "🟡" : "🔴";
         lines.push(`### 🧪 Test Coverage Estimate\n` +
           `${ratioEmoji} ${testFiles.length} test files / ${srcFiles.length} source files (ratio: ${(ratio * 100).toFixed(0)}%)`);
-      } catch {
+      } else {
         lines.push("### 🧪 Test Coverage Estimate\n⏭️ Skipped");
       }
 
       // 5. Dependency vulnerabilities (npm audit if available)
       const hasPackageJson = existsSync(join(ctx.cwd, "package.json"));
       if (hasPackageJson) {
-        try {
-          const audit = await pi.exec("npm", ["audit", "--json", "--audit-level=high"], { cwd: ctx.cwd, timeout: 30000 });
-          const data = JSON.parse(audit.stdout);
-          const vulnCount = data?.metadata?.vulnerabilities;
-          const high = (vulnCount?.high ?? 0) + (vulnCount?.critical ?? 0);
-          const total = Object.values(vulnCount ?? {}).reduce((s: number, n) => s + (n as number), 0);
-          lines.push(`### 📦 Dependency Vulnerabilities\n` +
-            (high > 0
-              ? `🔴 **${high} high/critical** (${total} total) — run \`npm audit fix\``
-              : total > 0
-              ? `🟡 ${total} low/moderate issues`
-              : `✅ No known vulnerabilities`));
-        } catch {
+        const auditResult = await resilientExec(pi, "npm", ["audit", "--json", "--audit-level=high"], { cwd: ctx.cwd, timeout: 30000, maxRetries: 0, isTransient: () => false, logWarnings: false });
+        // npm audit exits non-zero when vulns found, so read stdout from both ok and error
+        const auditStdout = auditResult.ok ? auditResult.value.stdout : auditResult.error.stdout;
+        if (auditStdout) {
+          try {
+            const data = JSON.parse(auditStdout);
+            const vulnCount = data?.metadata?.vulnerabilities;
+            const high = (vulnCount?.high ?? 0) + (vulnCount?.critical ?? 0);
+            const total = Object.values(vulnCount ?? {}).reduce((s: number, n) => s + (n as number), 0);
+            lines.push(`### 📦 Dependency Vulnerabilities\n` +
+              (high > 0
+                ? `🔴 **${high} high/critical** (${total} total) — run \`npm audit fix\``
+                : total > 0
+                ? `🟡 ${total} low/moderate issues`
+                : `✅ No known vulnerabilities`));
+          } catch {
+            lines.push("### 📦 Dependency Vulnerabilities\n⏭️ Skipped (npm audit unavailable)");
+          }
+        } else {
           lines.push("### 📦 Dependency Vulnerabilities\n⏭️ Skipped (npm audit unavailable)");
         }
       }
 
       // 6. Git health (uncommitted changes, stale branch)
-      try {
-        const status = await pi.exec("git", ["status", "--porcelain"], { cwd: ctx.cwd, timeout: 5000 });
-        const dirty = status.stdout.trim().split("\n").filter(Boolean);
+      const gitStatusResult = await resilientExec(pi, "git", ["status", "--porcelain"], { cwd: ctx.cwd, timeout: 5000, maxRetries: 0 });
+      if (gitStatusResult.ok) {
+        const dirty = gitStatusResult.value.stdout.trim().split("\n").filter(Boolean);
         lines.push(`### 🌿 Git Status\n` +
           (dirty.length === 0 ? "✅ Working tree clean" : `🟡 ${dirty.length} uncommitted change(s)`));
-      } catch {
+      } else {
         lines.push("### 🌿 Git Status\n⏭️ Skipped");
       }
 
@@ -1566,9 +1587,8 @@ Use ultrathink. Be specific — vague suggestions are useless.`;
       }
 
       // Ensure br is available
-      try {
-        await pi.exec("br", ["--help"], { cwd: ctx.cwd, timeout: 3000 });
-      } catch {
+      const brAvail = await brExec(pi, ["--help"], { cwd: ctx.cwd, timeout: 3000, maxRetries: 0, logWarnings: false });
+      if (!brAvail.ok) {
         ctx.ui.notify("❌ `br` CLI not found. Run `/orchestrate-setup` to install it.", "error");
         return;
       }
@@ -1577,9 +1597,8 @@ Use ultrathink. Be specific — vague suggestions are useless.`;
       const { existsSync } = await import("fs");
       const { join } = await import("path");
       if (!existsSync(join(ctx.cwd, ".beads"))) {
-        try {
-          await pi.exec("br", ["init"], { cwd: ctx.cwd, timeout: 10000 });
-        } catch {
+        const initResult = await brExec(pi, ["init"], { cwd: ctx.cwd, timeout: 10000 });
+        if (!initResult.ok) {
           ctx.ui.notify("❌ Failed to initialise beads. Run `br init` manually.", "error");
           return;
         }
@@ -1607,18 +1626,18 @@ ${description}
       // Create the bead
       ctx.ui.notify(`🔧 Creating fix bead...`, "info");
       let beadId: string | undefined;
-      try {
-        const result = await pi.exec("br", [
-          "create",
-          "--title", `Fix: ${title}`,
-          "--description", beadDesc,
-          "--priority", "P1",
-        ], { cwd: ctx.cwd, timeout: 15000 });
+      const createResult = await brExec(pi, [
+        "create",
+        "--title", `Fix: ${title}`,
+        "--description", beadDesc,
+        "--priority", "P1",
+      ], { cwd: ctx.cwd, timeout: 15000 });
+      if (createResult.ok) {
         // Parse bead ID from output (br create prints "Created bead br-N")
-        const match = result.stdout.match(/([a-z][a-z0-9]*-\d+)/);
+        const match = createResult.value.stdout.match(/([a-z][a-z0-9]*-\d+)/);
         beadId = match?.[1];
-      } catch (err: any) {
-        ctx.ui.notify(`❌ Failed to create bead: ${err.message ?? err}`, "error");
+      } else {
+        ctx.ui.notify(`❌ Failed to create bead: ${createResult.error.stderr || createResult.error.command}`, "error");
         return;
       }
 
@@ -1638,9 +1657,7 @@ ${description}
       oc.persistState();
 
       // Mark bead in_progress and send implementer instructions
-      try {
-        await pi.exec("br", ["update", beadId, "--status", "in_progress"], { cwd: ctx.cwd, timeout: 5000 });
-      } catch { /* best-effort */ }
+      await brExec(pi, ["update", beadId, "--status", "in_progress"], { cwd: ctx.cwd, timeout: 5000 });
 
       const { implementerInstructions } = await import("./prompts.js");
       const { readMemory } = await import("./memory.js");
@@ -1701,10 +1718,10 @@ ${description}
 
       // Get file list for context
       let files: string[] = [];
-      try {
-        const findResult = await pi.exec("find", ["src", "-type", "f", "-name", "*.ts", "-not", "-path", "*/node_modules/*"], { cwd: ctx.cwd, timeout: 10000 });
-        files = findResult.stdout.trim().split("\n").filter(Boolean).slice(0, 100);
-      } catch { /* use empty list — agent will explore on its own */ }
+      const findSrcResult = await resilientExec(pi, "find", ["src", "-type", "f", "-name", "*.ts", "-not", "-path", "*/node_modules/*"], { cwd: ctx.cwd, timeout: 10000, maxRetries: 0 });
+      if (findSrcResult.ok) {
+        files = findSrcResult.value.stdout.trim().split("\n").filter(Boolean).slice(0, 100);
+      } /* use empty list on failure — agent will explore on its own */
 
       const domainChecklist = getDomainChecklist(profile);
       const domainExtras = domainChecklist ? formatDomainBlunderItems(domainChecklist) : undefined;
@@ -1874,11 +1891,11 @@ ${description}
 
       // Collect files in scope
       let files: string[] = [];
-      try {
-        const findArgs = pathFilter
-          ? [pathFilter, "-type", "f", "-not", "-path", "*/node_modules/*"]
-          : [".", "-type", "f", "-not", "-path", "*/node_modules/*", "-not", "-path", "*/.git/*"];
-        const findResult = await pi.exec("find", findArgs, { cwd: ctx.cwd, timeout: 10000 });
+      const findArgs = pathFilter
+        ? [pathFilter, "-type", "f", "-not", "-path", "*/node_modules/*"]
+        : [".", "-type", "f", "-not", "-path", "*/node_modules/*", "-not", "-path", "*/.git/*"];
+      const findResult = await resilientExec(pi, "find", findArgs, { cwd: ctx.cwd, timeout: 10000, maxRetries: 0 });
+      if (findResult.ok) {
         const langs = profile.languages.map(l => l.toLowerCase());
         const exts = langs.includes("typescript") || langs.includes("javascript")
           ? [".ts", ".tsx", ".js", ".jsx"]
@@ -1886,10 +1903,10 @@ ${description}
           : langs.includes("python") ? [".py"]
           : langs.includes("go") ? [".go"]
           : [".ts", ".js", ".py", ".rs", ".go"];
-        files = findResult.stdout.trim().split("\n")
+        files = findResult.value.stdout.trim().split("\n")
           .filter(f => f && exts.some(e => f.endsWith(e)))
           .slice(0, 80);
-      } catch { /* fallback: empty, agent explores */ }
+      } /* fallback: empty, agent explores */
 
       if (files.length === 0 && !pathFilter) {
         ctx.ui.notify("⚠️ No source files found. The agent will explore the codebase directly.", "warning");

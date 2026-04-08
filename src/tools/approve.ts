@@ -7,6 +7,7 @@ import { agentMailTaskPreamble } from "../agent-mail.js";
 import { planQualityScoringPrompt, parsePlanQualityScore, formatPlanQualityScore, type PlanQualityScore } from "../plan-quality.js";
 import { sessionArtifactPath } from "../session-artifacts.js";
 import { getParallelModelAssignments, resolveExecutionMode } from "./shared.js";
+import { brExecJson, resilientExec } from "../cli-exec.js";
 
 // ─── Module-level bead snapshots for change detection ────────
 // These live at module scope so they persist across multiple calls to
@@ -583,23 +584,29 @@ export function registerApproveTool(oc: OrchestratorContext) {
         // Build dep map from br dep list
         const depMap = new Map<string, string[]>();
         for (const b of beads) {
-          try {
-            const depResult = await oc.pi.exec("br", ["dep", "list", b.id, "--json"], { cwd: ctx.cwd });
-            const deps = JSON.parse(depResult.stdout);
-            const blockedBy = (deps.dependencies ?? []).filter((d: any) => d.type === "blocks").map((d: any) => d.depends_on_id);
-            if (blockedBy.length > 0) depMap.set(b.id, blockedBy);
-          } catch { /* skip beads with no deps */ }
+          const depResult = await brExecJson<{ dependencies?: Array<{ type?: string; depends_on_id?: string }> }>(oc.pi, ["dep", "list", b.id, "--json"], {
+            cwd: ctx.cwd,
+          });
+          if (!depResult.ok) continue; // skip beads with no deps / failed lookup
+          const blockedBy = (depResult.value.dependencies ?? [])
+            .filter((d) => d.type === "blocks")
+            .map((d) => d.depends_on_id)
+            .filter((id): id is string => Boolean(id));
+          if (blockedBy.length > 0) depMap.set(b.id, blockedBy);
         }
 
         // Get repo file list
         const repoFiles = new Set<string>();
-        try {
-          const findResult = await oc.pi.exec("find", ["src", "-type", "f"], { cwd: ctx.cwd });
-          for (const line of findResult.stdout.split("\n")) {
+        const findResult = await resilientExec(oc.pi, "find", ["src", "-type", "f"], {
+          cwd: ctx.cwd,
+          maxRetries: 0,
+        });
+        if (findResult.ok) {
+          for (const line of findResult.value.stdout.split("\n")) {
             const trimmed = line.trim();
             if (trimmed) repoFiles.add(trimmed);
           }
-        } catch { /* fallback: empty set, missing files will be flagged */ }
+        }
 
         const simulated = beadsToSimulated(beads, depMap);
         const simResult = simulateExecutionPaths(simulated, repoFiles);

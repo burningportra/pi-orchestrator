@@ -33,6 +33,7 @@ import { registerMemoryTool } from "./tools/memory-tool.js";
 import { DashboardController, renderDashboardLines, PHASE_EMOJI } from "./dashboard/index.js";
 import { readBeads } from "./beads.js";
 import { writeCheckpoint, clearCheckpoint, readCheckpoint } from "./checkpoint.js";
+import { brExecJson } from "./cli-exec.js";
 
 export default function (pi: ExtensionAPI) {
   // Log version at startup so stale code is immediately obvious
@@ -168,13 +169,13 @@ export default function (pi: ExtensionAPI) {
     dashboardController = new DashboardController({
       readBeadsFn: () => readBeads(pi, ctx.cwd),
       getUnblockedBeadsFn: async () => {
-        try {
-          const result = await pi.exec("br", ["ready", "--json"], { cwd: ctx.cwd });
-          const parsed = JSON.parse(result.stdout);
-          return (parsed.issues ?? []).map((b: { id: string }) => b.id);
-        } catch {
+        const readyResult = await brExecJson<{ issues?: { id: string }[] }>(pi, ["ready", "--json"], {
+          cwd: ctx.cwd,
+        });
+        if (!readyResult.ok) {
           return [];
         }
+        return (readyResult.value.issues ?? []).map((b) => b.id);
       },
       getState: () => state,
       getTenderSummary: () => swarmTender?.getSummary(),

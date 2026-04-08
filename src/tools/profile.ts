@@ -11,6 +11,7 @@ import {
 } from "../prompts.js";
 import { runGoalRefinement, extractConstraints } from "../goal-refinement.js";
 import { detectCoordinationBackend, selectMode, selectStrategy } from "../coordination.js";
+import { brExec, brExecJson } from "../cli-exec.js";
 
 /** Compute weighted score for a candidate idea (for fallback sorting). */
 function weightedScore(idea: import("../types.js").CandidateIdea): number {
@@ -286,10 +287,15 @@ export function registerProfileTool(oc: OrchestratorContext) {
         let phase1BeadTitles: string[] = [];
         try {
           // Try br list --json first (as specified), fall back to readBeads
-          const brOutput = await oc.pi.exec("br", ["list", "--json"], { cwd: ctx.cwd, timeout: 8000 });
-          const parsed = JSON.parse(brOutput.stdout);
-          if (Array.isArray(parsed)) {
-            phase1BeadTitles = parsed
+          const brListResult = await brExecJson<unknown[]>(oc.pi, ["list", "--json"], {
+            cwd: ctx.cwd,
+            timeout: 8000,
+          });
+          if (!brListResult.ok) {
+            throw new Error(brListResult.error.stderr || brListResult.error.command);
+          }
+          if (Array.isArray(brListResult.value)) {
+            phase1BeadTitles = brListResult.value
               .map((b: unknown) => (b as Record<string, unknown>)?.title)
               .filter((t): t is string => typeof t === "string");
           }
@@ -358,7 +364,7 @@ export function registerProfileTool(oc: OrchestratorContext) {
 
         const top5 = winnowResult.keptIds
           .map((id) => rawIdeas.find((i) => i.id === id))
-          .filter((i): i is NonNullable<typeof i> => i != null);
+          .filter((i): i is NonNullable<typeof i> => i !== undefined && i !== null);
 
         // Mark top 5 as tier "top"
         for (const idea of top5) idea.tier = "top";
@@ -472,10 +478,13 @@ export function registerProfileTool(oc: OrchestratorContext) {
         ctx.ui.notify(`♻️ Reactivating ${deferredBeadIds.length} deferred bead(s)...`, "info");
         let reactivated = 0;
         for (const id of deferredBeadIds) {
-          try {
-            await oc.pi.exec("br", ["update", id, "--status", "open"], { cwd: ctx.cwd, timeout: 5000 });
+          const reactivateResult = await brExec(oc.pi, ["update", id, "--status", "open"], {
+            cwd: ctx.cwd,
+            timeout: 5000,
+          });
+          if (reactivateResult.ok) {
             reactivated++;
-          } catch { /* best effort */ }
+          }
         }
         ctx.ui.notify(`✅ Reactivated ${reactivated} bead(s).`, "info");
         oc.orchestratorActive = true;
@@ -548,18 +557,24 @@ export function registerProfileTool(oc: OrchestratorContext) {
       if (discoveryMode.startsWith("🗑️")) {
         let deleted = 0;
         if (allBeadIds.length > 0) {
-          try {
-            // --force bypasses dependent checks; --hard prunes tombstones from JSONL immediately
-            await oc.pi.exec("br", ["delete", ...allBeadIds, "--force", "--hard"], { cwd: ctx.cwd, timeout: 15000 });
+          // --force bypasses dependent checks; --hard prunes tombstones from JSONL immediately
+          const hardDeleteResult = await brExec(oc.pi, ["delete", ...allBeadIds, "--force", "--hard"], {
+            cwd: ctx.cwd,
+            timeout: 15000,
+          });
+          if (hardDeleteResult.ok) {
             deleted = allBeadIds.length;
             ctx.ui.notify(`🗑️ Deleted ${deleted} bead(s).`, "info");
-          } catch {
+          } else {
             // Fallback: try without --hard in case version doesn't support it
-            try {
-              await oc.pi.exec("br", ["delete", ...allBeadIds, "--force"], { cwd: ctx.cwd, timeout: 15000 });
+            const forceDeleteResult = await brExec(oc.pi, ["delete", ...allBeadIds, "--force"], {
+              cwd: ctx.cwd,
+              timeout: 15000,
+            });
+            if (forceDeleteResult.ok) {
               deleted = allBeadIds.length;
               ctx.ui.notify(`🗑️ Deleted ${deleted} bead(s).`, "info");
-            } catch {
+            } else {
               ctx.ui.notify("⚠️ Failed to delete beads — try \`br delete --force\` manually.", "warning");
             }
           }

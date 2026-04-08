@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { Bead, BvInsights, BvNextPick } from "./types.js";
+import { resilientExec, brExec, brExecJson } from "./cli-exec.js";
 
 /**
  * Check if a bead ID matches the expected br-NNN pattern.
@@ -123,12 +124,8 @@ let _bvAvailable: boolean | null = null;
  */
 export async function detectBv(pi: ExtensionAPI): Promise<boolean> {
   if (_bvAvailable !== null) return _bvAvailable;
-  try {
-    const result = await pi.exec("which", ["bv"], { timeout: 5000 });
-    _bvAvailable = result.stdout.trim().length > 0;
-  } catch {
-    _bvAvailable = false;
-  }
+  const result = await resilientExec(pi, "which", ["bv"], { timeout: 5000, maxRetries: 0, logWarnings: false });
+  _bvAvailable = result.ok && result.value.stdout.trim().length > 0;
   return _bvAvailable;
 }
 
@@ -146,10 +143,12 @@ export async function bvInsights(
   cwd: string
 ): Promise<BvInsights | null> {
   if (!(await detectBv(pi))) return null;
+  const result = await resilientExec(pi, "bv", ["--robot-insights"], { timeout: 15000, cwd, maxRetries: 1, retryDelayMs: 300 });
+  if (!result.ok) return null;
   try {
-    const result = await pi.exec("bv", ["--robot-insights"], { timeout: 15000, cwd });
-    return JSON.parse(result.stdout) as BvInsights;
+    return JSON.parse(result.value.stdout) as BvInsights;
   } catch {
+    console.warn(`[beads] bv --robot-insights returned unparseable JSON`);
     return null;
   }
 }
@@ -167,16 +166,18 @@ export async function bvTriage(
   cwd: string
 ): Promise<BvNextPick[] | null> {
   if (!(await detectBv(pi))) return null;
+  const result = await resilientExec(pi, "bv", ["--robot-triage", "--json"], { timeout: 15000, cwd, maxRetries: 1, retryDelayMs: 300 });
+  if (!result.ok) return null;
+  const stdout = result.value.stdout.trim();
+  if (!stdout) return null;
   try {
-    const result = await pi.exec("bv", ["--robot-triage", "--json"], { timeout: 15000, cwd });
-    const stdout = result.stdout.trim();
-    if (!stdout) return null;
     const data = JSON.parse(stdout);
     // --robot-triage may return an array or a single object
     if (Array.isArray(data)) return data as BvNextPick[];
     if (data && data.id) return [data as BvNextPick];
     return null;
   } catch {
+    console.warn(`[beads] bv --robot-triage returned unparseable JSON`);
     return null;
   }
 }
@@ -190,15 +191,16 @@ export async function bvNext(
   cwd: string
 ): Promise<BvNextPick | null> {
   if (!(await detectBv(pi))) return null;
+  const result = await resilientExec(pi, "bv", ["--robot-next"], { timeout: 15000, cwd, maxRetries: 1, retryDelayMs: 300 });
+  if (!result.ok) return null;
+  const stdout = result.value.stdout.trim();
+  if (!stdout) return null;
   try {
-    const result = await pi.exec("bv", ["--robot-next"], { timeout: 15000, cwd });
-    const stdout = result.stdout.trim();
-    if (!stdout) return null;
     const data = JSON.parse(stdout);
-    // bv --robot-next may return an object or null/empty
     if (!data || !data.id) return null;
     return data as BvNextPick;
   } catch {
+    console.warn(`[beads] bv --robot-next returned unparseable JSON`);
     return null;
   }
 }
@@ -212,14 +214,11 @@ export async function bvPlan(
   cwd: string
 ): Promise<string | null> {
   if (!(await detectBv(pi))) return null;
-  try {
-    const result = await pi.exec("bv", ["--robot-plan"], { timeout: 15000, cwd });
-    const stdout = result.stdout.trim();
-    if (!stdout) return null;
-    return stdout;
-  } catch {
-    return null;
-  }
+  const result = await resilientExec(pi, "bv", ["--robot-plan"], { timeout: 15000, cwd, maxRetries: 1, retryDelayMs: 300 });
+  if (!result.ok) return null;
+  const stdout = result.value.stdout.trim();
+  if (!stdout) return null;
+  return stdout;
 }
 
 // ─── Beads Integration ────────────────────────────────────────
@@ -231,19 +230,15 @@ export async function readBeads(
   pi: ExtensionAPI,
   cwd: string
 ): Promise<Bead[]> {
-  try {
-    // Request created_at and updated_at fields for staleness detection
-    const result = await pi.exec("br", [
-      "list",
-      "--json",
-      "--fields", "id,title,description,status,priority,issue_type,labels,estimate,parent,created_at,updated_at,closed_at",
-      "--deferred", // include deferred beads
-    ], { timeout: 10000, cwd });
-    const data = JSON.parse(result.stdout);
-    return (Array.isArray(data) ? data : data?.issues ?? []) as Bead[];
-  } catch {
-    return [];
-  }
+  const result = await brExecJson<Bead[] | { issues: Bead[] }>(pi, [
+    "list",
+    "--json",
+    "--fields", "id,title,description,status,priority,issue_type,labels,estimate,parent,created_at,updated_at,closed_at",
+    "--deferred", // include deferred beads
+  ], { timeout: 10000, cwd });
+  if (!result.ok) return [];
+  const data = result.value;
+  return (Array.isArray(data) ? data : (data as any)?.issues ?? []) as Bead[];
 }
 
 /**
@@ -253,16 +248,11 @@ export async function readyBeads(
   pi: ExtensionAPI,
   cwd: string
 ): Promise<Bead[]> {
-  try {
-    const result = await pi.exec("br", ["ready", "--json"], { timeout: 10000, cwd });
-    const stdout = result.stdout.trim();
-    if (!stdout) return [];
-    const data = JSON.parse(stdout);
-    // br ready --json returns a bare array, br list --json returns {issues: [...]}
-    return (Array.isArray(data) ? data : data?.issues ?? []) as Bead[];
-  } catch {
-    return [];
-  }
+  const result = await brExecJson<Bead[] | { issues: Bead[] }>(pi, ["ready", "--json"], { timeout: 10000, cwd });
+  if (!result.ok) return [];
+  const data = result.value;
+  // br ready --json returns a bare array, br list --json returns {issues: [...]}
+  return (Array.isArray(data) ? data : (data as any)?.issues ?? []) as Bead[];
 }
 
 /**
@@ -273,13 +263,9 @@ export async function getBeadById(
   cwd: string,
   id: string
 ): Promise<Bead | null> {
-  try {
-    const result = await pi.exec("br", ["show", id, "--json"], { timeout: 10000, cwd });
-    const data = JSON.parse(result.stdout);
-    return (data as Bead) ?? null;
-  } catch {
-    return null;
-  }
+  const result = await brExecJson<Bead>(pi, ["show", id, "--json"], { timeout: 10000, cwd });
+  if (!result.ok) return null;
+  return result.value ?? null;
 }
 
 /**
@@ -290,14 +276,11 @@ export async function beadDeps(
   cwd: string,
   id: string
 ): Promise<string[]> {
-  try {
-    const result = await pi.exec("br", ["dep", "list", id], { timeout: 10000, cwd });
-    const lines = result.stdout.trim().split("\n").filter(Boolean);
-    // Each line typically contains a bead ID; extract first token
-    return lines.map((line) => line.trim().split(/\s+/)[0]).filter(Boolean);
-  } catch {
-    return [];
-  }
+  const result = await brExec(pi, ["dep", "list", id], { timeout: 10000, cwd });
+  if (!result.ok) return [];
+  const lines = result.value.stdout.trim().split("\n").filter(Boolean);
+  // Each line typically contains a bead ID; extract first token
+  return lines.map((line) => line.trim().split(/\s+/)[0]).filter(Boolean);
 }
 
 /**
@@ -341,14 +324,11 @@ export async function updateBeadStatus(
   beadId: string,
   status: "in_progress" | "closed" | "deferred"
 ): Promise<void> {
-  try {
-    await pi.exec("br", ["update", beadId, "--status", status], {
-      timeout: 10000,
-      cwd,
-    });
-  } catch {
-    // Non-fatal
-  }
+  await brExec(pi, ["update", beadId, "--status", status], {
+    timeout: 10000,
+    cwd,
+  });
+  // Non-fatal: brExec logs warning on failure, caller continues regardless
 }
 
 /**
@@ -358,11 +338,8 @@ export async function syncBeads(
   pi: ExtensionAPI,
   cwd: string
 ): Promise<void> {
-  try {
-    await pi.exec("br", ["sync", "--flush-only"], { timeout: 10000, cwd });
-  } catch {
-    // Non-fatal
-  }
+  await brExec(pi, ["sync", "--flush-only"], { timeout: 10000, cwd });
+  // Non-fatal: brExec logs warning on failure, caller continues regardless
 }
 
 /**
@@ -377,10 +354,10 @@ export async function remediateOrphans(
   const closed: string[] = [];
   const failed: string[] = [];
   for (const id of orphanIds) {
-    try {
-      await pi.exec("br", ["update", id, "--status", "closed"], { timeout: 10000, cwd });
+    const result = await brExec(pi, ["update", id, "--status", "closed"], { timeout: 10000, cwd });
+    if (result.ok) {
       closed.push(id);
-    } catch {
+    } else {
       failed.push(id);
     }
   }
@@ -431,17 +408,22 @@ export async function validateBeads(
     }
   } else {
     // Fallback: manual cycle/orphan detection
-    try {
-      const cycleResult = await pi.exec("br", ["dep", "cycles"], { timeout: 10000, cwd });
-      const cycleOutput = cycleResult.stdout.toLowerCase();
+    // Note: br dep cycles uses exit code 1 to signal "cycles found" (not an error),
+    // so we use resilientExec with no retry and read stdout regardless of exit code.
+    const cycleResult = await resilientExec(pi, "br", ["dep", "cycles"], {
+      timeout: 10000, cwd, maxRetries: 0, isTransient: () => false, logWarnings: false,
+    });
+    const cycleOutput = (cycleResult.ok
+      ? cycleResult.value.stdout
+      : cycleResult.error.stdout
+    ).toLowerCase();
+    if (cycleOutput) {
       const confirmsNoCycles =
         cycleOutput.includes("no dependency cycles detected") ||
         cycleOutput.includes("all dependency checks passed");
       const indicatesCycles =
         /detected\s+cycle|cycle\s+detected|dependency\s+cycles\s+detected/.test(cycleOutput);
       cycles = !confirmsNoCycles && indicatesCycles;
-    } catch {
-      // Non-fatal
     }
 
     try {

@@ -54,6 +54,42 @@ Based on the [Agentic Coding Flywheel](https://agent-flywheel.com/).
         └─► 🧠 CASS memory: extract learnings for future runs
 ```
 
+## CLI Execution & Recovery Layer
+
+The orchestrator now routes user-facing and coordination-critical shell calls through a shared resilient exec module in `src/cli-exec.ts`.
+
+### Why it exists
+
+Before this change, many `pi.exec(...)` call sites handled failures ad hoc with local `try/catch` blocks and silent best-effort fallbacks. That made transient CLI failures — especially `br` availability issues, empty-stderr exit-code quirks, and mid-session tool disappearance — hard to reason about and hard to debug.
+
+### What it provides
+
+- **`resilientExec()`** — generic wrapper for external CLI calls
+- **`brExec()`** — `br`-specific wrapper with transient/permanent error classification
+- **`brExecJson()`** — `br` wrapper with JSON parsing and structured failure reporting
+- **`CliExecError`** — structured error payload with command, args, stdout, stderr, exit code, transient classification, and attempt count
+
+### Behavioral contract
+
+- **Transient failures retry** when retry is likely to help (for example timeouts or `br` exit-1/empty-stderr race shapes)
+- **Permanent failures stop immediately** and surface structured error detail
+- **Callers still control public fallbacks** — they can degrade to `[]`, `null`, `false`, or warning-only behavior without losing the underlying failure context
+- **Command-specific semantics are preserved** — for example commands like `br dep cycles` that use non-zero exit codes as signals are handled explicitly instead of being flattened into generic retry logic
+
+### Where it is used now
+
+The wrapper layer now covers the core orchestration paths in:
+
+- `src/beads.ts`
+- `src/commands.ts`
+- `src/coordination.ts`
+- `src/tools/review.ts`
+- `src/tools/approve.ts`
+- `src/tools/profile.ts`
+- `src/index.ts`
+
+This means the orchestrator dashboard, bead lifecycle, setup checks, review loops, discovery fallbacks, and coordination probes all degrade more predictably when external tools are flaky.
+
 ## Scan Contract
 
 Repository scanning now uses a dedicated contract so the orchestrator can add or swap scan providers without breaking the rest of the workflow.
