@@ -329,14 +329,26 @@ export function renderAlerts(
   });
 }
 
-// ─── Section: stale banner ───────────────────────────────────────
+// ─── Section: stale footer note ───────────────────────────────────
 
-export function renderStaleBanner(
+function formatRelativeAge(ageMs: number): string {
+  const seconds = Math.max(1, Math.round(ageMs / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}h ago`;
+}
+
+export function renderStaleFooterNote(
   snapshot: DashboardSnapshot,
   theme: DashboardTheme,
 ): string | null {
   if (!snapshot.staleData) return null;
-  return styled(theme, "warning", "⚠️  Dashboard data may be stale — bead reads failed or returned empty.");
+  const ageSuffix = snapshot.staleSnapshotAgeMs !== undefined
+    ? ` · last successful snapshot ${formatRelativeAge(snapshot.staleSnapshotAgeMs)}`
+    : "";
+  return styled(theme, "warning", `⚠️ stale bead data${ageSuffix}`);
 }
 
 // ─── Section: tender ─────────────────────────────────────────────
@@ -362,10 +374,16 @@ function renderStatusFooter(
     : snapshot.phase === "awaiting_bead_approval" || snapshot.phase === "refining_beads"
     ? "orch_approve_beads to review"
     : "";
+  const staleNote = renderStaleFooterNote(snapshot, theme);
+  const left = [hint ? styled(theme, "muted", hint) : "", staleNote].filter(Boolean).join("  ");
 
-  if (hint && width > visibleWidth(hint) + visibleWidth(refresh) + 4) {
-    const gap = width - visibleWidth(hint) - visibleWidth(refresh);
-    return styled(theme, "muted", hint) + " ".repeat(Math.max(1, gap)) + styled(theme, "muted", refresh);
+  if (left && width > visibleWidth(left) + visibleWidth(refresh) + 4) {
+    const gap = width - visibleWidth(left) - visibleWidth(refresh);
+    return left + " ".repeat(Math.max(1, gap)) + styled(theme, "muted", refresh);
+  }
+  if (left) {
+    const combined = `${left}  ${styled(theme, "muted", refresh)}`;
+    return truncate(combined, width);
   }
   return styled(theme, "muted", refresh.padStart(width));
 }
@@ -395,10 +413,6 @@ export function renderDashboardLines(
   const push  = (...l: string[]) => lines.push(...l);
   const sep   = () => lines.push(divider(width, theme));
   const blank = () => lines.push("");
-
-  // ── Stale banner ─────────────────────────────────────────────
-  const staleBanner = renderStaleBanner(snapshot, theme);
-  if (staleBanner) { push(staleBanner); blank(); }
 
   // ── Phase header ──────────────────────────────────────────────
   push(...renderPhaseHeader(snapshot, theme, width));

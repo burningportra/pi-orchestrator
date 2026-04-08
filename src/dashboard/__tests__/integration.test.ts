@@ -159,6 +159,6 @@ describe("dashboard integration", () => {
     expect(barrel.PHASE_EMOJI).toBeDefined();
     expect(barrel.renderProgressBar).toBeTypeOf("function");
     expect(barrel.renderBeadTable).toBeTypeOf("function");
-    expect(barrel.renderStaleBanner).toBeTypeOf("function");
+    expect(barrel.renderStaleFooterNote).toBeTypeOf("function");
   });
 });

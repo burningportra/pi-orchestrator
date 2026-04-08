@@ -56,7 +56,9 @@ export default function (pi: ExtensionAPI) {
   let lastSnapshotKey: string | null = null;
 
   function snapshotKey(s: import("./dashboard/types.js").DashboardSnapshot): string {
-    return `${s.phase}|${s.completedCount}|${s.totalCount}|${s.tenderSummary ?? ""}|${s.beads.map(b => `${b.id}:${b.status}:${b.reviewPasses}`).join(",")}`;
+    const alertKey = s.alerts.map((a) => `${a.level}:${a.message}`).join("||");
+    const staleAgeKey = s.staleSnapshotAgeMs !== undefined ? Math.round(s.staleSnapshotAgeMs / 1000) : "";
+    return `${s.phase}|${s.completedCount}|${s.totalCount}|${s.staleData ? 1 : 0}|${staleAgeKey}|${alertKey}|${s.tenderSummary ?? ""}|${s.beads.map(b => `${b.id}:${b.status}:${b.reviewPasses}`).join(",")}`;
   }
 
   // Helper: spawn hit-me review agents inline via pi.exec (like deep-plan.ts)

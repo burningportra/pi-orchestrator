@@ -38,6 +38,8 @@ export interface DashboardSnapshot {
   tenderSummary: string | undefined;
   lastRefreshMs: number;
   staleData: boolean;
+  /** Age in ms of the last healthy bead snapshot when rendering degraded data. */
+  staleSnapshotAgeMs?: number;
   alerts: DashboardAlert[];
 
   // ── Rich display extras ─────────────────────────────────────────

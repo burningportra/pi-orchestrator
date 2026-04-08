@@ -286,7 +286,7 @@ describe("DashboardController", () => {
     controller.dispose();
   });
 
-  it("suppresses stale banner after the first occurrence", async () => {
+  it("suppresses stale banner and stale alerts after the first occurrence", async () => {
     const state: OrchestratorState = {
       ...createInitialState(),
       phase: "implementing",
@@ -306,8 +306,11 @@ describe("DashboardController", () => {
 
     expect(updates).toHaveLength(3);
     expect(updates[0].staleData).toBe(true);  // first: shown
+    expect(updates[0].alerts).toHaveLength(0);
     expect(updates[1].staleData).toBe(false); // second: suppressed
+    expect(updates[1].alerts).toHaveLength(0);
     expect(updates[2].staleData).toBe(false); // third: suppressed
+    expect(updates[2].alerts).toHaveLength(0);
     controller.dispose();
   });
 
@@ -344,6 +347,39 @@ describe("DashboardController", () => {
     shouldFail = true;
     await controller.refreshNow();
     expect(updates[3].staleData).toBe(true);
+
+    controller.dispose();
+  });
+
+  it("reuses the last healthy bead snapshot during temporary read failures", async () => {
+    const state: OrchestratorState = {
+      ...createInitialState(),
+      phase: "refining_beads",
+      activeBeadIds: ["pi-1", "pi-2"],
+    };
+
+    let shouldFail = false;
+    const { controller, updates } = createMockController({
+      state,
+      readBeadsFn: async () => {
+        if (shouldFail) throw new Error("database is busy");
+        return [makeBead("pi-1"), makeBead("pi-2")];
+      },
+      getUnblockedBeadsFn: async () => ["pi-2"],
+    });
+
+    await controller.refreshNow();
+    shouldFail = true;
+    await controller.refreshNow();
+
+    expect(updates).toHaveLength(2);
+    expect(updates[0].staleData).toBe(false);
+    expect(updates[0].beads.map((b) => b.id)).toEqual(["pi-1", "pi-2"]);
+
+    expect(updates[1].staleData).toBe(true);
+    expect(updates[1].staleSnapshotAgeMs).toBeTypeOf("number");
+    expect(updates[1].beads.map((b) => b.id)).toEqual(["pi-1", "pi-2"]);
+    expect(updates[1].alerts).toEqual([]);
 
     controller.dispose();
   });

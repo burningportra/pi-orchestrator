@@ -37,6 +37,9 @@ export class DashboardController {
   private disposed = false;
   private started = false;
   private staleBannerShown = false;
+  private lastHealthyBeads: Bead[] = [];
+  private lastHealthyUnblockedIds: string[] = [];
+  private lastHealthyAtMs?: number;
 
   constructor(options: DashboardControllerOptions) {
     this.opts = {
@@ -126,6 +129,7 @@ export class DashboardController {
 
       let beads: Bead[] = [];
       let unblockedIds: string[] = [];
+      let readsFailed = false;
 
       try {
         [beads, unblockedIds] = await Promise.all([
@@ -134,8 +138,18 @@ export class DashboardController {
         ]);
         this.consecutiveFailures = 0; // reset on success
       } catch {
+        readsFailed = true;
         this.consecutiveFailures++;
         // Fall through — buildDashboardSnapshot handles empty beads gracefully
+      }
+
+      const expectedActiveBeads = Array.isArray(state.activeBeadIds) && state.activeBeadIds.length > 0;
+      const staleRead = readsFailed || (expectedActiveBeads && beads.length === 0);
+      const canReuseHealthyData = staleRead && this.lastHealthyBeads.length > 0;
+
+      if (canReuseHealthyData) {
+        beads = this.lastHealthyBeads;
+        unblockedIds = this.lastHealthyUnblockedIds;
       }
 
       const unblockedSet = new Set(unblockedIds);
@@ -146,10 +160,25 @@ export class DashboardController {
         tenderSummary,
       );
 
-      // Only show the stale banner once per stale transition
+      if (staleRead) {
+        snapshot.staleData = true;
+        snapshot.staleSnapshotAgeMs = this.lastHealthyAtMs
+          ? Math.max(0, Date.now() - this.lastHealthyAtMs)
+          : undefined;
+        snapshot.alerts = [];
+      } else {
+        this.lastHealthyBeads = beads;
+        this.lastHealthyUnblockedIds = unblockedIds;
+        this.lastHealthyAtMs = Date.now();
+        snapshot.staleSnapshotAgeMs = undefined;
+      }
+
+      // Only show the stale indicator once per stale transition.
+      // Suppress repeated stale notes until data recovers.
       if (snapshot.staleData) {
         if (this.staleBannerShown) {
-          snapshot.staleData = false; // suppress repeated banner
+          snapshot.staleData = false;
+          snapshot.staleSnapshotAgeMs = undefined;
         } else {
           this.staleBannerShown = true;
         }

@@ -48,7 +48,23 @@ describe("isTransientBrError", () => {
     expect(isTransientBrError(1, "error: bead not found", null)).toBe(false);
   });
 
-  it("classifies exit > 1 as permanent", () => {
+  it("classifies structured database-busy errors as transient even when br marks them non-retryable", () => {
+    expect(
+      isTransientBrError(
+        2,
+        JSON.stringify({
+          error: {
+            code: "DATABASE_ERROR",
+            message: "Database error: database is busy",
+            retryable: false,
+          },
+        }),
+        null,
+      ),
+    ).toBe(true);
+  });
+
+  it("classifies exit > 1 as permanent when no transient br shape matches", () => {
     expect(isTransientBrError(2, "", null)).toBe(false);
     expect(isTransientBrError(127, "", null)).toBe(false);
   });
@@ -214,6 +230,31 @@ describe("brExec", () => {
     expect(calls).toBe(2);
   });
 
+  it("retries structured database-busy errors and exposes parsed brError details", async () => {
+    let calls = 0;
+    const pi = createMockPi(async () => {
+      calls++;
+      if (calls === 1) {
+        return failResult(
+          2,
+          JSON.stringify({
+            error: {
+              code: "DATABASE_ERROR",
+              message: "Database error: database is busy",
+              hint: null,
+              retryable: false,
+              context: null,
+            },
+          }),
+        );
+      }
+      return successResult('{"ok":true}');
+    });
+    const result = await brExec(pi, ["list"], { maxRetries: 2, retryDelayMs: 0, logWarnings: false });
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(2);
+  });
+
   it("does not retry exit-2 (permanent)", async () => {
     let calls = 0;
     const pi = createMockPi(async () => {
@@ -266,6 +307,23 @@ describe("brExecJson", () => {
       expect(result.error.exitCode).toBe(2);
       // stderr should be the exec stderr, not a JSON parse error
       expect(result.error.stderr).toBe("not found");
+    }
+  });
+
+  it("attaches parsed brError details on structured failures", async () => {
+    const pi = createMockPi(async () => failResult(2, JSON.stringify({
+      error: {
+        code: "DATABASE_ERROR",
+        message: "Database error: database is busy",
+        retryable: false,
+      },
+    })));
+    const result = await brExecJson(pi, ["show", "bad"], { maxRetries: 0, retryDelayMs: 0, logWarnings: false });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.brError?.code).toBe("DATABASE_ERROR");
+      expect(result.error.brError?.message).toContain("database is busy");
+      expect(result.error.isTransient).toBe(true);
     }
   });
 

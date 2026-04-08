@@ -8,6 +8,14 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 // ─── Types ────────────────────────────────────────────────────
 
+export interface BrStructuredError {
+  code?: string;
+  message?: string;
+  hint?: string | null;
+  retryable?: boolean | null;
+  context?: unknown;
+}
+
 /** Structured error from a CLI exec call. */
 export interface CliExecError {
   /** Full command string, e.g. "br update bd-123 --status closed" */
@@ -20,6 +28,8 @@ export interface CliExecError {
   stdout: string;
   /** Captured stderr */
   stderr: string;
+  /** Parsed structured br error payload when stderr contains JSON error details. */
+  brError?: BrStructuredError;
   /** Whether the failure is classified as transient (retry may help) */
   isTransient: boolean;
   /** Total number of attempts made (including the initial one) */
@@ -74,12 +84,34 @@ function isTransientDefault(
   return false;
 }
 
+function parseBrStructuredError(stderr: string): BrStructuredError | undefined {
+  const trimmed = stderr.trim();
+  if (!trimmed.startsWith("{")) return undefined;
+
+  try {
+    const parsed = JSON.parse(trimmed) as { error?: BrStructuredError };
+    if (!parsed || typeof parsed !== "object" || !parsed.error || typeof parsed.error !== "object") {
+      return undefined;
+    }
+    return parsed.error;
+  } catch {
+    return undefined;
+  }
+}
+
+function isDatabaseBusyMessage(message?: string): boolean {
+  const normalized = message?.toLowerCase() ?? "";
+  return normalized.includes("database is busy") || normalized.includes("database busy") || normalized.includes("database is locked");
+}
+
 /**
  * br-specific transient classification.
  *
  * - Timeout → transient
+ * - Structured br errors marked retryable → transient
+ * - Structured DATABASE_ERROR busy/locked errors → transient, even if retryable=false
  * - Exit code 1 + empty stderr → transient (observed br race / DB-busy shape)
- * - Exit code > 1 → permanent (bad args, missing bead, unsupported flags)
+ * - Exit code > 1 → permanent unless matched by the rules above
  * - ENOENT / EACCES → permanent (br not installed / not executable)
  * - null exit code (signal kill) → transient
  */
@@ -96,6 +128,11 @@ export function isTransientBrError(
     if (msg.toLowerCase().includes("timeout") || msg.includes("ETIMEDOUT") || msg.includes("timed out")) return true;
     if (msg.includes("killed")) return true;
   }
+
+  const brError = parseBrStructuredError(stderr);
+  if (brError?.retryable === true) return true;
+  if (brError?.code === "DATABASE_ERROR" && isDatabaseBusyMessage(brError.message)) return true;
+
   // null exit code (signal kill) → transient
   if (exitCode === null) return true;
   // Exit code 1 + empty/whitespace stderr → transient (DB busy, race condition)
@@ -116,11 +153,20 @@ function formatCommand(cmd: string, args: string[]): string {
   return [cmd, ...args].join(" ");
 }
 
+function formatErrorDetail(error: CliExecError): string {
+  if (error.brError?.code || error.brError?.message) {
+    const code = error.brError.code ?? "BR_ERROR";
+    const message = error.brError.message ?? error.stderr;
+    return `${code}: ${JSON.stringify(message)}`;
+  }
+  return JSON.stringify(error.stderr.slice(0, 200));
+}
+
 function buildWarning(error: CliExecError): string {
   const classification = error.isTransient ? "transient" : "permanent";
   return (
     `[cli-exec] ${classification} failure after ${error.attempts} attempt(s): ` +
-    `${error.command} → exit=${error.exitCode ?? "null"} stderr=${JSON.stringify(error.stderr.slice(0, 200))}`
+    `${error.command} → exit=${error.exitCode ?? "null"} stderr=${formatErrorDetail(error)}`
   );
 }
 
@@ -162,6 +208,7 @@ export async function resilientExec(
           exitCode: result.code,
           stdout: result.stdout,
           stderr: result.stderr,
+          brError: cmd === "br" ? parseBrStructuredError(result.stderr) : undefined,
           isTransient: transient,
           attempts: attempt + 1,
         };

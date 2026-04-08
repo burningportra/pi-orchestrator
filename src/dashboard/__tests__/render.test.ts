@@ -6,7 +6,7 @@ import {
   renderProgressBar,
   renderGoalLine,
   renderBeadTable,
-  renderStaleBanner,
+  renderStaleFooterNote,
   renderTenderSection,
   renderAlerts,
 } from "../render.js";
@@ -35,6 +35,7 @@ function makeSnapshot(overrides: Partial<DashboardSnapshot> = {}): DashboardSnap
     tenderSummary: undefined,
     lastRefreshMs: Date.now(),
     staleData: false,
+    staleSnapshotAgeMs: undefined,
     alerts: [],
     ...overrides,
   };
@@ -208,17 +209,23 @@ describe("renderBeadTable", () => {
   });
 });
 
-describe("renderStaleBanner", () => {
+describe("renderStaleFooterNote", () => {
   it("returns null when data is fresh", () => {
     const snap = makeSnapshot({ staleData: false });
-    expect(renderStaleBanner(snap, mockTheme)).toBeNull();
+    expect(renderStaleFooterNote(snap, mockTheme)).toBeNull();
   });
 
-  it("returns warning line when staleData is true", () => {
+  it("returns compact stale footer note when staleData is true", () => {
     const snap = makeSnapshot({ staleData: true });
-    const result = renderStaleBanner(snap, mockTheme);
+    const result = renderStaleFooterNote(snap, mockTheme);
     expect(result).toBeTruthy();
-    expect(result).toContain("stale");
+    expect(result).toContain("stale bead data");
+  });
+
+  it("includes last successful snapshot age when available", () => {
+    const snap = makeSnapshot({ staleData: true, staleSnapshotAgeMs: 12_000 });
+    const result = renderStaleFooterNote(snap, mockTheme);
+    expect(result).toContain("12s ago");
   });
 });
 
