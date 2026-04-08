@@ -32,6 +32,7 @@ You: /orchestrate
 - **Bead template library** — Optional scaffolds for common bead shapes: `add-api-endpoint`, `refactor-module`, and `add-tests`
 - **4-agent review** — Fresh-eyes, polish, ergonomics, and reality-check reviewers run in parallel
 - **CASS memory** — Procedural memory via [cm CLI](https://github.com/Dicklesworthstone/cass_memory_system) — relevance-scored rules, anti-patterns, and cross-session learning
+- **Crash recovery** — Orchestration state is checkpointed to disk after every phase transition. If your session crashes, `/orchestrate` will offer to resume from the last checkpoint
 - **Coordination backends** — Beads (br CLI), Sophia, and agent-mail for multi-agent coordination
 
 ## Prerequisites

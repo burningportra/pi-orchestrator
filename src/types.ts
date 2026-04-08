@@ -389,6 +389,24 @@ export interface OrchestratorState {
   consecutiveCleanRounds?: number;
 }
 
+// ─── Checkpoint Persistence ─────────────────────────────────
+
+/** On-disk checkpoint envelope — wraps OrchestratorState with crash-recovery metadata. */
+export interface CheckpointEnvelope {
+  /** Schema version for forward compatibility. Start at 1. */
+  schemaVersion: 1;
+  /** ISO timestamp when this checkpoint was written. */
+  writtenAt: string;
+  /** Orchestrator version that wrote this checkpoint. */
+  orchestratorVersion: string;
+  /** Git HEAD hash at checkpoint time — detects branch changes between crash and resume. */
+  gitHead?: string;
+  /** The full orchestrator state snapshot. */
+  state: OrchestratorState;
+  /** SHA-256 hash of JSON.stringify(state) for integrity validation. */
+  stateHash: string;
+}
+
 export function createInitialState(): OrchestratorState {
   return {
     phase: "idle",

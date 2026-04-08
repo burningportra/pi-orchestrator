@@ -32,6 +32,7 @@ import { registerReviewTool } from "./tools/review.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
 import { DashboardController, renderDashboardLines, PHASE_EMOJI } from "./dashboard/index.js";
 import { readBeads } from "./beads.js";
+import { writeCheckpoint, clearCheckpoint, readCheckpoint } from "./checkpoint.js";
 
 export default function (pi: ExtensionAPI) {
   // Log version at startup so stale code is immediately obvious
@@ -42,6 +43,9 @@ export default function (pi: ExtensionAPI) {
 
   let state: OrchestratorState = createInitialState();
   let orchestratorActive = false;
+
+  // Stored cwd for persistState() which doesn't receive ctx
+  let currentCwd: string | undefined;
 
   // Dashboard widget state (single instance to prevent flashing)
   let dashboardWidgetRegistered = false;
@@ -213,6 +217,14 @@ export default function (pi: ExtensionAPI) {
   function setPhase(phase: OrchestratorPhase, ctx: ExtensionContext) {
     state.phase = phase;
     state.phaseStartedAt = Date.now();
+
+    // Checkpoint persistence: write for active phases, clear for terminal
+    if (phase !== "idle" && phase !== "complete") {
+      writeCheckpoint(ctx.cwd, state, ORCHESTRATOR_VERSION);
+    } else {
+      clearCheckpoint(ctx.cwd);
+    }
+
     if (phase === "idle") {
       ctx.ui.setStatus("orchestrator", undefined);
       ctx.ui.setWidget("orchestrator", undefined);
@@ -274,6 +286,21 @@ export default function (pi: ExtensionAPI) {
         lastStateEntry = entry.data as OrchestratorState;
       }
     }
+    // Store cwd for persistState() checkpoint writes
+    currentCwd = ctx.cwd;
+
+    // Checkpoint fallback: if session log is empty or stale (idle), try disk checkpoint
+    if (!lastStateEntry || lastStateEntry.phase === "idle") {
+      const checkpoint = readCheckpoint(ctx.cwd);
+      if (checkpoint && checkpoint.envelope.state.phase !== "idle" && checkpoint.envelope.state.phase !== "complete") {
+        lastStateEntry = checkpoint.envelope.state;
+        console.log(`[pi-orchestrator] Restored from checkpoint: phase=${lastStateEntry.phase}${lastStateEntry.selectedGoal ? `, goal="${lastStateEntry.selectedGoal}"` : ""}`);
+        for (const w of checkpoint.warnings) {
+          console.warn(`[pi-orchestrator] checkpoint: ${w}`);
+        }
+      }
+    }
+
     if (lastStateEntry) {
         state = lastStateEntry;
 
@@ -424,6 +451,11 @@ export default function (pi: ExtensionAPI) {
     // Deep copy via JSON to create a true snapshot — prevents shared array
     // references between appended entries and the live in-memory state
     pi.appendEntry("orchestrator-state", JSON.parse(JSON.stringify(state)));
+
+    // Also write checkpoint for sub-phase progress (bead results, gate index, etc.)
+    if (currentCwd && state.phase !== "idle" && state.phase !== "complete") {
+      writeCheckpoint(currentCwd, state, ORCHESTRATOR_VERSION);
+    }
   }
 
   // ─── Orchestrator Context ──────────────────────────────────

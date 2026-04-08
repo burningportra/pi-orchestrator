@@ -190,14 +190,36 @@ export function registerCommands(oc: OrchestratorContext) {
     handler: async (args, ctx) => {
       const { readBeads } = await import("./beads.js");
       const { detectSessionStage, formatSessionContext, buildResumeLabel } = await import("./session-state.js");
+      const { readCheckpoint: readCp, clearCheckpoint: clearCp } = await import("./checkpoint.js");
       
       // Check for existing state that can be resumed
-      const hasExistingState = oc.state.phase !== "idle" && oc.state.phase !== "complete";
+      let hasExistingState = oc.state.phase !== "idle" && oc.state.phase !== "complete";
       let existingBeads: import("./types.js").Bead[] = [];
       try {
         existingBeads = await readBeads(pi, ctx.cwd);
       } catch { /* no beads dir */ }
       const hasActiveBeads = existingBeads.some(b => b.status === "open" || b.status === "in_progress");
+
+      // Checkpoint recovery: if state is idle and no active beads, check disk checkpoint
+      let checkpointWarnings: string[] = [];
+      if (!hasExistingState && !hasActiveBeads) {
+        const checkpoint = readCp(ctx.cwd);
+        if (checkpoint && checkpoint.envelope.state.phase !== "idle" && checkpoint.envelope.state.phase !== "complete") {
+          // Restore state from checkpoint
+          oc.state = checkpoint.envelope.state;
+          hasExistingState = true;
+          checkpointWarnings = checkpoint.warnings;
+          // Check for git HEAD mismatch
+          try {
+            const { execSync } = await import("child_process");
+            const currentHead = execSync("git rev-parse HEAD", { cwd: ctx.cwd, stdio: "pipe" }).toString().trim();
+            if (checkpoint.envelope.gitHead && checkpoint.envelope.gitHead !== currentHead) {
+              checkpointWarnings.push("checkpoint is from a different git commit");
+            }
+          } catch { /* git not available or not a repo */ }
+          console.log(`[pi-orchestrator] /orchestrate: recovered from checkpoint — phase=${oc.state.phase}`);
+        }
+      }
       
       // Resume vs Fresh fork
       if (hasExistingState || hasActiveBeads) {
@@ -250,10 +272,13 @@ export function registerCommands(oc: OrchestratorContext) {
 
         choices.push(`❌ Cancel`);
 
-        // Show rich context: stage summary + bead staleness
+        // Show rich context: stage summary + bead staleness + checkpoint warnings
         const separator = stalenessInfo ? `\n${stalenessInfo}` : "";
+        const cpWarningStr = checkpointWarnings.length > 0
+          ? `\n⚠️ Checkpoint: ${checkpointWarnings.join("; ")}`
+          : "";
         const choice = await ctx.ui.select(
-          `Existing orchestration detected\n\n${stageContext}${separator}`,
+          `Existing orchestration detected\n\n${stageContext}${separator}${cpWarningStr}`,
           choices
         );
 
@@ -454,6 +479,7 @@ export function registerCommands(oc: OrchestratorContext) {
             }
           }
           ctx.ui.notify(`📦 Archived ${openCount} open bead(s) as deferred.`, "info");
+          clearCp(ctx.cwd); // Clear checkpoint on fresh start
           // Fall through to fresh start
 
         // ── Handle: Clear ─────────────────────────────────────────
@@ -473,6 +499,7 @@ export function registerCommands(oc: OrchestratorContext) {
               ctx.ui.notify("⚠️ Failed to delete beads.", "warning");
             }
           }
+          clearCp(ctx.cwd); // Clear checkpoint on clear
           // Fall through to fresh start
 
         // ── Handle: Cancel ────────────────────────────────────────
