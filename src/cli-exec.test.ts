@@ -64,6 +64,22 @@ describe("isTransientBrError", () => {
     ).toBe(true);
   });
 
+  it("classifies wrapped structured database-busy errors as transient", () => {
+    expect(
+      isTransientBrError(
+        2,
+        `[br] command failed\n${JSON.stringify({
+          error: {
+            code: "DATABASE_ERROR",
+            message: "Database error: database is busy",
+            retryable: false,
+          },
+        })}`,
+        null,
+      ),
+    ).toBe(true);
+  });
+
   it("classifies exit > 1 as permanent when no transient br shape matches", () => {
     expect(isTransientBrError(2, "", null)).toBe(false);
     expect(isTransientBrError(127, "", null)).toBe(false);
@@ -323,6 +339,22 @@ describe("brExecJson", () => {
     if (!result.ok) {
       expect(result.error.brError?.code).toBe("DATABASE_ERROR");
       expect(result.error.brError?.message).toContain("database is busy");
+      expect(result.error.isTransient).toBe(true);
+    }
+  });
+
+  it("parses structured br errors even when stderr includes wrapper text", async () => {
+    const pi = createMockPi(async () => failResult(2, `[cli-exec] br failed\n${JSON.stringify({
+      error: {
+        code: "DATABASE_ERROR",
+        message: "Database error: database is busy",
+        retryable: false,
+      },
+    })}`));
+    const result = await brExecJson(pi, ["show", "bad"], { maxRetries: 0, retryDelayMs: 0, logWarnings: false });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.brError?.code).toBe("DATABASE_ERROR");
       expect(result.error.isTransient).toBe(true);
     }
   });

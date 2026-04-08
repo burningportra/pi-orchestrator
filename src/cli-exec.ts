@@ -84,12 +84,24 @@ function isTransientDefault(
   return false;
 }
 
+function stripAnsi(input: string): string {
+  return input.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
+}
+
+function extractJsonObject(input: string): string | undefined {
+  const start = input.indexOf("{");
+  const end = input.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return undefined;
+  return input.slice(start, end + 1);
+}
+
 function parseBrStructuredError(stderr: string): BrStructuredError | undefined {
-  const trimmed = stderr.trim();
-  if (!trimmed.startsWith("{")) return undefined;
+  const cleaned = stripAnsi(stderr).trim();
+  const candidate = cleaned.startsWith("{") ? cleaned : extractJsonObject(cleaned);
+  if (!candidate) return undefined;
 
   try {
-    const parsed = JSON.parse(trimmed) as { error?: BrStructuredError };
+    const parsed = JSON.parse(candidate) as { error?: BrStructuredError };
     if (!parsed || typeof parsed !== "object" || !parsed.error || typeof parsed.error !== "object") {
       return undefined;
     }

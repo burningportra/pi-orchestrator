@@ -81,24 +81,22 @@ describe("DashboardController", () => {
     controller.dispose();
   });
 
-  it("reads beads and unblocked ids in parallel", async () => {
-    let readBeadsCalled = false;
-    let unblockedCalled = false;
+  it("reads beads before unblocked ids to avoid concurrent br queries", async () => {
+    const callOrder: string[] = [];
 
     const { controller } = createMockController({
       readBeadsFn: async () => {
-        readBeadsCalled = true;
+        callOrder.push("read");
         return [makeBead("pi-1")];
       },
       getUnblockedBeadsFn: async () => {
-        unblockedCalled = true;
+        callOrder.push("unblocked");
         return ["pi-1"];
       },
     });
 
     await controller.refreshNow();
-    expect(readBeadsCalled).toBe(true);
-    expect(unblockedCalled).toBe(true);
+    expect(callOrder).toEqual(["read", "unblocked"]);
     controller.dispose();
   });
 
@@ -359,13 +357,17 @@ describe("DashboardController", () => {
     };
 
     let shouldFail = false;
+    let unblockedCalls = 0;
     const { controller, updates } = createMockController({
       state,
       readBeadsFn: async () => {
         if (shouldFail) throw new Error("database is busy");
         return [makeBead("pi-1"), makeBead("pi-2")];
       },
-      getUnblockedBeadsFn: async () => ["pi-2"],
+      getUnblockedBeadsFn: async () => {
+        unblockedCalls++;
+        return ["pi-2"];
+      },
     });
 
     await controller.refreshNow();
@@ -380,6 +382,7 @@ describe("DashboardController", () => {
     expect(updates[1].staleSnapshotAgeMs).toBeTypeOf("number");
     expect(updates[1].beads.map((b) => b.id)).toEqual(["pi-1", "pi-2"]);
     expect(updates[1].alerts).toEqual([]);
+    expect(unblockedCalls).toBe(1);
 
     controller.dispose();
   });

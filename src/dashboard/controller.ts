@@ -132,10 +132,8 @@ export class DashboardController {
       let readsFailed = false;
 
       try {
-        [beads, unblockedIds] = await Promise.all([
-          this.opts.readBeadsFn(),
-          this.opts.getUnblockedBeadsFn(),
-        ]);
+        beads = await this.opts.readBeadsFn();
+        unblockedIds = await this.opts.getUnblockedBeadsFn();
         this.consecutiveFailures = 0; // reset on success
       } catch {
         readsFailed = true;
