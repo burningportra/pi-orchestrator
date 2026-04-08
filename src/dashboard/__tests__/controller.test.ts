@@ -285,4 +285,66 @@ describe("DashboardController", () => {
     expect(updates[0].beads).toEqual([]);
     controller.dispose();
   });
+
+  it("suppresses stale banner after the first occurrence", async () => {
+    const state: OrchestratorState = {
+      ...createInitialState(),
+      phase: "implementing",
+      activeBeadIds: ["pi-1", "pi-2"],
+    };
+
+    const { controller, updates } = createMockController({
+      state,
+      readBeadsFn: async () => {
+        throw new Error("br not found");
+      },
+    });
+
+    await controller.refreshNow();
+    await controller.refreshNow();
+    await controller.refreshNow();
+
+    expect(updates).toHaveLength(3);
+    expect(updates[0].staleData).toBe(true);  // first: shown
+    expect(updates[1].staleData).toBe(false); // second: suppressed
+    expect(updates[2].staleData).toBe(false); // third: suppressed
+    controller.dispose();
+  });
+
+  it("re-shows stale banner after data recovers then goes stale again", async () => {
+    const state: OrchestratorState = {
+      ...createInitialState(),
+      phase: "implementing",
+      activeBeadIds: ["pi-1", "pi-2"],
+    };
+
+    let shouldFail = true;
+    const { controller, updates } = createMockController({
+      state,
+      readBeadsFn: async () => {
+        if (shouldFail) throw new Error("br not found");
+        return [{ id: "pi-1", title: "Test", status: "open" } as any];
+      },
+    });
+
+    // First: stale (shown)
+    await controller.refreshNow();
+    expect(updates[0].staleData).toBe(true);
+
+    // Second: stale (suppressed)
+    await controller.refreshNow();
+    expect(updates[1].staleData).toBe(false);
+
+    // Recover
+    shouldFail = false;
+    await controller.refreshNow();
+    expect(updates[2].staleData).toBe(false);
+
+    // Stale again (shown because it recovered)
+    shouldFail = true;
+    await controller.refreshNow();
+    expect(updates[3].staleData).toBe(true);
+
+    controller.dispose();
+  });
 });

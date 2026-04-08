@@ -27,6 +27,7 @@ export interface DashboardAlert {
 /** Complete dashboard data — rebuilt on every refresh cycle. */
 export interface DashboardSnapshot {
   phase: OrchestratorPhase;
+  phaseLabel: string;
   phaseEmoji: string;
   repoName: string;
   scanSource: string;

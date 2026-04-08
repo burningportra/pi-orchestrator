@@ -23,6 +23,27 @@ export const PHASE_EMOJI: Record<OrchestratorPhase, string> = {
 };
 
 /**
+ * Human-friendly phase labels for the dashboard.
+ * Converts internal snake_case identifiers into readable text.
+ */
+export const PHASE_LABEL: Record<OrchestratorPhase, string> = {
+  idle: "Idle",
+  profiling: "Profiling",
+  discovering: "Discovering",
+  awaiting_selection: "Awaiting Selection",
+  planning: "Planning",
+  researching: "Researching",
+  awaiting_plan_approval: "Awaiting Plan Approval",
+  creating_beads: "Creating Beads",
+  refining_beads: "Refining Beads",
+  awaiting_bead_approval: "Awaiting Bead Approval",
+  implementing: "Implementing",
+  reviewing: "Reviewing",
+  iterating: "Iterating",
+  complete: "Complete",
+};
+
+/**
  * Build a render-ready dashboard snapshot from live orchestrator state and bead data.
  *
  * This function is pure and **never throws**. On any unexpected error it returns
@@ -45,6 +66,7 @@ export function buildDashboardSnapshot(
     // --- Phase ---
     const phase: OrchestratorPhase = state?.phase ?? "idle";
     const phaseEmoji = PHASE_EMOJI[phase] ?? "⏸";
+    const phaseLabel = PHASE_LABEL[phase] ?? phase;
 
     // --- Repo / scan / goal ---
     const repoName = state?.repoProfile?.name ?? "Unknown repo";
@@ -123,6 +145,7 @@ export function buildDashboardSnapshot(
 
     return {
       phase,
+      phaseLabel,
       phaseEmoji,
       repoName,
       scanSource,
@@ -150,6 +173,7 @@ export function buildDashboardSnapshot(
 
     return {
       phase: safePhase,
+      phaseLabel: PHASE_LABEL[safePhase] ?? safePhase,
       phaseEmoji: PHASE_EMOJI[safePhase] ?? "⏸",
       repoName: "Unknown repo",
       scanSource: "unknown",

@@ -53,7 +53,7 @@ describe("dashboard integration", () => {
 
     expect(lines.length).toBeGreaterThanOrEqual(5);
     const output = lines.join("\n");
-    expect(output).toContain("implementing");
+    expect(output).toContain("Implementing");
     expect(output).toContain("my-repo");
     expect(output).toContain("monitoring dashboard");
     expect(output).toContain("1/3");
@@ -107,7 +107,7 @@ describe("dashboard integration", () => {
     const output = lines.join("\n");
 
     // Verify all fields that the old updateWidget showed
-    expect(output).toContain("reviewing");       // phase
+    expect(output).toContain("Reviewing");       // phase
     expect(output).toContain("test-repo");        // repo name
     expect(output).toContain("builtin");          // scan source
     expect(output).toContain("test coverage");    // goal (partial match)

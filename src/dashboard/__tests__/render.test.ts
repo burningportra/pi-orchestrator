@@ -1,3 +1,4 @@
+import { visibleWidth } from "@mariozechner/pi-tui";
 import { describe, it, expect } from "vitest";
 import {
   renderDashboardLines,
@@ -23,6 +24,7 @@ const mockTheme = {
 function makeSnapshot(overrides: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
   return {
     phase: "implementing",
+    phaseLabel: "Implementing",
     phaseEmoji: "🔨",
     repoName: "my-repo",
     scanSource: "ccc",
@@ -67,7 +69,7 @@ describe("renderDashboardLines", () => {
     expect(lines.length).toBeGreaterThanOrEqual(7);
 
     const joined = lines.join("\n");
-    expect(joined).toContain("implementing");
+    expect(joined).toContain("Implementing");
     expect(joined).toContain("my-repo");
     expect(joined).toContain("Add a monitoring dashboard");
     expect(joined).toContain("2/5");
@@ -82,25 +84,29 @@ describe("renderDashboardLines", () => {
     const lines = renderDashboardLines(snap, mockTheme, 15);
 
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain("implementing");
     expect(lines[0]).toContain("2/5");
+    expect(visibleWidth(lines[0])).toBeLessThanOrEqual(15);
   });
 
   it("handles width exactly 20", () => {
     const snap = makeSnapshot();
     const lines = renderDashboardLines(snap, mockTheme, 20);
 
-    // width 20-79 → compact multi-line layout (no sparklines or footer)
-    // Should always include counts somewhere
     const allText = lines.join("\n");
     expect(allText).toContain("2/5");
-    // Should not blow up and must return at least one line
     expect(lines.length).toBeGreaterThanOrEqual(1);
-    // No line should exceed width+10 visible chars (ANSI codes excluded)
     for (const line of lines) {
-      const vis = line.replace(/\x1b\[[0-9;]*m/g, "");
-      expect(vis.length).toBeLessThanOrEqual(30); // 20 + some tolerance
+      expect(visibleWidth(line)).toBeLessThanOrEqual(20);
     }
+  });
+
+  it("hard-clamps ultra-narrow layouts", () => {
+    const snap = makeSnapshot();
+    const lines = renderDashboardLines(snap, mockTheme, 9);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("2/5");
+    expect(visibleWidth(lines[0])).toBeLessThanOrEqual(9);
   });
 });
 
@@ -144,7 +150,7 @@ describe("renderGoalLine", () => {
   it("truncates long goals with ellipsis", () => {
     const longGoal = "A".repeat(200);
     const result = renderGoalLine(longGoal, 50, mockTheme);
-    expect(result.length).toBeLessThanOrEqual(50);
+    expect(visibleWidth(result)).toBeLessThanOrEqual(50);
     expect(result).toContain("...");
   });
 
@@ -253,7 +259,7 @@ describe("renderPhaseHeader", () => {
     const snap = makeSnapshot();
     const lines = renderPhaseHeader(snap, mockTheme);
     expect(lines.length).toBeGreaterThanOrEqual(1);
-    expect(lines[0]).toContain("implementing");
+    expect(lines[0]).toContain("Implementing");
     expect(lines[1]).toContain("my-repo");
     expect(lines[1]).toContain("ccc");
   });

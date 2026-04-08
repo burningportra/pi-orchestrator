@@ -122,6 +122,7 @@ function randomSnapshot(): DashboardSnapshot {
 
   return {
     phase: randomPhase(),
+    phaseLabel: randomString(20),
     phaseEmoji: PHASE_EMOJI[randomPhase()],
     repoName: randomString(40),
     scanSource: rand() > 0.5 ? "ccc" : "unknown",

@@ -1,3 +1,4 @@
+import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { BeadSnapshot, DashboardAlert, DashboardSnapshot } from "./types.js";
 
 // ─── Theme interface ────────────────────────────────────────────
@@ -73,21 +74,15 @@ function formatDuration(ms: number): string {
   return `${min}m ${sec}s`;
 }
 
-/** Strip ANSI escape codes for visible-width measurement. */
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m|\x1b\]8;;[^\x07]*\x07/g, "");
+/** Truncate to max visible width using pi-tui's width-aware helper. */
+function truncate(text: string, maxWidth: number): string {
+  if (maxWidth <= 0) return "";
+  return truncateToWidth(text, maxWidth, "...");
 }
 
-/** Truncate to maxLen visible chars (ANSI-aware). */
-function truncate(text: string, maxLen: number): string {
-  if (maxLen < 4) return text.slice(0, Math.max(maxLen, 0));
-  if (stripAnsi(text).length <= maxLen) return text;
-  return text.slice(0, maxLen - 3) + "...";
-}
-
-/** Left-pad a string to `width` visible chars. */
+/** Right-pad a string to `width` visible cells. */
 function padEnd(text: string, width: number): string {
-  const vis = stripAnsi(text).length;
+  const vis = visibleWidth(text);
   return text + " ".repeat(Math.max(0, width - vis));
 }
 
@@ -141,13 +136,13 @@ export function renderPhaseHeader(
   const lines: string[] = [];
 
   // Phase line — left: "◉ Phase: implementing"  right: "2m 14s"
-  const phaseLabel = `${snapshot.phaseEmoji} ${snapshot.phase}`;
+  const phaseLabel = `${snapshot.phaseEmoji} ${snapshot.phaseLabel}`;
   const durationStr = snapshot.phaseDurationMs !== undefined
     ? styled(theme, "muted", formatDuration(snapshot.phaseDurationMs))
     : "";
 
   if (durationStr && width > 60) {
-    const gap = width - stripAnsi(phaseLabel).length - stripAnsi(durationStr).length;
+    const gap = width - visibleWidth(phaseLabel) - visibleWidth(durationStr);
     lines.push(
       styled(theme, "primary", phaseLabel) +
       " ".repeat(Math.max(1, gap)) +
@@ -177,7 +172,7 @@ export function renderGoalLine(
 ): string {
   if (!goal) return "";
   const prefix = "🎯 ";
-  const available = Math.max(maxWidth - prefix.length, 0);
+  const available = Math.max(maxWidth - visibleWidth(prefix), 0);
   return styled(theme, "muted", prefix) + truncate(goal, available);
 }
 
@@ -224,7 +219,7 @@ export function renderConvergenceRow(
   const label = "📈 Convergence: ";
   const bar = `[${spark}]${scoreStr}`;
   const full = label + bar;
-  if (stripAnsi(full).length > width) return styled(theme, "muted", truncate(full, width));
+  if (visibleWidth(full) > width) return styled(theme, "muted", truncate(full, width));
 
   // Colour the bar: green if ≥75%, yellow if ≥50%, muted otherwise
   const scoreNum = convergenceScore ?? 0;
@@ -368,8 +363,8 @@ function renderStatusFooter(
     ? "orch_approve_beads to review"
     : "";
 
-  if (hint && width > hint.length + refresh.length + 4) {
-    const gap = width - stripAnsi(hint).length - stripAnsi(refresh).length;
+  if (hint && width > visibleWidth(hint) + visibleWidth(refresh) + 4) {
+    const gap = width - visibleWidth(hint) - visibleWidth(refresh);
     return styled(theme, "muted", hint) + " ".repeat(Math.max(1, gap)) + styled(theme, "muted", refresh);
   }
   return styled(theme, "muted", refresh.padStart(width));
@@ -387,8 +382,11 @@ export function renderDashboardLines(
   width: number,
 ): string[] {
   // Absolute minimum: one-liner
+  if (width < 12) {
+    return [truncate(`${snapshot.phaseEmoji} ${snapshot.completedCount}/${snapshot.totalCount}`, width)];
+  }
   if (width < 20) {
-    return [`${snapshot.phaseEmoji} ${snapshot.phase} ${snapshot.completedCount}/${snapshot.totalCount}`];
+    return [truncate(`${snapshot.phaseEmoji} ${snapshot.completedCount}/${snapshot.totalCount} ${snapshot.phaseLabel}`, width)];
   }
 
   const mode = layoutMode(width);
@@ -458,8 +456,5 @@ export function renderDashboardLines(
   }
 
   // ── Hard-clamp: strip ANSI then truncate if still overflowing ─
-  return lines.map(line => {
-    const vis = stripAnsi(line);
-    return vis.length <= width ? line : styled(theme, "muted", truncate(vis, width));
-  });
+  return lines.map((line) => visibleWidth(line) <= width ? line : truncate(line, width));
 }

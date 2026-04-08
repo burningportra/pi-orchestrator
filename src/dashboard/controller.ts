@@ -36,6 +36,7 @@ export class DashboardController {
   private consecutiveFailures = 0;
   private disposed = false;
   private started = false;
+  private staleBannerShown = false;
 
   constructor(options: DashboardControllerOptions) {
     this.opts = {
@@ -144,6 +145,17 @@ export class DashboardController {
         unblockedSet,
         tenderSummary,
       );
+
+      // Only show the stale banner once per stale transition
+      if (snapshot.staleData) {
+        if (this.staleBannerShown) {
+          snapshot.staleData = false; // suppress repeated banner
+        } else {
+          this.staleBannerShown = true;
+        }
+      } else {
+        this.staleBannerShown = false; // reset when data recovers
+      }
 
       this.opts.onUpdate(snapshot);
     } catch {
