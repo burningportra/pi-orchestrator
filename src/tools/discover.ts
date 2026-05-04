@@ -7,8 +7,9 @@ import { tmpdir } from "os";
 import type { OrchestratorContext, CandidateIdea } from "../types.js";
 
 export function registerDiscoverTool(oc: OrchestratorContext) {
+  for (const toolName of ["orch_discover", "flywheel_discover"] as const) {
   oc.pi.registerTool({
-    name: "orch_discover",
+    name: toolName,
     label: "Discover Ideas",
     description:
       "Generate 3–7 concrete project ideas based on the repo profile. Call orch_profile first. Returns structured ideas. After generating, call orch_select for user selection.",
@@ -148,4 +149,5 @@ export function registerDiscoverTool(oc: OrchestratorContext) {
       return new Text(text, 0, 0);
     },
   });
+  }
 }

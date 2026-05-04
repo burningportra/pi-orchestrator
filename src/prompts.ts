@@ -445,16 +445,19 @@ Use ultrathink.`;
 }
 
 // ─── Bead Refinement Prompt ──────────────────────────────────
-export function beadRefinementPrompt(roundNumber?: number, priorChanges?: number[]): string {
+export function beadRefinementPrompt(roundNumber?: number, priorChanges?: number[], blockingProgress?: string): string {
   const hasRoundNumber = roundNumber !== undefined && roundNumber !== null;
   const roundInfo = hasRoundNumber ? `This is polish round ${roundNumber + 1}.\n\n` : "";
   const changesInfo = priorChanges && priorChanges.length > 0
     ? `Prior rounds: ${priorChanges.map((n, i) => `Round ${i + 1}: ${n} change${n !== 1 ? "s" : ""}`).join(", ")}.\n\n`
     : "";
+  const blockingInfo = blockingProgress?.trim()
+    ? `${blockingProgress.trim()}\n\nTreat this as the refinement backlog. Start at the top of the fix order list and update only the beads that move those exact dimensions.\n\n`
+    : "";
 
   return `## Bead Refinement Pass
 
-${roundInfo}${changesInfo}Review each bead via \`br list\` and \`br show <id>\`.
+${roundInfo}${changesInfo}${blockingInfo}Review each bead via \`br list\` and \`br show <id>\`.
 
 ### For each bead, check:
 1. Does this make sense? Is there a better approach?
@@ -467,7 +470,9 @@ ${roundInfo}${changesInfo}Review each bead via \`br list\` and \`br show <id>\`.
 8. Could a fresh agent implement this without ANY external context? What background is missing?
 
 ### Actions
+- Start with the highest-severity blocking dimension above and update only the beads related to it
 - Revise with \`br update <id> -d "..."\` for any improvements
+- If the blocker is graph health, use \`br dep add\` / \`br dep remove\` / splitting to fix the dependency structure
 - Validate: \`br dep cycles\` (must show no cycles)
 
 ### Rules
@@ -481,33 +486,39 @@ Use ultrathink.`;
 }
 
 /** Fresh-context refinement prompt for sub-agent bead review. */
-export function freshContextRefinementPrompt(cwd: string, goal: string, roundNumber: number, simulationReport?: string): string {
+export function freshContextRefinementPrompt(cwd: string, goal: string, roundNumber: number, simulationReport?: string, blockingProgress?: string): string {
   const simSection = simulationReport
     ? `\n\n### Simulation Issues\nThe plan simulation found structural problems that must be fixed:\n\n${simulationReport}\n`
+    : "";
+  const blockingSection = blockingProgress?.trim()
+    ? `\n\n${blockingProgress.trim()}\n\nTreat this as the concrete refinement plan. Start at item 1 in the fix order list and make substantive bead updates that improve those dimensions.`
     : "";
 
   return `## Fresh-Context Bead Refinement (Round ${roundNumber + 1})
 
 You are reviewing beads for a project with NO prior context. This is deliberate - fresh eyes catch what anchored reviewers miss.
 
-**Goal:** ${goal}${simSection}
+**Goal:** ${goal}${simSection}${blockingSection}
 
 ### Instructions
 1. Run \`br list --json\` to read all open beads
-2. For each bead, evaluate:
+2. Start with the blocking score dimensions above and identify which beads must change to address them
+3. For each bead, evaluate:
    - Does it make sense as a self-contained work unit?
    - Is the description detailed enough for a fresh agent to implement without guessing?
    - Are acceptance criteria specific and testable?
    - Are dependencies correct?
    - Could the architecture be improved?
-3. Make improvements directly via \`br update <id> -d "..."\`
-4. Check for missing beads and create them with \`br create\`
-5. Run \`br dep cycles\` to verify no cycles
+4. Make improvements directly via \`br update <id> -d "..."\`
+5. Check for missing beads and create them with \`br create\`
+6. If graph health is blocking progress, use \`br dep add\`, \`br dep remove\`, or split beads to fix the graph
+7. Run \`br dep cycles\` to verify no cycles
 
 ### Rules
 - DO NOT OVERSIMPLIFY. DO NOT LOSE FEATURES OR FUNCTIONALITY.
 - Every bead must be self-contained and self-documenting.
 - Include specific test expectations in each bead.
+- Prefer changes that directly improve the named blocked dimensions over broad rewrites.
 
 Use ultrathink.
 

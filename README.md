@@ -50,10 +50,16 @@ See [docs/setup.md](docs/setup.md) for detailed configuration.
 
 | Command | Description |
 |---------|-------------|
-| `/orchestrate` | Full workflow — scan, plan, implement, review |
-| `/orchestrate [goal]` | Skip discovery, plan a specific goal directly |
-| `/orchestrate-stop` | Cancel and clean up worktrees |
-| `/orchestrate-status` | Show current phase and progress |
+| `/orchestrate` / `/flywheel-start` | Full workflow — scan, plan, implement, review |
+| `/orchestrate [goal]` / `/flywheel-start [goal]` | Skip discovery, plan a specific goal directly |
+| `/orchestrate-stop` / `/flywheel-stop` | Cancel and clean up worktrees |
+| `/orchestrate-status` / `/flywheel-status` | Show current phase and progress |
+| `/flywheel-doctor` | Read-only diagnostic for git, Node, br/bv, ntm, cm, agent-mail, checkpoint, and orphaned worktrees |
+| `/orchestrate-cleanup` / `/flywheel-cleanup` | Safely remove orphaned worktrees |
+| `/orchestrate-swarm-status` / `/flywheel-swarm-status` | Show active swarm health |
+| `/orchestrate-swarm-stop` / `/flywheel-swarm-stop` | Stop swarm monitoring and show landing guidance |
+
+For Claude agent-flywheel parity, the pi tools are also registered under `flywheel_*` names in addition to the legacy `orch_*` names: `flywheel_profile`, `flywheel_discover`, `flywheel_select`, `flywheel_plan`, `flywheel_approve_beads`, `flywheel_review`, `flywheel_memory`, and `flywheel_verify_beads`.
 
 ## Learn more
 

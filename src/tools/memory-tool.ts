@@ -4,8 +4,9 @@ import { Text } from "@mariozechner/pi-tui";
 import type { OrchestratorContext } from "../types.js";
 
 export function registerMemoryTool(oc: OrchestratorContext) {
+  for (const toolName of ["orch_memory", "flywheel_memory"] as const) {
   oc.pi.registerTool({
-    name: "orch_memory",
+    name: toolName,
     label: "Memory",
     description:
       "Search and read CASS memory (learnings from prior orchestration runs). Use to recall past decisions, gotchas, and patterns.",
@@ -195,4 +196,5 @@ export function registerMemoryTool(oc: OrchestratorContext) {
       );
     },
   });
+  }
 }

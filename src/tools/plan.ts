@@ -131,8 +131,9 @@ function loadPlannerArtifacts(ctx: ExtensionContext, goal: string): DeepPlanResu
 }
 
 export function registerPlanTool(oc: OrchestratorContext) {
+  for (const toolName of ["orch_plan", "flywheel_plan"] as const) {
   oc.pi.registerTool({
-    name: "orch_plan",
+    name: toolName,
     label: "Generate Plan",
     description:
       "Generate a plan document for the selected goal. Supports single-model and multi-model competing-plan synthesis.",
@@ -357,4 +358,5 @@ export function registerPlanTool(oc: OrchestratorContext) {
       );
     },
   });
+  }
 }

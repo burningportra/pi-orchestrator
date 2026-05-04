@@ -30,6 +30,8 @@ import { registerPlanTool } from "./tools/plan.js";
 import { registerApproveTool } from "./tools/approve.js";
 import { registerReviewTool } from "./tools/review.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
+import { registerDoctorTool } from "./tools/doctor.js";
+import { registerVerifyBeadsTool } from "./tools/verify-beads.js";
 import { DashboardController, renderDashboardLines, PHASE_EMOJI } from "./dashboard/index.js";
 import { readBeads } from "./beads.js";
 import { writeCheckpoint, clearCheckpoint, readCheckpoint } from "./checkpoint.js";
@@ -494,4 +496,6 @@ export default function (pi: ExtensionAPI) {
   registerApproveTool(oc);
   registerMemoryTool(oc);
   registerReviewTool(oc);
+  registerDoctorTool(oc);
+  registerVerifyBeadsTool(oc);
 }

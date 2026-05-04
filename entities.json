@@ -3,13 +3,13 @@
   "projects": [
     "Plan",
     "Flywheel",
-    "Code",
-    "Multi",
+    "Build",
     "Planning",
     "Section",
+    "Multi",
     "Content",
     "Types",
-    "Coordination",
-    "Deep"
+    "Tool",
+    "Agent"
   ]
 }

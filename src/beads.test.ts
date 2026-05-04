@@ -477,6 +477,9 @@ Add a new widget component that handles user input validation and displays resul
     const result = await qualityCheckBeads(pi, CWD);
     expect(result.passed).toBe(true);
     expect(result.failures).toEqual([]);
+    expect(result.summary.score).toBe(100);
+    expect(result.summary.failedChecks).toBe(0);
+    expect(result.summary.totalChecks).toBeGreaterThan(0);
   });
 
   it("fails for empty description", async () => {
@@ -534,6 +537,8 @@ Add a new widget component that handles user input validation and displays resul
     const result = await qualityCheckBeads(pi, CWD);
     expect(result.passed).toBe(false);
     expect(result.failures.some((f) => f.check === "has-acceptance-criteria")).toBe(true);
+    expect(result.summary.score).toBeLessThan(100);
+    expect(result.summary.failuresByCheck["has-acceptance-criteria"]).toBe(1);
   });
 });
 
@@ -589,6 +594,7 @@ ${files.map((f) => `- ${f}`).join("\n")}
     expect(overlap[0].reason).toContain("a1");
     expect(overlap[0].reason).toContain("a2");
     expect(overlap[0].reason).toContain("src/shared.ts");
+    expect(result.summary.failuresByCheck["file-overlap"]).toBe(1);
   });
 
   it("no failure when beads with deps share files (not both ready)", async () => {

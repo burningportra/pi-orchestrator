@@ -298,6 +298,29 @@ describe("brExecJson", () => {
     }
   });
 
+  it("parses JSON stdout with noisy progress text around it", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const pi = createMockPi(async () => successResult('\u001b[2K\r⠹ Working...\n[{"id":"br-1","title":"Test"}]\n⠼ Working...'));
+    const result = await brExecJson<Array<{ id: string; title: string }>>(pi, ["list", "--json"], {
+      logWarnings: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual([{ id: "br-1", title: "Test" }]);
+    }
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("skips balanced non-JSON brackets before the JSON payload", async () => {
+    const pi = createMockPi(async () => successResult('[cli-exec] progress\n{"id":"br-1"}\n'));
+    const result = await brExecJson<{ id: string }>(pi, ["show", "br-1", "--json"], {
+      logWarnings: false,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.id).toBe("br-1");
+  });
+
   it("returns structured error on invalid JSON", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const pi = createMockPi(async () => successResult("not json at all"));

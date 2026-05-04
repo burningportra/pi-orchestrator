@@ -122,6 +122,31 @@ describe("computeForegoneScore", () => {
     expect(score.blockers.some(b => b.includes("quality issues"))).toBe(true);
   });
 
+  it("uses structural check pass rate when provided so partial fixes move the score", () => {
+    const inputs = makeHighQualityInputs();
+    inputs.beadQualityPassRate = {
+      passed: 8,
+      total: 10,
+      passedChecks: 52,
+      totalChecks: 60,
+      failuresByCheck: { "has-acceptance-criteria": 4, "template-hygiene": 4 },
+    };
+    const score = computeForegoneScore(inputs);
+    expect(score.beadQuality).toBe(87);
+    expect(score.blockers.some((b) => b.includes("structural quality check"))).toBe(false);
+
+    inputs.beadQualityPassRate = {
+      passed: 8,
+      total: 10,
+      passedChecks: 36,
+      totalChecks: 60,
+      failuresByCheck: { "has-acceptance-criteria": 12, "template-hygiene": 12 },
+    };
+    const lower = computeForegoneScore(inputs);
+    expect(lower.beadQuality).toBe(60);
+    expect(lower.blockers.some((b) => b.includes("structural quality check"))).toBe(true);
+  });
+
   it("generates graph health blocker for cycles", () => {
     const inputs = makeHighQualityInputs();
     inputs.graphInsights = {

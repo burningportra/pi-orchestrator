@@ -95,6 +95,68 @@ function extractJsonObject(input: string): string | undefined {
   return input.slice(start, end + 1);
 }
 
+function findJsonValueEnd(input: string, start: number): number | undefined {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < input.length; i++) {
+    const char = input[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      stack.push("}");
+    } else if (char === "[") {
+      stack.push("]");
+    } else if (char === "}" || char === "]") {
+      if (stack.length === 0 || stack[stack.length - 1] !== char) return undefined;
+      stack.pop();
+      if (stack.length === 0) return i + 1;
+    }
+  }
+
+  return undefined;
+}
+
+function parseJsonStdout<T>(stdout: string): T {
+  const cleaned = stripAnsi(stdout).trim();
+
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch (originalError) {
+    for (let i = 0; i < cleaned.length; i++) {
+      const char = cleaned[i];
+      if (char !== "{" && char !== "[") continue;
+
+      const end = findJsonValueEnd(cleaned, i);
+      if (end === undefined) continue;
+
+      try {
+        return JSON.parse(cleaned.slice(i, end)) as T;
+      } catch {
+        // Keep scanning: noisy prefixes can contain balanced non-JSON brackets.
+      }
+    }
+
+    throw originalError;
+  }
+}
+
 function parseBrStructuredError(stderr: string): BrStructuredError | undefined {
   const cleaned = stripAnsi(stderr).trim();
   const candidate = cleaned.startsWith("{") ? cleaned : extractJsonObject(cleaned);
@@ -293,7 +355,7 @@ export async function brExecJson<T>(
   if (!result.ok) return result;
 
   try {
-    const parsed = JSON.parse(result.value.stdout) as T;
+    const parsed = parseJsonStdout<T>(result.value.stdout);
     return { ok: true, value: parsed };
   } catch (parseErr: unknown) {
     const commandStr = formatCommand("br", args);

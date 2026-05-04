@@ -11,8 +11,9 @@ import { getParallelModelAssignments, resolveExecutionMode } from "./shared.js";
 import { brExec, resilientExec } from "../cli-exec.js";
 
 export function registerReviewTool(oc: OrchestratorContext) {
+  for (const toolName of ["orch_review", "flywheel_review"] as const) {
   oc.pi.registerTool({
-    name: "orch_review",
+    name: toolName,
     label: "Review Step",
     description:
       "Submit your implementation work for review. Provide a summary of what you changed. The tool evaluates against acceptance criteria and returns pass/fail.",
@@ -710,4 +711,5 @@ export function registerReviewTool(oc: OrchestratorContext) {
       );
     },
   });
+  }
 }

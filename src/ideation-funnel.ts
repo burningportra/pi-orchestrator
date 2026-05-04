@@ -240,28 +240,165 @@ export function parseIdeasJSON(output: string): CandidateIdea[] {
 }
 
 /**
+ * Extract balanced JSON object candidates from mixed LLM output.
+ *
+ * Regexes like /\{[\s\S]*"keeps"[\s\S]*\}/ are too greedy: if the model
+ * writes any prose object-ish text before the fenced JSON, the parse fails and
+ * the deep-discovery UI falls back with a noisy warning. This scanner tracks
+ * strings/escapes and returns every balanced object so callers can try the
+ * actual JSON payload first.
+ */
+function extractJsonObjectCandidates(output: string): string[] {
+  const candidates: string[] = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < output.length; i++) {
+    const ch = output[i];
+
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+      continue;
+    }
+    if (ch === "}" && depth > 0) {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        candidates.push(output.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function parseJsonObjectCandidate(candidate: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(candidate);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    // Common LLM blemish: trailing commas before a closing object/array.
+    try {
+      const repaired = candidate.replace(/,\s*([}\]])/g, "$1");
+      const parsed = JSON.parse(repaired);
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function getArrayField(obj: Record<string, unknown>, names: string[]): unknown[] {
+  for (const name of names) {
+    const value = obj[name];
+    if (Array.isArray(value)) return value;
+  }
+  return [];
+}
+
+function keepIdFromEntry(entry: unknown): string | null {
+  if (typeof entry === "string") return entry.trim() || null;
+  if (typeof entry !== "object" || entry === null) return null;
+  const obj = entry as Record<string, unknown>;
+  for (const field of ["id", "ideaId", "idea_id", "slug"]) {
+    if (typeof obj[field] === "string" && obj[field].trim()) return obj[field].trim();
+  }
+  return null;
+}
+
+function entryRank(entry: unknown): number {
+  if (typeof entry !== "object" || entry === null) return 99;
+  const obj = entry as Record<string, unknown>;
+  return Number(obj.rank ?? obj.priority ?? obj.order) || 99;
+}
+
+function parseKeepIdsFromObject(parsed: Record<string, unknown>): { keptIds: string[]; cutCount: number } {
+  const keepEntries = getArrayField(parsed, ["keeps", "keep", "kept", "selected", "selectedIdeas", "top5", "winners"]);
+  const directKeeps = keepEntries
+    .slice()
+    .sort((a, b) => entryRank(a) - entryRank(b))
+    .map(keepIdFromEntry)
+    .filter((id): id is string => !!id);
+
+  const decisionEntries = getArrayField(parsed, ["decisions", "evaluations", "results"]);
+  const decisionKeeps = decisionEntries
+    .filter((entry) => {
+      if (typeof entry !== "object" || entry === null) return false;
+      const obj = entry as Record<string, unknown>;
+      const decision = String(obj.decision ?? obj.verdict ?? obj.status ?? "").toLowerCase();
+      return decision === "keep" || decision === "kept" || decision === "selected";
+    })
+    .slice()
+    .sort((a, b) => entryRank(a) - entryRank(b))
+    .map(keepIdFromEntry)
+    .filter((id): id is string => !!id);
+
+  const keptIds = directKeeps.length > 0 ? directKeeps : decisionKeeps;
+  const cutCount = getArrayField(parsed, ["cuts", "cut", "rejected"]).length ||
+    decisionEntries.filter((entry) => {
+      if (typeof entry !== "object" || entry === null) return false;
+      const obj = entry as Record<string, unknown>;
+      const decision = String(obj.decision ?? obj.verdict ?? obj.status ?? "").toLowerCase();
+      return decision === "cut" || decision === "rejected";
+    }).length;
+
+  return { keptIds, cutCount };
+}
+
+function parseKeepIdsFromText(output: string): string[] {
+  const ids: string[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    const normalized = line.replace(/[*`_]/g, "");
+    const match = normalized.match(/\bKEEP\b.*?(?:id\s*[:=-]\s*)?([a-z0-9][a-z0-9_-]{1,})/i);
+    if (match?.[1]) ids.push(match[1]);
+  }
+  return [...new Set(ids)];
+}
+
+/**
  * Parse winnowing results from LLM output.
  * Returns the IDs of the kept ideas in rank order.
  */
 export function parseWinnowingResult(output: string): { keptIds: string[]; cutCount: number } {
-  const match = output.match(/\{[\s\S]*"keeps"[\s\S]*\}/);
-  if (!match) return { keptIds: [], cutCount: 0 };
+  const candidates = extractJsonObjectCandidates(output)
+    .filter((candidate) => /"(?:keeps?|kept|selected|selectedIdeas|top5|winners|decisions|evaluations|results)"/.test(candidate));
 
-  try {
-    const parsed = JSON.parse(match[0]);
-    const keeps = Array.isArray(parsed.keeps)
-      ? parsed.keeps
-          .filter((k: unknown) => typeof k === "object" && k !== null && typeof (k as Record<string, unknown>).id === "string")
-          .sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
-            (Number(a.rank) || 99) - (Number(b.rank) || 99)
-          )
-          .map((k: Record<string, unknown>) => String(k.id))
-      : [];
-    const cuts = Array.isArray(parsed.cuts) ? parsed.cuts.length : 0;
-    return { keptIds: keeps, cutCount: cuts };
-  } catch {
-    return { keptIds: [], cutCount: 0 };
+  for (const candidate of candidates) {
+    const parsed = parseJsonObjectCandidate(candidate);
+    if (!parsed) continue;
+    const result = parseKeepIdsFromObject(parsed);
+    if (result.keptIds.length > 0) return result;
   }
+
+  const textKeeps = parseKeepIdsFromText(output);
+  if (textKeeps.length > 0) {
+    const cutCount = (output.match(/\bCUT\b/gi) ?? []).length;
+    return { keptIds: textKeeps, cutCount };
+  }
+
+  return { keptIds: [], cutCount: 0 };
 }
 
 // ─── Validation Helpers ─────────────────────────────────────

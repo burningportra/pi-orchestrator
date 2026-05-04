@@ -278,6 +278,41 @@ describe("parseWinnowingResult", () => {
     expect(result.cutCount).toBe(1);
   });
 
+  it("ignores earlier prose braces and parses the balanced keeps object", () => {
+    const output = 'Rubric note: {useful: 2x, pragmatic: 2x}\n```json\n{"cuts": [{"id": "x"}], "keeps": [{"id": "b", "rank": 2}, {"id": "a", "rank": 1}]}\n```';
+    const result = parseWinnowingResult(output);
+    expect(result.keptIds).toEqual(["a", "b"]);
+    expect(result.cutCount).toBe(1);
+  });
+
+  it("accepts common alternate keep shapes from LLMs", () => {
+    const result = parseWinnowingResult(JSON.stringify({
+      selectedIdeas: ["alpha", "beta"],
+      rejected: [{ id: "gamma" }],
+    }));
+    expect(result.keptIds).toEqual(["alpha", "beta"]);
+    expect(result.cutCount).toBe(1);
+  });
+
+  it("parses decision-list winnowing output", () => {
+    const result = parseWinnowingResult(JSON.stringify({
+      decisions: [
+        { id: "cut-me", decision: "CUT" },
+        { id: "keep-two", decision: "KEEP", rank: 2 },
+        { id: "keep-one", decision: "KEEP", rank: 1 },
+      ],
+    }));
+    expect(result.keptIds).toEqual(["keep-one", "keep-two"]);
+    expect(result.cutCount).toBe(1);
+  });
+
+  it("falls back to KEEP lines when the model ignores JSON", () => {
+    const output = "1. KEEP: alpha-cache because it is high leverage\n2. CUT: old idea\n3. **KEEP** - beta-tests";
+    const result = parseWinnowingResult(output);
+    expect(result.keptIds).toEqual(["alpha-cache", "beta-tests"]);
+    expect(result.cutCount).toBe(1);
+  });
+
   it("returns empty result for unparseable output", () => {
     expect(parseWinnowingResult("No JSON")).toEqual({ keptIds: [], cutCount: 0 });
     expect(parseWinnowingResult("")).toEqual({ keptIds: [], cutCount: 0 });

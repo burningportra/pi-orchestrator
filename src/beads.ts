@@ -538,6 +538,19 @@ export interface QualityFailure {
   reason: string;
 }
 
+export interface QualityCheckSummary {
+  beadCount: number;
+  readyBeadCount: number;
+  totalChecks: number;
+  passedChecks: number;
+  failedChecks: number;
+  /** 0-100 structural quality score that moves as individual checks are fixed. */
+  score: number;
+  failingBeadCount: number;
+  /** Counts unique failing check units by check name. */
+  failuresByCheck: Record<string, number>;
+}
+
 /**
  * Validates each open bead against automated quality checks:
  * 1. Has substance (description >= 100 chars)
@@ -550,12 +563,27 @@ export interface QualityFailure {
 export async function qualityCheckBeads(
   pi: ExtensionAPI,
   cwd: string
-): Promise<{ passed: boolean; failures: QualityFailure[] }> {
+): Promise<{ passed: boolean; failures: QualityFailure[]; summary: QualityCheckSummary }> {
   const failures: QualityFailure[] = [];
   const allBeads = await readBeads(pi, cwd);
   const openBeads = allBeads.filter((b) => b.status === "open" || b.status === "in_progress");
 
-  if (openBeads.length === 0) return { passed: true, failures };
+  if (openBeads.length === 0) {
+    return {
+      passed: true,
+      failures,
+      summary: {
+        beadCount: 0,
+        readyBeadCount: 0,
+        totalChecks: 0,
+        passedChecks: 0,
+        failedChecks: 0,
+        score: 100,
+        failingBeadCount: 0,
+        failuresByCheck: {},
+      },
+    };
+  }
 
   // Check cycles and template hygiene
   const validation = await validateBeads(pi, cwd);
@@ -633,7 +661,51 @@ export async function qualityCheckBeads(
     }
   }
 
-  return { passed: failures.length === 0, failures };
+  const failureKeys = new Set<string>();
+  const failuresByCheck: Record<string, number> = {};
+  const failingBeadIds = new Set<string>();
+  for (const failure of failures) {
+    if (failure.check === "no-cycles") {
+      for (const bead of openBeads) failingBeadIds.add(bead.id);
+    } else if (failure.check === "file-overlap") {
+      for (const beadId of failure.beadId.split(",").map((id) => id.trim()).filter(Boolean)) {
+        failingBeadIds.add(beadId);
+      }
+    }
+
+    const keys = failure.check === "no-cycles" || failure.check === "file-overlap"
+      ? [`*:${failure.check}`]
+      : failure.beadId
+          .split(",")
+          .map((id) => id.trim())
+          .filter(Boolean)
+          .map((id) => `${id}:${failure.check}`);
+
+    for (const key of keys) {
+      if (failureKeys.has(key)) continue;
+      failureKeys.add(key);
+      failuresByCheck[failure.check] = (failuresByCheck[failure.check] ?? 0) + 1;
+      const beadId = key.split(":", 1)[0];
+      if (beadId !== "*") failingBeadIds.add(beadId);
+    }
+  }
+
+  const perBeadChecks = 5 + (openBeads.length > 1 ? 1 : 0); // template hygiene + 4 content checks + optional dep connectivity
+  const totalChecks = 1 + (ready.length >= 2 ? 1 : 0) + (openBeads.length * perBeadChecks); // global no-cycles + optional file-overlap + per-bead checks
+  const failedChecks = failureKeys.size;
+  const passedChecks = Math.max(0, totalChecks - failedChecks);
+  const summary: QualityCheckSummary = {
+    beadCount: openBeads.length,
+    readyBeadCount: ready.length,
+    totalChecks,
+    passedChecks,
+    failedChecks,
+    score: totalChecks === 0 ? 100 : Math.round((passedChecks / totalChecks) * 100),
+    failingBeadCount: failingBeadIds.size,
+    failuresByCheck,
+  };
+
+  return { passed: failures.length === 0, failures, summary };
 }
 
 /**

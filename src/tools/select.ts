@@ -5,8 +5,9 @@ import { formatRepoProfile, beadCreationPrompt } from "../prompts.js";
 import { runGoalRefinement, extractConstraints } from "../goal-refinement.js";
 
 export function registerSelectTool(oc: OrchestratorContext) {
+  for (const toolName of ["orch_select", "flywheel_select"] as const) {
   oc.pi.registerTool({
-    name: "orch_select",
+    name: toolName,
     label: "Select Idea",
     description:
       "Present the discovered ideas to the user and let them select one (or enter a custom goal). Returns the selected goal string.",
@@ -253,4 +254,5 @@ export function registerSelectTool(oc: OrchestratorContext) {
       );
     },
   });
+  }
 }

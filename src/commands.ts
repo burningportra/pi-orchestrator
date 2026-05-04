@@ -184,11 +184,8 @@ function parseOrchestrateArgs(rawArgs?: string): { goalArg?: string; coordinatio
 export function registerCommands(oc: OrchestratorContext) {
   const { pi } = oc;
 
-  // ─── Command: /orchestrate ───────────────────────────────────
-  pi.registerCommand("orchestrate", {
-    description:
-      "Start the repo-aware multi-agent orchestrator",
-    handler: async (args, ctx) => {
+  const startHandler = async (args: string, ctx: any) => {
+
       const { runOpeningCeremony } = await import("./opening-ceremony.js");
       const runOrchestrateStartupFlow = async () => {
         const { readBeads } = await import("./beads.js");
@@ -610,7 +607,18 @@ export function registerCommands(oc: OrchestratorContext) {
         }
       );
       await runOrchestrateStartupFlow();
-    },
+  };
+
+  // ─── Command: /orchestrate ───────────────────────────────────
+  pi.registerCommand("orchestrate", {
+    description:
+      "Start the repo-aware multi-agent orchestrator",
+    handler: startHandler,
+  });
+
+  pi.registerCommand("flywheel-start", {
+    description: "Start the repo-aware multi-agent flywheel (alias of /orchestrate)",
+    handler: startHandler,
   });
 
   // ─── Command: /orchestrate-stop ──────────────────────────────
@@ -1999,6 +2007,100 @@ ${description}
         `${landingChecklistInstructions(ctx.cwd).slice(0, 500)}...`,
         "info"
       );
+    },
+  });
+
+  // ─── Claude agent-flywheel compatibility aliases ─────────────
+  pi.registerCommand("flywheel-doctor", {
+    description: "Read-only diagnostic of flywheel prerequisites and session health",
+    handler: async (_args, ctx) => {
+      const { runDoctorChecks, formatDoctorReport } = await import("./tools/doctor.js");
+      const report = await runDoctorChecks(pi, ctx.cwd);
+      ctx.ui.notify(formatDoctorReport(report), report.overall === "red" ? "error" : report.overall === "yellow" ? "warning" : "info");
+    },
+  });
+
+  pi.registerCommand("flywheel-status", {
+    description: "Show current flywheel/orchestrator status",
+    handler: async (_args, ctx) => {
+      try {
+        const { loadAllFeedback, computeFeedbackStats, formatFeedbackStats } = await import("./feedback.js");
+        const feedbacks = loadAllFeedback(ctx.cwd);
+        if (feedbacks.length > 0) ctx.ui.notify(formatFeedbackStats(computeFeedbackStats(feedbacks)), "info");
+      } catch { /* best-effort */ }
+      if (!oc.orchestratorActive && oc.state.phase === "idle") {
+        ctx.ui.notify("No orchestration session active.", "info");
+        return;
+      }
+      oc.updateWidget(ctx);
+    },
+  });
+
+  pi.registerCommand("flywheel-stop", {
+    description: "Stop the current flywheel/orchestration session",
+    handler: async (_args, ctx) => {
+      if (!oc.orchestratorActive) {
+        ctx.ui.notify("No orchestration in progress.", "info");
+        return;
+      }
+      if (oc.worktreePool) {
+        const summary = await oc.worktreePool.safeCleanup();
+        if (summary.autoCommitted > 0) ctx.ui.notify(`💾 Auto-committed ${summary.autoCommitted} dirty worktree(s) before cleanup.`, "info");
+        oc.worktreePool = undefined;
+      }
+      if (oc.swarmTender) { oc.swarmTender.stop(); oc.swarmTender = undefined; }
+      oc.orchestratorActive = false;
+      oc.setPhase("idle", ctx);
+      oc.persistState();
+      ctx.ui.notify("🛑 Flywheel stopped.", "warning");
+    },
+  });
+
+  pi.registerCommand("flywheel-cleanup", {
+    description: "Clean up orphaned pi-orchestrator worktrees",
+    handler: async (_args, ctx) => {
+      const { findOrphanedWorktrees, cleanupOrphanedWorktrees } = await import("./worktree.js");
+      const tracked = oc.worktreePool ? [...oc.worktreePool.getAll()] : [];
+      const orphans = await findOrphanedWorktrees(pi, ctx.cwd, tracked);
+      if (orphans.length === 0) {
+        ctx.ui.notify("✅ No orphaned worktrees found.", "info");
+        return;
+      }
+      const dirtyCount = orphans.filter((o) => o.isDirty).length;
+      const confirmed = await ctx.ui.confirm(
+        "Clean up worktrees",
+        `Found ${orphans.length} orphaned worktree(s)${dirtyCount ? ` (${dirtyCount} dirty — will auto-commit)` : ""}. Remove them?`
+      );
+      if (!confirmed) return;
+      const summary = await cleanupOrphanedWorktrees(pi, ctx.cwd, orphans);
+      ctx.ui.notify(`🧹 Removed ${summary.removed} worktree(s)${summary.autoCommitted ? `; auto-committed ${summary.autoCommitted}` : ""}${summary.errors.length ? `; errors: ${summary.errors.join(", ")}` : ""}`, summary.errors.length ? "warning" : "info");
+    },
+  });
+
+  pi.registerCommand("flywheel-swarm-status", {
+    description: "Show swarm health: active/idle/stuck agents, bead progress, conflicts",
+    handler: async (_args, ctx) => {
+      if (!oc.swarmTender) {
+        ctx.ui.notify("No swarm active. Launch one with /orchestrate-swarm.", "info");
+        return;
+      }
+      const { formatSwarmStatus } = await import("./swarm.js");
+      const { readBeads } = await import("./beads.js");
+      ctx.ui.notify(formatSwarmStatus(oc.swarmTender.getStatus(), await readBeads(pi, ctx.cwd)), "info");
+    },
+  });
+
+  pi.registerCommand("flywheel-swarm-stop", {
+    description: "Stop the swarm tender and send landing prompts",
+    handler: async (_args, ctx) => {
+      if (!oc.swarmTender) {
+        ctx.ui.notify("No swarm active.", "info");
+        return;
+      }
+      oc.swarmTender.stop();
+      oc.swarmTender = undefined;
+      const { landingChecklistInstructions } = await import("./prompts.js");
+      ctx.ui.notify(`🛑 Swarm tender stopped.\n\nAgents may still be running in their terminals. Send each the landing checklist:\n\n${landingChecklistInstructions(ctx.cwd).slice(0, 500)}...`, "info");
     },
   });
 }

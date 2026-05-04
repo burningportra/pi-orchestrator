@@ -21,8 +21,9 @@ function weightedScore(idea: import("../types.js").CandidateIdea): number {
 }
 
 export function registerProfileTool(oc: OrchestratorContext) {
+  for (const toolName of ["orch_profile", "flywheel_profile"] as const) {
   oc.pi.registerTool({
-    name: "orch_profile",
+    name: toolName,
     label: "Profile Repo",
     description:
       "Scan the current repository to collect its tech stack, structure, commits, TODOs, and key files. Returns a structured profile.",
@@ -633,4 +634,5 @@ export function registerProfileTool(oc: OrchestratorContext) {
       return new Text(text, 0, 0);
     },
   });
+  }
 }

@@ -47,8 +47,18 @@ export interface ForegoneInputs {
   planQuality: PlanQualityScore | null;
   /** Bead polish convergence score (0-1 from computeConvergenceScore). */
   convergenceScore: number | null;
-  /** Number of beads passing quality checks vs total open beads. */
-  beadQualityPassRate: { passed: number; total: number } | null;
+  /**
+   * Bead quality progress. `passed/total` keeps backward compatibility, while
+   * `passedChecks/totalChecks` lets the readiness score move as individual
+   * structural issues are fixed instead of only when an entire bead flips green.
+   */
+  beadQualityPassRate: {
+    passed: number;
+    total: number;
+    passedChecks?: number;
+    totalChecks?: number;
+    failuresByCheck?: Record<string, number>;
+  } | null;
   /** bv graph insights. Null if bv unavailable. */
   graphInsights: BvInsights | null;
   /** Plan-to-bead coverage result. Null if no plan. */
@@ -79,11 +89,27 @@ export function computeForegoneScore(inputs: ForegoneInputs): ForegoneScore {
   // ── 3. Bead structural quality (25% weight) ──
   let beadQuality = 50;
   if (inputs.beadQualityPassRate) {
-    const { passed, total } = inputs.beadQualityPassRate;
-    beadQuality = total > 0 ? Math.round((passed / total) * 100) : 100;
+    const { passed, total, passedChecks, totalChecks, failuresByCheck } = inputs.beadQualityPassRate;
+    const usingCheckRate = typeof passedChecks === "number" && typeof totalChecks === "number" && totalChecks > 0;
+    beadQuality = usingCheckRate
+      ? Math.round((passedChecks / totalChecks) * 100)
+      : total > 0 ? Math.round((passed / total) * 100) : 100;
+
     if (beadQuality < 70) {
-      const failing = total - passed;
-      blockers.push(`${failing} of ${total} beads have quality issues — enrich descriptions`);
+      if (usingCheckRate) {
+        const failingChecks = Math.max(0, totalChecks - passedChecks);
+        const topIssues = failuresByCheck
+          ? Object.entries(failuresByCheck)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 2)
+              .map(([check, count]) => `${check}×${count}`)
+              .join(", ")
+          : "";
+        blockers.push(`${failingChecks} structural quality check(s) still failing${topIssues ? ` (${topIssues})` : ""} — enrich bead descriptions and graph hygiene`);
+      } else {
+        const failing = total - passed;
+        blockers.push(`${failing} of ${total} beads have quality issues — enrich descriptions`);
+      }
     }
   }
 

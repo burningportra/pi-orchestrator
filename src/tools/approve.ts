@@ -177,8 +177,9 @@ function formatPlanSummary(plan: string): string {
 }
 
 export function registerApproveTool(oc: OrchestratorContext) {
+  for (const toolName of ["orch_approve_beads", "flywheel_approve_beads"] as const) {
   oc.pi.registerTool({
-    name: "orch_approve_beads",
+    name: toolName,
     label: "Approve Beads",
     description:
       "Read beads created via br CLI, present them for user approval. Offers refinement passes (Phase 6) before execution. Call after the LLM has created beads with br create.",
@@ -622,6 +623,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
       }
 
       let planAuditWarning = "";
+      let planCoverageResult: import("../plan-coverage.js").PlanCoverageResult | null = null;
       if (oc.state.planDocument) {
         try {
           const plan = readFileSync(sessionArtifactPath(ctx, oc.state.planDocument), "utf8");
@@ -631,8 +633,8 @@ export function registerApproveTool(oc: OrchestratorContext) {
 
           // Plan-to-bead coverage dashboard (fast keyword-based)
           const { coverageFromKeywordAudit, formatPlanCoverage } = await import("../plan-coverage.js");
-          const coverageResult = coverageFromKeywordAudit(planAudit);
-          const coverageDisplay = formatPlanCoverage(coverageResult);
+          planCoverageResult = coverageFromKeywordAudit(planAudit);
+          const coverageDisplay = formatPlanCoverage(planCoverageResult);
           if (coverageDisplay) planAuditWarning += `\n\n${coverageDisplay}`;
         } catch {
           // Non-fatal: missing or unreadable plan artifact should not block approval.
@@ -642,9 +644,72 @@ export function registerApproveTool(oc: OrchestratorContext) {
       // Quality summary
       const { qualityCheckBeads } = await import("../beads.js");
       const qualityPreview = await qualityCheckBeads(oc.pi, ctx.cwd);
+      const failingBeadCount = qualityPreview.summary.failingBeadCount;
+      const passingBeadCount = Math.max(0, beads.length - failingBeadCount);
+      const topQualityIssues = Object.entries(qualityPreview.summary.failuresByCheck)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([check, count]) => `${check}×${count}`)
+        .join(", ");
       const qualitySummary = qualityPreview.passed
-        ? `\n✅ ${beads.length}/${beads.length} beads pass quality checks`
-        : `\n⚠️ ${beads.length - new Set(qualityPreview.failures.map((f) => f.beadId)).size}/${beads.length} pass — ${new Set(qualityPreview.failures.map((f) => f.beadId)).size} issues found`;
+        ? `\n✅ ${beads.length}/${beads.length} beads pass quality checks • ${qualityPreview.summary.passedChecks}/${qualityPreview.summary.totalChecks} structural checks pass`
+        : `\n⚠️ ${passingBeadCount}/${beads.length} beads fully pass • ${qualityPreview.summary.passedChecks}/${qualityPreview.summary.totalChecks} structural checks pass (${qualityPreview.summary.score}/100)${topQualityIssues ? ` • top issues: ${topQualityIssues}` : ""}`;
+
+      const bottleneckIds = (validation.warnings ?? [])
+        .filter((w) => w.includes("bottleneck"))
+        .map((w) => w.match(/bead (\S+)/)?.[1])
+        .filter((id): id is string => !!id);
+      const articulationIds = (validation.warnings ?? [])
+        .filter((w) => w.includes("single point of failure"))
+        .map((w) => w.match(/bead (\S+)/)?.[1])
+        .filter((id): id is string => !!id);
+
+      const refinementFocusLines: string[] = [];
+      const refinementPriorityItems: { priority: number; label: string; action: string }[] = [];
+      const planQuality = oc.state.planReadinessScore;
+      if (planQuality && planQuality.recommendation !== "proceed") {
+        const weak = planQuality.weakSections.length > 0 ? ` weak spots: ${planQuality.weakSections.join(", ")}.` : "";
+        const action = `**Plan Quality ${planQuality.overall}/100** — ${planQuality.recommendation === "block" ? "still blocking" : "still soft"}.${weak} Expand the missing plan detail in the beads so coverage and execution guidance match the plan.`;
+        refinementFocusLines.push(`- ${action}`);
+        refinementPriorityItems.push({
+          priority: planQuality.recommendation === "block" ? 35 : 55,
+          label: `Plan Quality ${planQuality.overall}/100`,
+          action: `Expand bead context for weak plan sections${planQuality.weakSections.length > 0 ? `: ${planQuality.weakSections.join(", ")}` : ""}.`,
+        });
+      }
+      if (!qualityPreview.passed) {
+        const action = `**Bead Quality ${qualityPreview.summary.score}/100** — ${qualityPreview.summary.failedChecks} structural checks still failing.${topQualityIssues ? ` Top failing checks: ${topQualityIssues}.` : ""} Update bead descriptions, acceptance criteria, and file scopes until these checks pass.`;
+        refinementFocusLines.push(`- ${action}`);
+        refinementPriorityItems.push({
+          priority: qualityPreview.summary.score < 50 ? 20 : 40,
+          label: `Bead Quality ${qualityPreview.summary.score}/100`,
+          action: `Fix the dominant failing checks first${topQualityIssues ? `: ${topQualityIssues}` : ""}.`,
+        });
+      }
+      if (planCoverageResult && planCoverageResult.overall < 70) {
+        const gapPreview = planCoverageResult.gaps.slice(0, 4).map((g) => `${g.heading} (${g.score}%)`).join(", ");
+        const action = `**Plan Coverage ${planCoverageResult.overall}/100** — uncovered or weak plan sections: ${gapPreview}. Add or expand beads so each gap maps to concrete work.`;
+        refinementFocusLines.push(`- ${action}`);
+        refinementPriorityItems.push({
+          priority: planCoverageResult.overall < 50 ? 15 : 30,
+          label: `Plan Coverage ${planCoverageResult.overall}/100`,
+          action: `Add or expand beads for the uncovered sections${gapPreview ? `: ${gapPreview}` : ""}.`,
+        });
+      }
+      if (validation.cycles || validation.orphaned.length > 0 || bottleneckIds.length > 0 || articulationIds.length > 0) {
+        const graphParts: string[] = [];
+        if (validation.cycles) graphParts.push("dependency cycles");
+        if (validation.orphaned.length > 0) graphParts.push(`orphans: ${validation.orphaned.join(", ")}`);
+        if (bottleneckIds.length > 0) graphParts.push(`bottlenecks: ${bottleneckIds.join(", ")}`);
+        if (articulationIds.length > 0) graphParts.push(`single points of failure: ${articulationIds.join(", ")}`);
+        const action = `**Graph Health** — ${graphParts.join("; ")}. Fix with \`br dep add\`, \`br dep remove\`, splitting oversized beads, or closing dead-end beads.`;
+        refinementFocusLines.push(`- ${action}`);
+        refinementPriorityItems.push({
+          priority: validation.cycles ? 10 : validation.orphaned.length > 0 ? 18 : 28,
+          label: "Graph Health",
+          action: `Fix graph structure first${graphParts.length > 0 ? ` (${graphParts.join("; ")})` : ""}.`,
+        });
+      }
 
       // ── Compute convergence score ──
       const convergenceScore = oc.state.polishChanges.length >= 3
@@ -653,6 +718,23 @@ export function registerApproveTool(oc: OrchestratorContext) {
       if (convergenceScore !== undefined) {
         oc.state.polishConvergenceScore = convergenceScore;
       }
+      if (convergenceScore !== undefined && convergenceScore < 0.75) {
+        const lastChanges = oc.state.polishChanges.at(-1);
+        const action = `**Bead Convergence ${Math.round(convergenceScore * 100)}/100** — polish is still moving materially${typeof lastChanges === "number" ? ` (last round changed ${lastChanges} bead${lastChanges !== 1 ? "s" : ""})` : ""}. Prioritize substantive fixes to the blocked dimensions above; don't churn wording that already works.`;
+        refinementFocusLines.push(`- ${action}`);
+        refinementPriorityItems.push({
+          priority: convergenceScore < 0.5 ? 60 : 75,
+          label: `Bead Convergence ${Math.round(convergenceScore * 100)}/100`,
+          action: "Make substantive fixes to the higher-priority blockers above before doing another polish pass.",
+        });
+      }
+      const refinementPriorityList = refinementPriorityItems.length > 0
+        ? refinementPriorityItems
+            .sort((a, b) => a.priority - b.priority)
+            .map((item, index) => `${index + 1}. **${item.label}** — ${item.action}`)
+            .join("\n")
+        : "1. **No hard blockers detected** — only make clarity edits that materially improve execution.";
+      const refinementFocus = `### Fix in this order\n${refinementPriorityList}\n\n### Blocking score dimensions right now\n${refinementFocusLines.length > 0 ? refinementFocusLines.join("\n") : "- No hard blockers detected. Tighten clarity only if it materially improves execution."}\n\nSub-agents: start at item 1, make the smallest substantive edits that improve that item, then continue downward only if time remains.`;
 
       // ── Build UI options based on polish state ──
       const round = oc.state.polishRound;
@@ -677,27 +759,19 @@ export function registerApproveTool(oc: OrchestratorContext) {
           const { computeForegoneScore, formatForegoneScore } = await import("../foregone.js");
           const { bvInsights: getBvInsights } = await import("../beads.js");
 
-          // Gather bead quality pass rate from qualityPreview
-          const failingBeadIds = new Set(qualityPreview.failures.map((f: { beadId: string }) => f.beadId));
+          // Gather bead quality progress from qualityPreview.
+          // Use structural check pass rate so incremental fixes move the score.
           const beadQualityPassRate = {
-            passed: beads.length - failingBeadIds.size,
+            passed: Math.max(0, beads.length - qualityPreview.summary.failingBeadCount),
             total: beads.length,
+            passedChecks: qualityPreview.summary.passedChecks,
+            totalChecks: qualityPreview.summary.totalChecks,
+            failuresByCheck: qualityPreview.summary.failuresByCheck,
           };
 
           // Gather graph insights (best-effort)
           let graphInsights = null;
           try { graphInsights = await getBvInsights(oc.pi, ctx.cwd); } catch { /* bv unavailable */ }
-
-          // Gather plan coverage (already computed above as keyword audit)
-          let planCoverageResult = null;
-          if (oc.state.planDocument) {
-            try {
-              const { coverageFromKeywordAudit: covFromAudit } = await import("../plan-coverage.js");
-              const planText = readFileSync(sessionArtifactPath(ctx, oc.state.planDocument), "utf8");
-              const audit = auditPlanToBeads(planText, beads);
-              planCoverageResult = covFromAudit(audit);
-            } catch { /* non-fatal */ }
-          }
 
           const foregone = computeForegoneScore({
             planQuality: oc.state.planReadinessScore ?? null,
@@ -833,7 +907,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
 
         // Model rotation: different model each round for diverse perspectives
         const refinementModel = pickRefinementModel(round);
-        const freshPrompt = freshContextRefinementPrompt(ctx.cwd, oc.state.selectedGoal!, round);
+        const freshPrompt = freshContextRefinementPrompt(ctx.cwd, oc.state.selectedGoal!, round, undefined, refinementFocus);
         return {
           content: [
             {
@@ -859,7 +933,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
           content: [
             {
               type: "text",
-              text: `**NEXT: Review and refine the beads using br CLI, then call \`orch_approve_beads\` again to return to the approval menu.**\n\nStay inside the bead-approval workflow while refining.\n\n${beadRefinementPrompt(round, oc.state.polishChanges)}\n\n---\n\nCurrent beads (${beads.length} total):\n${compactBeadList}\n\nUse \`br show <id>\` for full bead details.`,
+              text: `**NEXT: Review and refine the beads using br CLI, then call \`orch_approve_beads\` again to return to the approval menu.**\n\nStay inside the bead-approval workflow while refining.\n\n${beadRefinementPrompt(round, oc.state.polishChanges, refinementFocus)}\n\n---\n\nCurrent beads (${beads.length} total):\n${compactBeadList}\n\nUse \`br show <id>\` for full bead details.`,
             },
           ],
           details: { approved: false, refining: true, beadCount: beads.length, polishRound: round },
@@ -874,7 +948,7 @@ export function registerApproveTool(oc: OrchestratorContext) {
 
         // Model rotation: different model each round for diverse perspectives
         const refinementModel = pickRefinementModel(round);
-        const freshPrompt = freshContextRefinementPrompt(ctx.cwd, oc.state.selectedGoal!, round);
+        const freshPrompt = freshContextRefinementPrompt(ctx.cwd, oc.state.selectedGoal!, round, undefined, refinementFocus);
         return {
           content: [
             {
@@ -1215,7 +1289,7 @@ cd ${ctx.cwd}`;
             oc.persistState();
             _lastBeadSnapshot = snapshotBeads(beads);
 
-            const injectedPrompt = beadRefinementPrompt(oc.state.polishRound - 1, oc.state.polishChanges);
+            const injectedPrompt = beadRefinementPrompt(oc.state.polishRound - 1, oc.state.polishChanges, refinementFocus);
             return {
               content: [{
                 type: "text",
@@ -1250,7 +1324,7 @@ cd ${ctx.cwd}`;
           oc.persistState();
           _lastBeadSnapshot = snapshotBeads(beads);
 
-          const injectedPrompt = beadRefinementPrompt(oc.state.polishRound - 1, oc.state.polishChanges);
+          const injectedPrompt = beadRefinementPrompt(oc.state.polishRound - 1, oc.state.polishChanges, refinementFocus);
           return {
             content: [{
               type: "text",
@@ -1306,7 +1380,7 @@ cd ${ctx.cwd}`;
             content: [
               {
                 type: "text",
-                text: `**Quality gate failed. Fix these issues, then call \`orch_approve_beads\` again.**\n\n⚠️ Issues:\n${failureLines.join("\n")}\n\n---\n\n${beadRefinementPrompt(round, oc.state.polishChanges)}\n\n---\n\nCurrent beads (${beads.length} total):\n${compactBeadList}\n\nUse \`br show <id>\` for full bead details.`,
+                text: `**Quality gate failed. Fix these issues, then call \`orch_approve_beads\` again.**\n\n⚠️ Issues:\n${failureLines.join("\n")}\n\n---\n\n${beadRefinementPrompt(round, oc.state.polishChanges, refinementFocus)}\n\n---\n\nCurrent beads (${beads.length} total):\n${compactBeadList}\n\nUse \`br show <id>\` for full bead details.`,
               },
             ],
             details: { approved: false, refining: true, qualityGateFailed: true, beadCount: beads.length },
@@ -1463,4 +1537,5 @@ cd ${ctx.cwd}`;
       return new Text(text, 0, 0);
     },
   });
+  }
 }
